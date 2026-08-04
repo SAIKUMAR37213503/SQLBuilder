@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Query Builder Pro Lite</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="header">
+            <h1>SQL Query Builder</h1>
+            <button id="theme-toggle" class="theme-toggle" aria-label="Toggle dark mode" title="Toggle theme">
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
+        </header>
+
+        <main class="main-content">
+            <section class="query-builder">
+                <div class="query-type-selector">
+                    <label class="query-type-btn" data-type="select">
+                        <input type="radio" name="query-type" value="select" checked>
+                        <span>SELECT</span>
+                    </label>
+                    <label class="query-type-btn" data-type="insert">
+                        <input type="radio" name="query-type" value="insert">
+                        <span>INSERT</span>
+                    </label>
+                    <label class="query-type-btn" data-type="update">
+                        <input type="radio" name="query-type" value="update">
+                        <span>UPDATE</span>
+                    </label>
+                    <label class="query-type-btn" data-type="delete">
+                        <input type="radio" name="query-type" value="delete">
+                        <span>DELETE</span>
+                    </label>
+                </div>
+
+                <form id="query-form" class="query-form" novalidate>
+                    <div id="select-fields" class="query-fields">
+                        <div class="field-group">
+                            <label for="select-table">Table Name *</label>
+                            <input type="text" id="select-table" name="table" placeholder="e.g., Employees" required>
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                        <div class="field-group">
+                            <label for="select-columns">Columns *</label>
+                            <input type="text" id="select-columns" name="columns" placeholder="e.g., Name, Salary, Department" required>
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                        <div class="field-group">
+                            <label for="select-where">WHERE Condition</label>
+                            <input type="text" id="select-where" name="where" placeholder="e.g., Salary > 50000">
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                        <div class="field-group">
+                            <label for="select-order">ORDER BY</label>
+                            <input type="text" id="select-order" name="orderBy" placeholder="e.g., Salary DESC">
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                        <div class="field-group">
+                            <label for="select-limit">LIMIT</label>
+                            <input type="number" id="select-limit" name="limit" placeholder="e.g., 10" min="1">
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                    </div>
+
+                    <div id="insert-fields" class="query-fields hidden">
+                        <div class="field-group">
+                            <label for="insert-table">Table Name *</label>
+                            <input type="text" id="insert-table" name="table" placeholder="e.g., Employees" required>
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                        <div class="field-group">
+                            <label for="insert-columns">Columns *</label>
+                            <input type="text" id="insert-columns" name="columns" placeholder="e.g., Name, Salary" required>
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                        <div class="field-group">
+                            <label for="insert-values">Values *</label>
+                            <input type="text" id="insert-values" name="values" placeholder="e.g., 'John', 50000" required>
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                    </div>
+
+                    <div id="update-fields" class="query-fields hidden">
+                        <div class="field-group">
+                            <label for="update-table">Table Name *</label>
+                            <input type="text" id="update-table" name="table" placeholder="e.g., Employees" required>
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                        <div class="field-group">
+                            <label for="update-set">SET Clause *</label>
+                            <input type="text" id="update-set" name="set" placeholder="e.g., Salary=60000, Department='IT'" required>
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                        <div class="field-group">
+                            <label for="update-where">WHERE Condition *</label>
+                            <input type="text" id="update-where" name="where" placeholder="e.g., EmployeeID=1" required>
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                    </div>
+
+                    <div id="delete-fields" class="query-fields hidden">
+                        <div class="field-group">
+                            <label for="delete-table">Table Name *</label>
+                            <input type="text" id="delete-table" name="table" placeholder="e.g., Employees" required>
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                        <div class="field-group">
+                            <label for="delete-where">WHERE Condition *</label>
+                            <input type="text" id="delete-where" name="where" placeholder="e.g., EmployeeID=1" required>
+                            <span class="error-message" aria-live="polite"></span>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary" id="generate-btn">Generate SQL</button>
+                        <button type="button" class="btn btn-secondary" id="clear-btn">Clear Form</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="output-section">
+                <div class="output-header">
+                    <h2>Generated SQL</h2>
+                    <button type="button" class="btn btn-copy" id="copy-btn" aria-label="Copy SQL to clipboard">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        <span>Copy</span>
+                    </button>
+                </div>
+                <pre id="sql-output" class="sql-output" aria-live="polite"><code>Select a query type and fill in the fields to generate SQL.</code></pre>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <p>SQL Query Builder Pro Lite — Built with vanilla HTML, CSS & JavaScript</p>
+        </footer>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

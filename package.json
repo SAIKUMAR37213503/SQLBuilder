@@ -1,0 +1,24 @@
+{
+  "name": "sql-query-builder-pro-lite",
+  "version": "1.0.0",
+  "description": "Lightweight SQL query builder - runs entirely in browser",
+  "private": true,
+  "scripts": {
+    "dev": "npx serve .",
+    "start": "npx serve .",
+    "deploy": "vercel --prod"
+  },
+  "keywords": [
+    "sql",
+    "query-builder",
+    "database",
+    "vanilla-js",
+    "no-framework"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "serve": "^14.2.0",
+    "vercel": "^33.0.0"
+  }
+}
