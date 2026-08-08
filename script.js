@@ -258,6 +258,20 @@ function bindEvents() {
     elements.enableUnion.addEventListener('change', toggleUnionFields);
     elements.themeToggle.addEventListener('click', toggleTheme);
 
+    // Explicitly re-attach event listeners to buttons
+    const copyBtn = document.getElementById('copy-btn');
+    const downloadBtn = document.getElementById('download-btn');
+    
+    copyBtn.addEventListener('click', (e) => {
+        console.log('Copy button clicked');
+        handleCopy(e);
+    });
+    
+    downloadBtn.addEventListener('click', (e) => {
+        console.log('Download button clicked');
+        handleDownload(e);
+    });
+
     document.querySelectorAll('.query-form input').forEach(input => {
         input.addEventListener('input', () => clearError(input));
         input.addEventListener('blur', () => validateField(input));
@@ -293,6 +307,7 @@ function handleGenerate(e) {
     let sql = getSqlFromInputs(state.currentType, joins, groupBys, havings);
 
     if (state.currentType === 'select' && elements.enableUnion.checked) {
+        console.log('Generating UNION SQL');
         const sql2 = getSqlFromInputs('select', [], [], [], '-2');
         sql = generateUnionQuery(sql, elements.unionType.value, sql2);
     }
