@@ -72,6 +72,24 @@ The `vercel.json` handles all configuration automatically.
 4. **Copy**: Click "Copy" to copy the SQL to clipboard
 5. **Clear**: Click "Clear Form" to reset all fields
 
+### JOIN Queries (SELECT only)
+1. Click SELECT.
+2. Click "+ Add JOIN".
+3. Select JOIN type (INNER, LEFT, RIGHT), specify joined table, and column mapping (e.g., `users.id` = `orders.user_id`).
+4. Multiple JOINs can be added and removed as needed.
+
+### GROUP BY and HAVING (SELECT only)
+1. Click SELECT.
+2. Click "+ Add GROUP BY" to group results by columns.
+3. Click "+ Add HAVING" to filter groups with aggregate conditions (e.g., `COUNT(*)` `>` `5`).
+
+### UNION Queries (SELECT only)
+1. Click SELECT.
+2. Enable "Enable UNION".
+3. Select UNION type (UNION or UNION ALL).
+4. Configure the second SELECT query (Table, Columns, WHERE).
+5. The application validates that both SELECT queries have the same number of columns, where possible.
+
 ### Example Outputs
 
 **SELECT**
@@ -101,6 +119,14 @@ WHERE EmployeeID = 1;
 DELETE FROM Employees
 WHERE EmployeeID = 1;
 ```
+
+## Security / Safety
+
+**SQLBuilder** is a client-side SQL query generation tool. It ONLY generates SQL strings as text.
+
+- **No Database Connection**: This tool does not connect to, query, or execute SQL against any database.
+- **Review Before Execution**: All generated SQL should be thoroughly reviewed by a qualified user before being executed in any database environment.
+- **Do Not Execute Blindly**: Never execute untrusted or blindly generated SQL.
 
 ## Browser Support
 
