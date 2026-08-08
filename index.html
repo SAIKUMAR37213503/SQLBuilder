@@ -64,6 +64,38 @@
                             <input type="number" id="select-limit" name="limit" placeholder="e.g., 10" min="1">
                             <span class="error-message" aria-live="polite"></span>
                         </div>
+                        <div id="join-container" class="join-container"></div>
+                        <button type="button" class="btn btn-secondary" id="add-join-btn" style="margin-top: 0.5rem;">+ Add JOIN</button>
+                        
+                        <div id="groupby-container" class="join-container"></div>
+                        <button type="button" class="btn btn-secondary" id="add-groupby-btn" style="margin-top: 0.5rem;">+ Add GROUP BY</button>
+
+                        <div id="having-container" class="join-container"></div>
+                        <button type="button" class="btn btn-secondary" id="add-having-btn" style="margin-top: 0.5rem;">+ Add HAVING</button>
+
+                        <div id="union-container" class="union-container" style="margin-top: 1rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+                            <label>
+                                <input type="checkbox" id="enable-union"> Enable UNION
+                            </label>
+                            <div id="union-fields" class="hidden" style="margin-top: 0.5rem;">
+                                <select id="union-type">
+                                    <option value="UNION">UNION</option>
+                                    <option value="UNION ALL">UNION ALL</option>
+                                </select>
+                                <div class="field-group" style="margin-top:0.5rem;">
+                                    <label for="select-table-2">Table Name *</label>
+                                    <input type="text" id="select-table-2" name="table" placeholder="e.g., Suppliers">
+                                </div>
+                                <div class="field-group">
+                                    <label for="select-columns-2">Columns *</label>
+                                    <input type="text" id="select-columns-2" name="columns" placeholder="e.g., Name, Email">
+                                </div>
+                                <div class="field-group">
+                                    <label for="select-where-2">WHERE Condition</label>
+                                    <input type="text" id="select-where-2" name="where" placeholder="e.g., country = 'India'">
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div id="insert-fields" class="query-fields hidden">
@@ -125,12 +157,22 @@
             <section class="output-section">
                 <div class="output-header">
                     <h2>Generated SQL</h2>
-                    <button type="button" class="btn btn-copy" id="copy-btn" aria-label="Copy SQL to clipboard">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                        <span>Copy</span>
-                    </button>
+                    <div class="output-actions">
+                        <span id="output-message" class="output-message"></span>
+                        <button type="button" class="btn btn-secondary" id="download-btn" aria-label="Download SQL file">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            <span>Download</span>
+                        </button>
+                        <button type="button" class="btn btn-copy" id="copy-btn" aria-label="Copy SQL to clipboard">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                            <span>Copy</span>
+                        </button>
+                    </div>
                 </div>
                 <pre id="sql-output" class="sql-output" aria-live="polite"><code>Select a query type and fill in the fields to generate SQL.</code></pre>
+                <div class="security-warning">
+                    <strong>Security Warning:</strong> This tool only generates SQL text. It does not connect to or execute queries against any database. Please review all generated SQL before execution. Do not execute untrusted or blindly generated SQL in any database environment.
+                </div>
             </section>
         </main>
 
@@ -138,6 +180,6 @@
             <p>SQL Query Builder Pro Lite — Built with vanilla HTML, CSS & JavaScript</p>
         </footer>
     </div>
-    <script src="script.js"></script>
+    <script type="module" src="script.js"></script>
 </body>
 </html>

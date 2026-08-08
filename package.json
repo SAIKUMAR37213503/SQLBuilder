@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "npx serve .",
     "start": "npx serve .",
-    "deploy": "vercel --prod"
+    "deploy": "vercel --prod",
+    "test": "vitest run"
   },
   "keywords": [
     "sql",
@@ -19,6 +20,7 @@
   "license": "MIT",
   "devDependencies": {
     "serve": "^14.2.0",
-    "vercel": "^33.0.0"
+    "vercel": "^33.0.0",
+    "vitest": "^4.1.10"
   }
 }
