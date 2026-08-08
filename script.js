@@ -450,7 +450,7 @@ function getValue(id) {
 }
 
 function displaySQL(sql) {
-    elements.sqlOutput.innerHTML = highlightSQL(sql);
+    elements.sqlOutput.innerHTML = `<code>${highlightSQL(sql)}</code>`;
     elements.copyBtn.classList.remove('copied');
     elements.copyBtn.querySelector('span').textContent = 'Copy';
 }
