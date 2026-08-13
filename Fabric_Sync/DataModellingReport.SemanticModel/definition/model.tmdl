@@ -1,0 +1,31 @@
+model Model
+	culture: en-US
+	defaultPowerBIDataSourceVersion: powerBI_V3
+	sourceQueryCulture: en-IN
+	dataAccessOptions
+		legacyRedirects
+		returnErrorValuesAsNull
+
+annotation PBI_QueryOrder = ["fact_sales","dim_customer","dim_product","dim_store","dim_customer_loyalty","Dim_Payment","Dim_Flags","dim_manager","dim_Employees","fact_budget","dim_date"]
+
+annotation __PBI_TimeIntelligenceEnabled = 1
+
+annotation PBIDesktopVersion = 2.145.1105.0 (25.07)+decbc46fce458c5b8d5109d6f32a743f2ac949c8
+
+ref table fact_sales
+ref table DateTableTemplate_ae23c89b-bdba-47e4-b09a-ddf415477807
+ref table LocalDateTable_844e336d-34c2-4fe9-9cb5-7a957ce84a5d
+ref table dim_customer
+ref table dim_product
+ref table dim_store
+ref table Dim_Payment
+ref table Dim_Flags
+ref table dim_Employees
+ref table LocalDateTable_5dff12ce-2cb4-40fb-bd6e-8abab6f94366
+ref table fact_budget
+ref table dim_date
+ref table LocalDateTable_3169ae52-5e15-4252-b53d-85fd3bfa32f1
+ref table LocalDateTable_cdacb552-1aea-4a52-88bd-6161ea14b3e8
+
+ref cultureInfo en-US
+

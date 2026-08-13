@@ -1,0 +1,60 @@
+table Dim_Flags
+	lineageTag: b18f0c9d-9229-4f94-b35f-c9868b9316c9
+
+	column Flag_Id
+		dataType: int64
+		formatString: 0
+		lineageTag: 3008429b-303c-4d40-95a6-8bff7149371f
+		summarizeBy: none
+		sourceColumn: Flag_Id
+
+		annotation SummarizationSetBy = Automatic
+
+	column promotion_code
+		dataType: string
+		lineageTag: 024d5af7-2ab0-4054-aaa4-a5a28916a7a0
+		summarizeBy: none
+		sourceColumn: promotion_code
+
+		annotation SummarizationSetBy = Automatic
+
+	column order_channel
+		dataType: string
+		lineageTag: fac84b19-b890-4d05-b4d4-26f46698c783
+		summarizeBy: none
+		sourceColumn: order_channel
+
+		annotation SummarizationSetBy = Automatic
+
+	column order_status
+		dataType: string
+		lineageTag: 73ac0745-7e7d-424c-984e-1fba18856b91
+		summarizeBy: none
+		sourceColumn: order_status
+
+		annotation SummarizationSetBy = Automatic
+
+	partition Dim_Flags = m
+		mode: import
+		source =
+				let
+				    Source = Csv.Document(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\datasets\04_data_modeling\fact_sales.csv"),[Delimiter=",", Columns=17, Encoding=1252, QuoteStyle=QuoteStyle.None]),
+				    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+				    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"order_id", Int64.Type}, {"order_line", Int64.Type}, {"customer_id", Int64.Type}, {"product_id", Int64.Type}, {"store_id", Int64.Type}, {"order_date", type date}, {"ship_date", type date}, {"quantity", Int64.Type}, {"line_total", Int64.Type}, {"promotion_code", type text}, {"order_channel", type text}, {"order_status", type text}, {"payment_method", type text}, {"card_network", type text}, {"card_type", type text}, {"salesperson_id", Int64.Type}, {"manager_id", Int64.Type}}),
+				    #"Merged Queries" = Table.NestedJoin(#"Changed Type", {"payment_method", "card_network", "card_type"}, Dim_Payment, {"payment_method", "card_network", "card_type"}, "Dim_Payment", JoinKind.LeftOuter),
+				    #"Expanded Dim_Payment" = Table.ExpandTableColumn(#"Merged Queries", "Dim_Payment", {"Payment_Id"}, {"Dim_Payment.Payment_Id"}),
+				    #"Renamed Columns" = Table.RenameColumns(#"Expanded Dim_Payment",{{"Dim_Payment.Payment_Id", "Payment_Id"}}),
+				    #"Reordered Columns" = Table.ReorderColumns(#"Renamed Columns",{"order_id", "order_line", "customer_id", "product_id", "store_id", "Payment_Id", "order_date", "ship_date", "quantity", "line_total", "promotion_code", "order_channel", "order_status", "payment_method", "card_network", "card_type", "salesperson_id", "manager_id"}),
+				    #"Removed Columns" = Table.RemoveColumns(#"Reordered Columns",{"Payment_Id", "payment_method", "card_network", "card_type", "order_id", "order_line", "customer_id", "product_id", "store_id", "order_date", "ship_date", "quantity", "line_total", "salesperson_id", "manager_id"}),
+				    #"Replaced Value" = Table.ReplaceValue(#"Removed Columns","","unknown",Replacer.ReplaceValue,{"promotion_code"}),
+				    #"Removed Duplicates" = Table.Distinct(#"Replaced Value"),
+				    #"Added Index" = Table.AddIndexColumn(#"Removed Duplicates", "Index", 1, 1, Int64.Type),
+				    #"Reordered Columns1" = Table.ReorderColumns(#"Added Index",{"Index", "promotion_code", "order_channel", "order_status"}),
+				    #"Renamed Columns1" = Table.RenameColumns(#"Reordered Columns1",{{"Index", "Flag_Id"}})
+				in
+				    #"Renamed Columns1"
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+

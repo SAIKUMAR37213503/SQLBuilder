@@ -1,0 +1,347 @@
+expression 'Address (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    Address_Sheet = Source{[Item="Address",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(Address_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"AddressID", Int64.Type}, {"Street", type text}, {"CityName", type text}})
+		in
+		    #"Changed Type"
+	lineageTag: b0e08d40-76bc-4035-92b7-af665609cfba
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'cities (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    cities_Sheet = Source{[Item="cities",Kind="Sheet"]}[Data],
+		    #"Changed Type" = Table.TransformColumnTypes(cities_Sheet,{{"Column1", type text}, {"Column2", type text}}),
+		    #"Promoted Headers" = Table.PromoteHeaders(#"Changed Type", [PromoteAllScalars=true]),
+		    #"Changed Type1" = Table.TransformColumnTypes(#"Promoted Headers",{{"CityName", type text}, {"RegionName", type text}})
+		in
+		    #"Changed Type1"
+	lineageTag: 820c4f04-b45c-4102-9665-644a2da4cb66
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'customer_contacts (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    customer_contacts_Sheet = Source{[Item="customer_contacts",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(customer_contacts_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"CustomerID", Int64.Type}, {"ContactName", type text}, {"Email", type text}, {"IsPrimary", type logical}}),
+		    #"Filtered Rows" = Table.SelectRows(#"Changed Type", each ([IsPrimary] = true))
+		in
+		    #"Filtered Rows"
+	lineageTag: e8b1514d-7a5b-4409-80b4-15d06b303763
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'regions (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    regions_Sheet = Source{[Item="regions",Kind="Sheet"]}[Data],
+		    #"Changed Type" = Table.TransformColumnTypes(regions_Sheet,{{"Column1", type text}})
+		in
+		    #"Changed Type"
+	lineageTag: 69e0f3d2-70e2-45bd-bf6c-98b2ee43f596
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'user_details (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    user_details_Sheet = Source{[Item="user_details",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(user_details_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"UserID", Int64.Type}, {"CreditLimit", Int64.Type}, {"Phone", type text}})
+		in
+		    #"Changed Type"
+	lineageTag: 3a017233-d0f4-4d69-9d86-be33af31a2ce
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'CUST_MASTER (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    CUST_MASTER_Sheet = Source{[Item="CUST_MASTER",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(CUST_MASTER_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"CustomerID", Int64.Type}, {"CustomerName", type text}, {"Segment", type text}, {"AddressID", Int64.Type}, {"AccountManager", type text}, {"PaymentTerms", type text}, {"hash_key", type text}, {"source_id", type text}})
+		in
+		    #"Changed Type"
+	lineageTag: 5885d301-41c7-48ab-9a4e-bc1027b1b1b7
+	queryGroup: 01_Stage
+
+	annotation PBI_ResultType = Table
+
+expression 'products (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    products_Sheet = Source{[Item="products",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(products_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"ProductCode", type text}, {"ProductName", type text}, {"Brand", type text}, {"SubcategoryName", type text}, {"UnitPrice", type number}, {"PrimarySupplier", type text}, {"ProductDescription", type text}, {"hash_key", type text}, {"source_id", type text}})
+		in
+		    #"Changed Type"
+	lineageTag: da09571c-19d4-43fc-9fb5-aa3024b6190c
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'subcategories (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    subcategories_Sheet = Source{[Item="subcategories",Kind="Sheet"]}[Data],
+		    #"Changed Type" = Table.TransformColumnTypes(subcategories_Sheet,{{"Column1", type text}}),
+		    #"Promoted Headers" = Table.PromoteHeaders(#"Changed Type", [PromoteAllScalars=true]),
+		    #"Changed Type1" = Table.TransformColumnTypes(#"Promoted Headers",{{"CategorySubcategory", type text}}),
+		    #"Split Column by Delimiter" = Table.SplitColumn(#"Changed Type1", "CategorySubcategory", Splitter.SplitTextByEachDelimiter({"|"}, QuoteStyle.Csv, false), {"CategorySubcategory.1", "CategorySubcategory.2"}),
+		    #"Changed Type2" = Table.TransformColumnTypes(#"Split Column by Delimiter",{{"CategorySubcategory.1", type text}, {"CategorySubcategory.2", type text}}),
+		    #"Renamed Columns" = Table.RenameColumns(#"Changed Type2",{{"CategorySubcategory.1", "category"}, {"CategorySubcategory.2", "sub_category"}}),
+		    #"Capitalized Each Word" = Table.TransformColumns(#"Renamed Columns",{{"sub_category", Text.Proper, type text}})
+		in
+		    #"Capitalized Each Word"
+	lineageTag: 60027529-4148-4fb4-8186-219a16718c15
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'order_line_items (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    order_line_items_Sheet = Source{[Item="order_line_items",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(order_line_items_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"LineID", type text}, {"OrderID", type text}, {"ProductName", type text}, {"Quantity", Int64.Type}, {"UnitPrice", type number}, {"UnitCost", type number}, {"DiscountPct", type number}, {"LineTotal", type number}})
+		in
+		    #"Changed Type"
+	lineageTag: a372d6a5-833c-4d08-ba5a-f49bba911011
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'ORDERS_2025 (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    ORDERS_2025_Sheet = Source{[Item="ORDERS_2025",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(ORDERS_2025_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"OrderID", type text}, {"LegacyRef", type text}, {"CustomerName", type text}, {"CustomerCity", type text}, {"RegionName", type text}, {"ShipToCity", type text}, {"BillToCity", type text}, {"OrderDate", type datetime}, {"OrderChannel", Int64.Type}, {"Status", type text}, {"Priority", type text}, {"OrderTotal", type number}, {"OrderNotes", type text}, {"GiftMessage", type any}, {"SourceFile", type text}})
+		in
+		    #"Changed Type"
+	lineageTag: 70df50e0-e2e3-45bf-b358-56f1aa352dfd
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'ORDERS_2026 (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    ORDERS_2026_Sheet = Source{[Item="ORDERS_2026",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(ORDERS_2026_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"OrderID", type text}, {"CustomerName", type text}, {"CustomerCity", type text}, {"RegionName", type text}, {"ShipToCity", type text}, {"BillToCity", type text}, {"OrderDate", type datetime}, {"OrderChannel", Int64.Type}, {"Status", type text}, {"Priority", type text}, {"OrderTotal", type number}, {"OrderNotes", type text}, {"GiftMessage", type any}})
+		in
+		    #"Changed Type"
+	lineageTag: 47ed7d3b-7dff-4ecf-b14e-ab19387a2ef2
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression Channels =
+		let
+		    Source = Table.FromRows(Json.Document(Binary.Decompress(Binary.FromText("i45WMjRQ0lEKz8jPSS1OzEmNLy7JL0pVitWJVjICSQSlliRm5iCJGoNE3Yvyk1OLKpGETUDCPpmFpflFMNFYAA==", BinaryEncoding.Base64), Compression.Deflate)), let _t = ((type nullable text) meta [Serialized.Text = true]) in type table [channel_id = _t, channel_name = _t]),
+		    #"Changed Type" = Table.TransformColumnTypes(Source,{{"channel_id", Int64.Type}, {"channel_name", type text}})
+		in
+		    #"Changed Type"
+	lineageTag: 7a18e7be-ffce-45a4-a1ab-a9d28e0b5b5e
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression Orders =
+		let
+		    Source = Table.Combine({#"ORDERS_2025 (2)", #"ORDERS_2026 (2)"}),
+		    #"Removed Columns" = Table.RemoveColumns(Source,{"LegacyRef", "SourceFile", "GiftMessage", "OrderNotes"})
+		in
+		    #"Removed Columns"
+	lineageTag: c0a289b1-d345-437a-9727-9a6f59a624a4
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'CAMPAIGN_LOG (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    CAMPAIGN_LOG_Sheet = Source{[Item="CAMPAIGN_LOG",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(CAMPAIGN_LOG_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"CampaignName", type text}, {"Channel", type text}, {"StartDate", type date}, {"EndDate", type date}, {"Budget", Int64.Type}, {"Date", type date}, {"Impressions", Int64.Type}, {"Clicks", Int64.Type}, {"Spend", type number}})
+		in
+		    #"Changed Type"
+	lineageTag: 3386c024-8c6e-4f7d-93b0-bc5ab95297a0
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'campaign_skus (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    campaign_skus_Sheet = Source{[Item="campaign_skus",Kind="Sheet"]}[Data],
+		    #"Changed Type" = Table.TransformColumnTypes(campaign_skus_Sheet,{{"Column1", type text}, {"Column2", type text}}),
+		    #"Promoted Headers" = Table.PromoteHeaders(#"Changed Type", [PromoteAllScalars=true]),
+		    #"Changed Type1" = Table.TransformColumnTypes(#"Promoted Headers",{{"CampaignName", type text}, {"PromotedSKUs", type text}}),
+		    #"Split Column by Delimiter" = Table.ExpandListColumn(Table.TransformColumns(#"Changed Type1", {{"PromotedSKUs", Splitter.SplitTextByDelimiter(",", QuoteStyle.Csv), let itemType = (type nullable text) meta [Serialized.Text = true] in type {itemType}}}), "PromotedSKUs"),
+		    #"Changed Type2" = Table.TransformColumnTypes(#"Split Column by Delimiter",{{"PromotedSKUs", type text}}),
+		    #"Trimmed Text" = Table.TransformColumns(#"Changed Type2",{{"PromotedSKUs", Text.Trim, type text}})
+		in
+		    #"Trimmed Text"
+	lineageTag: d0020d7e-1ce2-401a-9e5d-b4466a04e5ea
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'inventory (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    inventory_Sheet = Source{[Item="inventory",Kind="Sheet"]}[Data],
+		    #"Changed Type" = Table.TransformColumnTypes(inventory_Sheet,{{"Column1", type text}, {"Column2", type any}, {"Column3", type any}, {"Column4", type any}, {"Column5", type any}, {"Column6", type any}, {"Column7", type any}, {"Column8", type any}, {"Column9", type any}, {"Column10", type any}, {"Column11", type any}, {"Column12", type any}, {"Column13", type any}})
+		in
+		    #"Changed Type"
+	lineageTag: 503b9bf0-6652-4986-b711-74e7a1f65d59
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'exchange_rates (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    exchange_rates_Sheet = Source{[Item="exchange_rates",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(exchange_rates_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"Currency", type text}, {"Rate", type number}, {"Date", type date}})
+		in
+		    #"Changed Type"
+	lineageTag: e64b3a01-aeb1-48a8-bf7e-bd7a78d25326
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'invoice_lines (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    invoice_lines_Sheet = Source{[Item="invoice_lines",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(invoice_lines_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"InvoiceLineID", type text}, {"InvoiceID", type text}, {"ProductName", type text}, {"Amount", type number}})
+		in
+		    #"Changed Type"
+	lineageTag: f462410f-a648-43cf-a386-49f51e55df06
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'INVOICES (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    INVOICES_Sheet = Source{[Item="INVOICES",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(INVOICES_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"InvoiceID", type text}, {"OrderID", type text}, {"CustomerName", type text}, {"InvoiceDate", type date}, {"Amount", type number}})
+		in
+		    #"Changed Type"
+	lineageTag: 1eeaf64e-a1af-4ebc-aeff-fb484a46f33e
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'payments (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    payments_Sheet = Source{[Item="payments",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(payments_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"PaymentID", type text}, {"InvoiceID", type text}, {"CustomerName", type text}, {"PayDate", type date}, {"Amount", type number}})
+		in
+		    #"Changed Type"
+	lineageTag: 7354691b-f5c0-4142-b2f4-d3c3781cbff0
+	queryGroup: 01_Stage
+
+	annotation PBI_ResultType = Table
+
+expression 'sales_targets (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    sales_targets_Sheet = Source{[Item="sales_targets",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(sales_targets_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"Period", type date}, {"TargetRevenue", Int64.Type}})
+		in
+		    #"Changed Type"
+	lineageTag: a8b09155-7b5a-4fd6-92e3-7363b69e1af7
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'security (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    security_Sheet = Source{[Item="security",Kind="Sheet"]}[Data],
+		    #"Changed Type" = Table.TransformColumnTypes(security_Sheet,{{"Column1", type text}, {"Column2", type text}}),
+		    #"Promoted Headers" = Table.PromoteHeaders(#"Changed Type", [PromoteAllScalars=true]),
+		    #"Changed Type1" = Table.TransformColumnTypes(#"Promoted Headers",{{"UserEmail", type text}, {"Region", type text}})
+		in
+		    #"Changed Type1"
+	lineageTag: 759523bf-ea0f-4bb7-94a8-fa41849ec751
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression 'shipments (2)' =
+		let
+		    Source = Excel.Workbook(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\project_nightmare_datamodel\dataset.xlsx"), null, true),
+		    shipments_Sheet = Source{[Item="shipments",Kind="Sheet"]}[Data],
+		    #"Promoted Headers" = Table.PromoteHeaders(shipments_Sheet, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"ShipmentID", type text}, {"OrderID", type text}, {"ShipMode", type text}, {"ShipDate", type date}, {"DeliveryDate", type date}})
+		in
+		    #"Changed Type"
+	lineageTag: b6f87284-a1c9-4506-9a59-bf9cc518a54e
+	queryGroup: 01_Stage
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+

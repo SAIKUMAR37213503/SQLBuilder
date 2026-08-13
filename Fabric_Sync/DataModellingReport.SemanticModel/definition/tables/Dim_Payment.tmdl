@@ -1,0 +1,55 @@
+table Dim_Payment
+	lineageTag: 17058cad-c35b-42af-90da-d3c1e1e67973
+
+	column Payment_Id
+		dataType: int64
+		formatString: 0
+		lineageTag: fbd0e0fa-7a3a-4bbe-b85f-51a492ac2e99
+		summarizeBy: none
+		sourceColumn: Payment_Id
+
+		annotation SummarizationSetBy = Automatic
+
+	column payment_method
+		dataType: string
+		lineageTag: 2d1504ad-be45-47c8-95f2-447c24126ec7
+		summarizeBy: none
+		sourceColumn: payment_method
+
+		annotation SummarizationSetBy = Automatic
+
+	column card_network
+		dataType: string
+		lineageTag: 991f9e59-e8c7-4aeb-9fa9-8b6702c7125c
+		summarizeBy: none
+		sourceColumn: card_network
+
+		annotation SummarizationSetBy = Automatic
+
+	column card_type
+		dataType: string
+		lineageTag: e0af3f15-a4aa-4851-88f5-48bfea703527
+		summarizeBy: none
+		sourceColumn: card_type
+
+		annotation SummarizationSetBy = Automatic
+
+	partition Dim_Payment = m
+		mode: import
+		source =
+				let
+				    Source = Csv.Document(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\datasets\04_data_modeling\fact_sales.csv"),[Delimiter=",", Columns=17, Encoding=1252, QuoteStyle=QuoteStyle.None]),
+				    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+				    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"order_id", Int64.Type}, {"order_line", Int64.Type}, {"customer_id", Int64.Type}, {"product_id", Int64.Type}, {"store_id", Int64.Type}, {"order_date", type date}, {"ship_date", type date}, {"quantity", Int64.Type}, {"line_total", Int64.Type}, {"promotion_code", type text}, {"order_channel", type text}, {"order_status", type text}, {"payment_method", type text}, {"card_network", type text}, {"card_type", type text}, {"salesperson_id", Int64.Type}, {"manager_id", Int64.Type}}),
+				    #"Removed Columns" = Table.RemoveColumns(#"Changed Type",{"order_id", "order_line", "customer_id", "product_id", "store_id", "order_date", "ship_date", "quantity", "line_total", "promotion_code", "order_channel", "order_status", "salesperson_id", "manager_id"}),
+				    #"Removed Duplicates" = Table.Distinct(#"Removed Columns"),
+				    #"Added Index" = Table.AddIndexColumn(#"Removed Duplicates", "Index", 1, 1, Int64.Type),
+				    #"Reordered Columns" = Table.ReorderColumns(#"Added Index",{"Index", "payment_method", "card_network", "card_type"}),
+				    #"Renamed Columns" = Table.RenameColumns(#"Reordered Columns",{{"Index", "Payment_Id"}})
+				in
+				    #"Renamed Columns"
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+

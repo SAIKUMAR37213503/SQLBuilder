@@ -1,0 +1,158 @@
+table fact_sales
+	lineageTag: 967bd7d4-2ca0-4844-ac81-e3b7c7f1064c
+
+	measure 'Sales by team' = CALCULATE(SUM(fact_sales[line_total]), USERELATIONSHIP(fact_sales[manager_id], dim_Employees[id]))
+		formatString: 0
+		lineageTag: a785f430-8bbe-4053-ae68-c9a9fde62510
+
+	column order_id
+		dataType: int64
+		formatString: 0
+		lineageTag: 8a0df2d9-0ab5-416a-9654-4fe5847e3970
+		summarizeBy: none
+		sourceColumn: order_id
+
+		annotation SummarizationSetBy = User
+
+	column order_line
+		dataType: int64
+		formatString: 0
+		lineageTag: a3a13386-6305-43c9-ac26-bfd39a3f0781
+		summarizeBy: sum
+		sourceColumn: order_line
+
+		annotation SummarizationSetBy = Automatic
+
+	column customer_id
+		dataType: int64
+		formatString: 0
+		lineageTag: 613d5730-459e-4c90-aac0-17f9fed3c831
+		summarizeBy: none
+		sourceColumn: customer_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column product_id
+		dataType: int64
+		formatString: 0
+		lineageTag: 0669f9cc-ce52-4fe0-baa9-f0731ad1ccf4
+		summarizeBy: none
+		sourceColumn: product_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column store_id
+		dataType: int64
+		formatString: 0
+		lineageTag: f56675fb-4a99-4127-98c8-ed4572031b87
+		summarizeBy: none
+		sourceColumn: store_id
+
+		annotation SummarizationSetBy = User
+
+	column order_date
+		dataType: dateTime
+		formatString: Long Date
+		lineageTag: 9578055e-8120-4f15-bef6-3a75bb5ec8dd
+		summarizeBy: none
+		sourceColumn: order_date
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	column ship_date
+		dataType: dateTime
+		formatString: Long Date
+		lineageTag: f720fdab-4ac8-4697-b46f-222a18af95fe
+		summarizeBy: none
+		sourceColumn: ship_date
+
+		variation Variation
+			isDefault
+			relationship: 490d62d7-1488-4365-9945-30e115ab8bb0
+			defaultHierarchy: LocalDateTable_844e336d-34c2-4fe9-9cb5-7a957ce84a5d.'Date Hierarchy'
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	column quantity
+		dataType: int64
+		formatString: 0
+		lineageTag: cf9fbafe-4d31-46d4-b270-b9d6adb71408
+		summarizeBy: sum
+		sourceColumn: quantity
+
+		annotation SummarizationSetBy = Automatic
+
+	column line_total
+		dataType: int64
+		formatString: 0
+		lineageTag: 13a7e1a4-daa4-4bc2-83ac-782bc3a4b92f
+		summarizeBy: sum
+		sourceColumn: line_total
+
+		annotation SummarizationSetBy = Automatic
+
+	column salesperson_id
+		dataType: int64
+		formatString: 0
+		lineageTag: a9b41826-2f1f-4304-9f5a-3bdb08705306
+		summarizeBy: none
+		sourceColumn: salesperson_id
+
+		annotation SummarizationSetBy = User
+
+	column manager_id
+		dataType: int64
+		formatString: 0
+		lineageTag: 2bdb46f7-de86-462e-84a0-d8284fed525a
+		summarizeBy: none
+		sourceColumn: manager_id
+
+		annotation SummarizationSetBy = User
+
+	column Payment_Id
+		dataType: int64
+		formatString: 0
+		lineageTag: 8273639d-5dfe-43ee-b7b7-981b31275ea0
+		summarizeBy: none
+		sourceColumn: Payment_Id
+
+		annotation SummarizationSetBy = Automatic
+
+	column Flag_Id
+		dataType: int64
+		formatString: 0
+		lineageTag: aa30920b-4b95-4b2c-a0dc-9de29d2fefd8
+		summarizeBy: none
+		sourceColumn: Flag_Id
+
+		annotation SummarizationSetBy = Automatic
+
+	partition fact_sales = m
+		mode: import
+		source =
+				let
+				    Source = Csv.Document(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\datasets\04_data_modeling\fact_sales.csv"),[Delimiter=",", Columns=17, Encoding=1252, QuoteStyle=QuoteStyle.None]),
+				    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+				    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"order_id", Int64.Type}, {"order_line", Int64.Type}, {"customer_id", Int64.Type}, {"product_id", Int64.Type}, {"store_id", Int64.Type}, {"order_date", type date}, {"ship_date", type date}, {"quantity", Int64.Type}, {"line_total", Int64.Type}, {"promotion_code", type text}, {"order_channel", type text}, {"order_status", type text}, {"payment_method", type text}, {"card_network", type text}, {"card_type", type text}, {"salesperson_id", Int64.Type}, {"manager_id", Int64.Type}}),
+				    #"Merged Queries" = Table.NestedJoin(#"Changed Type", {"payment_method", "card_network", "card_type"}, Dim_Payment, {"payment_method", "card_network", "card_type"}, "Dim_Payment", JoinKind.LeftOuter),
+				    #"Expanded Dim_Payment" = Table.ExpandTableColumn(#"Merged Queries", "Dim_Payment", {"Payment_Id"}, {"Dim_Payment.Payment_Id"}),
+				    #"Renamed Columns2" = Table.RenameColumns(#"Expanded Dim_Payment",{{"Dim_Payment.Payment_Id", "Payment_Id"}}),
+				    #"Reordered Columns" = Table.ReorderColumns(#"Renamed Columns2",{"order_id", "order_line", "customer_id", "product_id", "store_id", "Payment_Id", "order_date", "ship_date", "quantity", "line_total", "promotion_code", "order_channel", "order_status", "payment_method", "card_network", "card_type", "salesperson_id", "manager_id"}),
+				    #"Removed Columns" = Table.RemoveColumns(#"Reordered Columns",{"payment_method", "card_network", "card_type"}),
+				    #"Replaced Value" = Table.ReplaceValue(#"Removed Columns","","unknown",Replacer.ReplaceValue,{"promotion_code"}),
+				    #"Merged Queries1" = Table.NestedJoin(#"Replaced Value", {"promotion_code", "order_channel", "order_status"}, Dim_Flags, {"promotion_code", "order_channel", "order_status"}, "Dim_Flags", JoinKind.LeftOuter),
+				    #"Expanded Dim_Flags" = Table.ExpandTableColumn(#"Merged Queries1", "Dim_Flags", {"Flag_Id"}, {"Dim_Flags.Flag_Id"}),
+				    #"Renamed Columns" = Table.RenameColumns(#"Expanded Dim_Flags",{{"Dim_Flags.Flag_Id", "Flag_Id"}}),
+				    #"Reordered Columns1" = Table.ReorderColumns(#"Renamed Columns",{"order_id", "order_line", "customer_id", "product_id", "store_id", "Payment_Id", "Flag_Id", "order_date", "ship_date", "quantity", "line_total", "promotion_code", "order_channel", "order_status", "salesperson_id", "manager_id"}),
+				    #"Removed Columns1" = Table.RemoveColumns(#"Reordered Columns1",{"promotion_code", "order_channel", "order_status"})
+				in
+				    #"Removed Columns1"
+
+	annotation PBI_ResultType = Table
+
+	annotation PBI_NavigationStepName = Navigation
+

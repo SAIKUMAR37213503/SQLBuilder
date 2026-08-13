@@ -1,0 +1,61 @@
+relationship 490d62d7-1488-4365-9945-30e115ab8bb0
+	joinOnDateBehavior: datePartOnly
+	fromColumn: fact_sales.ship_date
+	toColumn: LocalDateTable_844e336d-34c2-4fe9-9cb5-7a957ce84a5d.Date
+
+relationship AutoDetected_ad3b260d-f2cb-4c7b-ab75-d641fc9fd92b
+	fromColumn: fact_sales.customer_id
+	toColumn: dim_customer.customer_id
+
+relationship 78e0fb16-73dd-5a82-a1ee-63d714ee75cd
+	fromColumn: fact_sales.product_id
+	toColumn: dim_product.product_id
+
+relationship AutoDetected_04e5c973-3d7b-43f9-96ba-112d68a380af
+	fromColumn: fact_sales.store_id
+	toColumn: dim_store.store_id
+
+relationship 47a540d6-23a8-4ae9-88e2-4de388a4d6fc
+	joinOnDateBehavior: datePartOnly
+	fromColumn: dim_Employees.hire_date
+	toColumn: LocalDateTable_5dff12ce-2cb4-40fb-bd6e-8abab6f94366.Date
+
+relationship AutoDetected_283b250e-e9db-4d2f-966f-0c122aeb7b4d
+	fromColumn: fact_sales.salesperson_id
+	toColumn: dim_Employees.id
+
+relationship AutoDetected_4d5bca92-39b1-4988-821c-05146d8e12b9
+	fromColumn: fact_sales.Payment_Id
+	toColumn: Dim_Payment.Payment_Id
+
+relationship AutoDetected_c8c0482a-768f-4e68-89a9-a55f6d622463
+	fromColumn: fact_sales.Flag_Id
+	toColumn: Dim_Flags.Flag_Id
+
+relationship b5f9a966-8af9-91bc-3b3d-b9e5db07a614
+	isActive: false
+	fromColumn: fact_sales.manager_id
+	toColumn: dim_Employees.id
+
+relationship c59013da-e030-9036-10ba-de259e6410a3
+	fromColumn: fact_budget.product_id
+	toColumn: dim_product.product_id
+
+relationship 566d003f-2be0-487e-8ec2-126d7437b693
+	joinOnDateBehavior: datePartOnly
+	fromColumn: dim_date.date
+	toColumn: LocalDateTable_3169ae52-5e15-4252-b53d-85fd3bfa32f1.Date
+
+relationship df97d716-21fe-43ba-bcde-b52ada117337
+	joinOnDateBehavior: datePartOnly
+	fromColumn: dim_date.month_start
+	toColumn: LocalDateTable_cdacb552-1aea-4a52-88bd-6161ea14b3e8.Date
+
+relationship 8d60dd65-74f1-2c76-a686-135578733191
+	fromColumn: fact_budget.budget_month
+	toColumn: dim_date.date
+
+relationship 57889d23-e025-8c77-f420-7a8afffe91f0
+	fromColumn: fact_sales.order_date
+	toColumn: dim_date.date
+

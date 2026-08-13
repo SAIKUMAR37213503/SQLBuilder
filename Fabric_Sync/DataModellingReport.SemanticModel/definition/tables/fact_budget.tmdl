@@ -1,0 +1,61 @@
+table fact_budget
+	lineageTag: 92ae399c-fa0a-47c5-a925-b6aa64aaf5b9
+
+	column budget_month
+		dataType: dateTime
+		formatString: Long Date
+		lineageTag: b75ba14c-fdb3-4d8c-a722-47bfaf301f8c
+		summarizeBy: none
+		sourceColumn: budget_month
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	column product_id
+		dataType: int64
+		formatString: 0
+		lineageTag: 06f9bce3-b1b8-4c9a-9b75-68f7fa2aaca6
+		summarizeBy: none
+		sourceColumn: product_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column scenario
+		dataType: string
+		lineageTag: c64f7e7c-0e7f-4293-bb17-816f907437f6
+		summarizeBy: none
+		sourceColumn: scenario
+
+		annotation SummarizationSetBy = Automatic
+
+	column budget_quantity
+		dataType: int64
+		formatString: 0
+		lineageTag: f44227d5-0641-4a1c-9e21-4d0f969ad678
+		summarizeBy: sum
+		sourceColumn: budget_quantity
+
+		annotation SummarizationSetBy = Automatic
+
+	column budget_sales
+		dataType: int64
+		formatString: 0
+		lineageTag: 2ae47162-809b-41ad-becd-bffe11a47896
+		summarizeBy: sum
+		sourceColumn: budget_sales
+
+		annotation SummarizationSetBy = Automatic
+
+	partition fact_budget = m
+		mode: import
+		source =
+				let
+				    Source = Csv.Document(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\datasets\04_data_modeling\fact_budget.csv"),[Delimiter=",", Columns=5, Encoding=1252, QuoteStyle=QuoteStyle.None]),
+				    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+				    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"budget_month", type date}, {"product_id", Int64.Type}, {"scenario", type text}, {"budget_quantity", Int64.Type}, {"budget_sales", Int64.Type}})
+				in
+				    #"Changed Type"
+
+	annotation PBI_ResultType = Table
+

@@ -1,0 +1,77 @@
+table dim_Employees
+	lineageTag: 7ea5e9b7-ae3a-4306-9de2-8ed8f32580f7
+
+	column id
+		dataType: int64
+		formatString: 0
+		lineageTag: 630218bb-2601-45be-9d4d-7c5576a6bb81
+		summarizeBy: none
+		sourceColumn: id
+
+		annotation SummarizationSetBy = Automatic
+
+	column name
+		dataType: string
+		lineageTag: 8d0b451c-17a8-4f10-b693-1079a4f10e9a
+		summarizeBy: none
+		sourceColumn: name
+
+		annotation SummarizationSetBy = Automatic
+
+	column email
+		dataType: string
+		lineageTag: d426c23a-362f-4530-8f0a-3fb41ca1c334
+		summarizeBy: none
+		sourceColumn: email
+
+		annotation SummarizationSetBy = Automatic
+
+	column team
+		dataType: string
+		lineageTag: 8bcf280f-9677-47fa-801d-f04c8044e4a5
+		summarizeBy: none
+		sourceColumn: team
+
+		annotation SummarizationSetBy = Automatic
+
+	column hire_date
+		dataType: dateTime
+		formatString: Long Date
+		lineageTag: 7c9d0ad1-7349-471c-9554-78c8871d0d3c
+		summarizeBy: none
+		sourceColumn: hire_date
+
+		variation Variation
+			isDefault
+			relationship: 47a540d6-23a8-4ae9-88e2-4de388a4d6fc
+			defaultHierarchy: LocalDateTable_5dff12ce-2cb4-40fb-bd6e-8abab6f94366.'Date Hierarchy'
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	column Role
+		dataType: string
+		lineageTag: 3328bf32-21fc-475c-be35-eafec1fa66c8
+		summarizeBy: none
+		sourceColumn: Role
+
+		annotation SummarizationSetBy = Automatic
+
+	partition dim_Employees = m
+		mode: import
+		source =
+				let
+				    Source = Csv.Document(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\datasets\04_data_modeling\dim_saleseprson.csv"),[Delimiter=",", Columns=5, Encoding=65001, QuoteStyle=QuoteStyle.None]),
+				    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+				    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"salesperson_id", Int64.Type}, {"name", type text}, {"email", type text}, {"team", type text}, {"hire_date", type date}}),
+				    #"Added Custom" = Table.AddColumn(#"Changed Type", "Role", each "Salesperson"),
+				    #"Renamed Columns" = Table.RenameColumns(#"Added Custom",{{"salesperson_id", "id"}}),
+				    #"Appended Query" = Table.Combine({#"Renamed Columns", dim_manager})
+				in
+				    #"Appended Query"
+
+	annotation PBI_ResultType = Table
+
+	annotation PBI_NavigationStepName = Navigation
+

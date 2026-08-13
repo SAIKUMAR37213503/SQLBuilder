@@ -1,0 +1,33 @@
+table security
+	lineageTag: 5be8e2d5-f60c-49cd-bcf8-9d0f95af7cb8
+
+	column user_email
+		dataType: string
+		lineageTag: 2f4c4f5f-7a05-46ac-8b3b-86937d31b004
+		summarizeBy: none
+		sourceColumn: user_email
+
+		annotation SummarizationSetBy = Automatic
+
+	column Region
+		dataType: string
+		lineageTag: 612a1129-1105-4cb6-a066-fb914ca0a830
+		summarizeBy: none
+		sourceColumn: Region
+
+		annotation SummarizationSetBy = Automatic
+
+	partition security = m
+		mode: import
+		queryGroup: 04_Support
+		source =
+				let
+				    Source = #"security (2)",
+				    #"Renamed Columns" = Table.RenameColumns(Source,{{"UserEmail", "user_email"}})
+				in
+				    #"Renamed Columns"
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+

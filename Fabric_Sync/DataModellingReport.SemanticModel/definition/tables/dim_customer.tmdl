@@ -1,0 +1,78 @@
+table dim_customer
+	lineageTag: 5accf434-ec7f-4ced-b5a5-5e3cc2edaed8
+
+	column customer_id
+		dataType: int64
+		formatString: 0
+		lineageTag: f5f31eea-2b12-48b0-b482-b23db31d5c47
+		summarizeBy: none
+		sourceColumn: customer_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column customer_number
+		dataType: string
+		lineageTag: c32fb9e4-ebbd-479a-9b9f-0fa07ba1c731
+		summarizeBy: none
+		sourceColumn: customer_number
+
+		annotation SummarizationSetBy = Automatic
+
+	column first_name
+		dataType: string
+		lineageTag: ff3ede71-ebc7-421b-bbb3-ecc657732c3d
+		summarizeBy: none
+		sourceColumn: first_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column last_name
+		dataType: string
+		lineageTag: 67da428a-e401-4b6b-9c7f-587cc5edbd90
+		summarizeBy: none
+		sourceColumn: last_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column city
+		dataType: string
+		lineageTag: 48729253-8088-4d21-87e8-c1bff1f588ab
+		summarizeBy: none
+		sourceColumn: city
+
+		annotation SummarizationSetBy = Automatic
+
+	column Tier
+		dataType: string
+		lineageTag: 4bb3554e-cb0a-4e1f-8370-85bcf09eb21e
+		summarizeBy: none
+		sourceColumn: Tier
+
+		annotation SummarizationSetBy = Automatic
+
+	column Points
+		dataType: int64
+		formatString: 0
+		lineageTag: d6826868-576d-4036-b007-3b095a4386cf
+		summarizeBy: none
+		sourceColumn: Points
+
+		annotation SummarizationSetBy = Automatic
+
+	partition dim_customer = m
+		mode: import
+		source =
+				let
+				    Source = Csv.Document(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\datasets\04_data_modeling\dim_customer.csv"),[Delimiter=",", Columns=5, Encoding=1252, QuoteStyle=QuoteStyle.None]),
+				    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+				    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"customer_id", Int64.Type}, {"customer_number", type text}, {"first_name", type text}, {"last_name", type text}, {"city", type text}}),
+				    #"Merged Queries" = Table.NestedJoin(#"Changed Type", {"customer_id"}, dim_customer_loyalty, {"customer_id"}, "dim_customer_loyalty", JoinKind.LeftOuter),
+				    #"Expanded dim_customer_loyalty" = Table.ExpandTableColumn(#"Merged Queries", "dim_customer_loyalty", {"tier", "points"}, {"dim_customer_loyalty.tier", "dim_customer_loyalty.points"}),
+				    #"Renamed Columns" = Table.RenameColumns(#"Expanded dim_customer_loyalty",{{"dim_customer_loyalty.tier", "Tier"}, {"dim_customer_loyalty.points", "Points"}})
+				in
+				    #"Renamed Columns"
+
+	annotation PBI_ResultType = Table
+
+	annotation PBI_NavigationStepName = Navigation
+

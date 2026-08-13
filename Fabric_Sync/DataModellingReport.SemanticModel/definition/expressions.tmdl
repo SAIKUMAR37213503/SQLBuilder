@@ -1,0 +1,28 @@
+expression dim_customer_loyalty =
+		let
+		    Source = Csv.Document(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\datasets\04_data_modeling\dim_customer_loyalty.csv"),[Delimiter=",", Columns=3, Encoding=1252, QuoteStyle=QuoteStyle.None]),
+		    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"customer_id", Int64.Type}, {"tier", type text}, {"points", Int64.Type}})
+		in
+		    #"Changed Type"
+	lineageTag: ebc6f720-25be-4a15-aaca-6e25455856b1
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+
+expression dim_manager =
+		let
+		    Source = Csv.Document(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\datasets\04_data_modeling\dim_manager.csv"),[Delimiter=",", Columns=5, Encoding=1252, QuoteStyle=QuoteStyle.None]),
+		    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+		    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"manager_id", Int64.Type}, {"name", type text}, {"email", type text}, {"team", type text}, {"hire_date", type date}}),
+		    #"Added Custom" = Table.AddColumn(#"Changed Type", "Role", each "Manager"),
+		    #"Renamed Columns" = Table.RenameColumns(#"Added Custom",{{"manager_id", "id"}})
+		in
+		    #"Renamed Columns"
+	lineageTag: b30a1cdb-598e-43a8-bc54-b98f30577087
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+

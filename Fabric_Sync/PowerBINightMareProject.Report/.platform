@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Report",
+    "displayName": "PowerBINightMareProject"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "d384ebfa-87da-91c2-4c66-b62389906e2e"
+  }
+}

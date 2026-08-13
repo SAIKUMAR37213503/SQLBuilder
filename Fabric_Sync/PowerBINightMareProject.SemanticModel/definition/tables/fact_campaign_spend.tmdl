@@ -1,0 +1,71 @@
+table fact_campaign_spend
+	lineageTag: 58648530-030a-44ea-9ee9-76c9862d885c
+
+	column campaign_key
+		dataType: int64
+		formatString: 0
+		lineageTag: e2d6d8a4-11ce-4c6f-85d7-02d70e2e6c7f
+		summarizeBy: none
+		sourceColumn: campaign_key
+
+		annotation SummarizationSetBy = Automatic
+
+	column Date
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		lineageTag: b3173068-65d6-443f-9917-529de0bd1d56
+		summarizeBy: none
+		sourceColumn: Date
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+		annotation PBI_FormatHint = {"isDateTimeCustom":true}
+
+	column Impressions
+		dataType: int64
+		formatString: 0
+		lineageTag: c4d8f435-3770-4dbc-8d7c-dd9e2aa011da
+		summarizeBy: sum
+		sourceColumn: Impressions
+
+		annotation SummarizationSetBy = Automatic
+
+	column Clicks
+		dataType: int64
+		formatString: 0
+		lineageTag: ed1fe8bc-fdf6-4183-b3e7-ed4af7bf6be3
+		summarizeBy: sum
+		sourceColumn: Clicks
+
+		annotation SummarizationSetBy = Automatic
+
+	column Spend
+		dataType: double
+		lineageTag: 1495979f-e461-42e0-8cb6-4479c5702b9c
+		summarizeBy: sum
+		sourceColumn: Spend
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	partition fact_campaign_spend = m
+		mode: import
+		queryGroup: 03_Facts
+		source =
+				let
+				    Source = #"CAMPAIGN_LOG (2)",
+				    #"Merged Queries" = Table.NestedJoin(Source, {"CampaignName"}, dim_campaign, {"campaign_name"}, "dim_campaign", JoinKind.LeftOuter),
+				    #"Expanded dim_campaign" = Table.ExpandTableColumn(#"Merged Queries", "dim_campaign", {"campaign_key"}, {"dim_campaign.campaign_key"}),
+				    #"Removed Columns" = Table.RemoveColumns(#"Expanded dim_campaign",{"CampaignName", "Channel", "StartDate", "EndDate", "Budget"}),
+				    #"Renamed Columns" = Table.RenameColumns(#"Removed Columns",{{"dim_campaign.campaign_key", "campaign_key"}}),
+				    #"Reordered Columns" = Table.ReorderColumns(#"Renamed Columns",{"campaign_key", "Date", "Impressions", "Clicks", "Spend"})
+				in
+				    #"Reordered Columns"
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+

@@ -1,0 +1,41 @@
+table _Measures
+	lineageTag: 2e2b8363-0b1e-4773-b1b9-3694435c6969
+
+	measure total_sales = SUM(fact_sales[line_total])
+		lineageTag: 0016f24a-8692-42f6-8110-e6576da986d2
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure total_orders = DISTINCTCOUNT(fact_sales[order_id])
+		formatString: #,0
+		lineageTag: 5e1617f8-e554-4448-9467-d8807c68a876
+
+	measure total_active_customers = DISTINCTCOUNT(fact_sales[customer_id])
+		formatString: 0
+		lineageTag: 7d377663-6445-4179-89ba-7d727e02a688
+
+	measure total_cutomers = DISTINCTCOUNT(dim_customers[customer_id])
+		formatString: 0
+		lineageTag: cf4d7ecb-d28e-4227-9816-32523b117533
+
+	measure Avg_of_orderDate_to_PayDate = AVERAGE(fact_order_details[Order_date_to_Pay_date])
+		formatString: #,0.00
+		lineageTag: e13d78dc-8f8f-49d6-ad02-5e1c0da5e6d0
+
+	column Column
+		formatString: 0
+		lineageTag: ce6b9f19-1a3a-4cfe-981a-d1954f34e5fc
+		summarizeBy: sum
+		isNameInferred
+		sourceColumn: [Column]
+
+		annotation SummarizationSetBy = Automatic
+
+	partition _Measures = calculated
+		mode: import
+		source = Row("Column", BLANK())
+
+	annotation PBI_Id = 1adc800c93d644a288cc0519f90a216f
+
+	annotation 436ba87b-9c83-4389-a31b-ebd06a36be98 = {"Expression":""}
+

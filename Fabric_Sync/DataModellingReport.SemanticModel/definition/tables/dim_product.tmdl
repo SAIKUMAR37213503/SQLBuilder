@@ -1,0 +1,68 @@
+table dim_product
+	lineageTag: 8080a85a-e949-4981-b679-9e563a70d1e7
+
+	column product_id
+		dataType: int64
+		formatString: 0
+		lineageTag: 2c256c15-e12c-477e-80fd-2df8a2e468e3
+		summarizeBy: none
+		sourceColumn: product_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column sku
+		dataType: string
+		lineageTag: 3f5baaef-c214-4fa4-90b4-d0ed8b3dd509
+		summarizeBy: none
+		sourceColumn: sku
+
+		annotation SummarizationSetBy = Automatic
+
+	column product_name
+		dataType: string
+		lineageTag: ab09f2c1-83e4-4470-a0c6-f51a26c84ad2
+		summarizeBy: none
+		sourceColumn: product_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column category
+		dataType: string
+		lineageTag: ff2ae2ad-59b2-4856-b1be-e52fe2b5f092
+		summarizeBy: none
+		sourceColumn: category
+
+		annotation SummarizationSetBy = Automatic
+
+	column subcategory
+		dataType: string
+		lineageTag: 35cb3935-d561-41bc-aa1b-2d389a0a954a
+		summarizeBy: none
+		sourceColumn: subcategory
+
+		annotation SummarizationSetBy = Automatic
+
+	column price
+		dataType: int64
+		formatString: 0
+		lineageTag: 4562488f-bf62-4400-8d09-7825cfdd791e
+		summarizeBy: sum
+		sourceColumn: price
+
+		annotation SummarizationSetBy = Automatic
+
+	partition dim_product = m
+		mode: import
+		source =
+				let
+				    Source = Csv.Document(File.Contents("C:\Users\pappa\Downloads\powerbi-ultimate-course\powerbi-ultimate-course\datasets\04_data_modeling\dim_product.csv"),[Delimiter=",", Columns=6, Encoding=1252, QuoteStyle=QuoteStyle.None]),
+				    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+				    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"product_id", Int64.Type}, {"sku", type text}, {"product_name", type text}, {"category", type text}, {"subcategory", type text}, {"price", Int64.Type}}),
+				    #"Removed Duplicates" = Table.Distinct(#"Changed Type", {"product_id"})
+				in
+				    #"Removed Duplicates"
+
+	annotation PBI_ResultType = Table
+
+	annotation PBI_NavigationStepName = Navigation
+
