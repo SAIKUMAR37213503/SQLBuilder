@@ -3,11 +3,11 @@ import globals from 'globals';
 
 export default [
     {
-        ignores: ['node_modules/', 'Fabric_Sync/', 'graphify-out/']
+        ignores: ['node_modules/', 'dist/', 'Fabric_Sync/', 'graphify-out/']
     },
     js.configs.recommended,
     {
-        // Browser app, loaded as a classic <script> so it works from file://
+        // Legacy single-file app (replaced by src/ + dist/ in a later step)
         files: ['script.js'],
         languageOptions: {
             ecmaVersion: 2022,
@@ -16,7 +16,15 @@ export default [
         }
     },
     {
-        files: ['*.test.js', 'eslint.config.js'],
+        files: ['src/**/*.js'],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: 'module',
+            globals: { ...globals.browser }
+        }
+    },
+    {
+        files: ['*.test.js', 'tests/**/*.js', '*.config.js', 'scripts/**/*.js'],
         languageOptions: {
             ecmaVersion: 2022,
             sourceType: 'module',
@@ -26,7 +34,7 @@ export default [
     {
         rules: {
             'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
-            eqeqeq: ['error', 'always'],
+            eqeqeq: ['error', 'always', { null: 'ignore' }],
             'prefer-const': 'error',
             'no-var': 'error'
         }
