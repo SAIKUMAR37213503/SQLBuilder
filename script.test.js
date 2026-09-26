@@ -118,3 +118,36 @@ test('countColumns utility handles *', () => {
     expect(countColumns('*')).toBe(-1);
 });
 
+describe('Regression fixes', () => {
+    test('multiple HAVING conditions are joined with AND', () => {
+        const havings = [{ col: 'COUNT(*)', op: '>', val: '1' }, { col: 'SUM(b)', op: '<', val: '9' }];
+        expect(generateSelect('t', 'a', '', '', '', [], ['a'], havings)).toBe('SELECT a\nFROM t\nGROUP BY a\nHAVING COUNT(*) > 1 AND SUM(b) < 9;');
+    });
+
+    test('formatSQL only breaks on whole keywords', () => {
+        expect(formatSQL('SELECT a FROM t WHERE online = 1 AND settings = 2')).toBe('SELECT a\nFROM t\nWHERE online = 1 AND settings = 2');
+    });
+
+    test('highlightSQL renders string literals without corrupting quotes', () => {
+        const highlighted = highlightSQL("VALUES ('John', 5)");
+        expect(highlighted).toContain('<span class="token string">&#039;John&#039;</span>');
+        expect(highlighted).toContain('<span class="token number">5</span>');
+        expect(highlighted).not.toContain('&#<span');
+    });
+
+    test('highlightSQL highlights comparison operators', () => {
+        expect(highlightSQL('x >= 5')).toContain('<span class="token operator">&gt;=</span>');
+        expect(highlightSQL('x < 5')).toContain('<span class="token operator">&lt;</span>');
+    });
+
+    test('highlightSQL does not highlight keywords inside string literals', () => {
+        expect(highlightSQL("WHERE a = 'SELECT'")).not.toContain('<span class="token keyword">SELECT</span>');
+    });
+
+    test('highlightSQL output text round-trips to the original SQL', () => {
+        const sql = "SELECT a\nFROM t\nWHERE b = 'x & <y>' AND c >= 10;";
+        const text = highlightSQL(sql).replace(/<[^>]+>/g, '')
+            .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&amp;/g, '&');
+        expect(text).toBe(sql);
+    });
+});

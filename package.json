@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Lightweight SQL query builder - runs entirely in browser",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "npx serve .",
     "start": "npx serve .",

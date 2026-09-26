@@ -78,21 +78,24 @@
                                 <input type="checkbox" id="enable-union"> Enable UNION
                             </label>
                             <div id="union-fields" class="hidden" style="margin-top: 0.5rem;">
-                                <select id="union-type">
+                                <select id="union-type" aria-label="UNION type">
                                     <option value="UNION">UNION</option>
                                     <option value="UNION ALL">UNION ALL</option>
                                 </select>
                                 <div class="field-group" style="margin-top:0.5rem;">
                                     <label for="select-table-2">Table Name *</label>
                                     <input type="text" id="select-table-2" name="table" placeholder="e.g., Suppliers">
+                                    <span class="error-message" aria-live="polite"></span>
                                 </div>
                                 <div class="field-group">
                                     <label for="select-columns-2">Columns *</label>
                                     <input type="text" id="select-columns-2" name="columns" placeholder="e.g., Name, Email">
+                                    <span class="error-message" aria-live="polite"></span>
                                 </div>
                                 <div class="field-group">
                                     <label for="select-where-2">WHERE Condition</label>
                                     <input type="text" id="select-where-2" name="where" placeholder="e.g., country = 'India'">
+                                    <span class="error-message" aria-live="polite"></span>
                                 </div>
                             </div>
                         </div>

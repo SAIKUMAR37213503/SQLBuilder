@@ -8,9 +8,9 @@ export function generateSelect(table, columns, where, orderBy, limit, joins = []
     });
     if (where) sql += ` WHERE ${where}`;
     if (groupBys.length > 0) sql += ` GROUP BY ${groupBys.join(', ')}`;
-    havings.forEach(having => {
-        sql += ` HAVING ${having.col} ${having.op} ${having.val}`;
-    });
+    if (havings.length > 0) {
+        sql += ` HAVING ${havings.map(h => `${h.col} ${h.op} ${h.val}`).join(' AND ')}`;
+    }
     if (orderBy) sql += ` ORDER BY ${orderBy}`;
     if (limit) sql += ` LIMIT ${limit}`;
     return formatSQL(sql + ';');
@@ -41,7 +41,7 @@ export function formatSQL(sql) {
     let formatted = tempSql
         .replace(/\n/g, ' ')
         .replace(/\s+/g, ' ')
-        .replace(/ (SELECT|FROM|WHERE|ORDER BY|LIMIT|INSERT INTO|VALUES|UPDATE|SET|DELETE FROM|INNER JOIN|LEFT JOIN|RIGHT JOIN|ON|GROUP BY|HAVING|UNION ALL|UNION)/gi, '\n$1')
+        .replace(/ (SELECT|FROM|WHERE|ORDER BY|LIMIT|INSERT INTO|VALUES|UPDATE|SET|DELETE FROM|INNER JOIN|LEFT JOIN|RIGHT JOIN|ON|GROUP BY|HAVING|UNION ALL|UNION)\b/gi, '\n$1')
         .replace(/\nDELETE/gi, 'DELETE')
         .replace(/\s\n/g, '\n')
         .replace(/^\n/, '')
@@ -51,29 +51,26 @@ export function formatSQL(sql) {
     return formatted.replace(/___STRING_(\d+)___/g, (match, index) => strings[index]);
 }
 
+// Single-pass tokenizer: string literals, keywords, operators, numbers.
+// Each token (and the text between tokens) is HTML-escaped individually.
+const HIGHLIGHT_RE = new RegExp([
+    "('(?:[^']|'')*')",
+    '\\b(ORDER\\s+BY|INSERT\\s+INTO|DELETE\\s+FROM|(?:INNER|LEFT|RIGHT)\\s+JOIN|GROUP\\s+BY|UNION\\s+ALL|SELECT|FROM|WHERE|LIMIT|VALUES|UPDATE|SET|AND|OR|ON|JOIN|HAVING|UNION)\\b',
+    "(<>|!=|>=|<=|=|[<>](?=[\\s\\d'(-]))",
+    '\\b(\\d+(?:\\.\\d+)?)\\b'
+].join('|'), 'gi');
+
 export function highlightSQL(sql) {
-    // 1. Escape HTML first to prevent XSS
-    const escaped = escapeHtml(sql);
-    
-    // 2. Tokenize and highlight (order matters: longer keywords first)
-    // We use temporary placeholders to avoid re-highlighting existing tags
-    let result = escaped
-        .replace(/\b(ORDER BY|INSERT INTO|DELETE FROM|INNER JOIN|LEFT JOIN|RIGHT JOIN|GROUP BY|UNION ALL)\b/gi, '___K1___$1___K2___')
-        .replace(/\b(SELECT|FROM|WHERE|LIMIT|VALUES|UPDATE|SET|AND|OR|ON|JOIN|HAVING|UNION)\b/gi, '___K1___$1___K2___')
-        .replace(/(=|!=|<>|>|<|>=|<=)/g, '___O1___$1___O2___')
-        .replace(/'[^']*'/g, '___S1___$&___S2___')
-        .replace(/\b\d+\b/g, '___N1___$&___N2___');
-        
-    // 3. Replace placeholders with actual HTML tags
-    return result
-        .replace(/___K1___/g, '<span class="token keyword">')
-        .replace(/___K2___/g, '</span>')
-        .replace(/___O1___/g, '<span class="token operator">')
-        .replace(/___O2___/g, '</span>')
-        .replace(/___S1___/g, '<span class="token string">')
-        .replace(/___S2___/g, '</span>')
-        .replace(/___N1___/g, '<span class="token number">')
-        .replace(/___N2___/g, '</span>');
+    let result = '';
+    let lastIndex = 0;
+    for (const match of sql.matchAll(HIGHLIGHT_RE)) {
+        const [token, str, keyword, operator] = match;
+        const cls = str ? 'string' : keyword ? 'keyword' : operator ? 'operator' : 'number';
+        result += escapeHtml(sql.slice(lastIndex, match.index));
+        result += `<span class="token ${cls}">${escapeHtml(token)}</span>`;
+        lastIndex = match.index + token.length;
+    }
+    return result + escapeHtml(sql.slice(lastIndex));
 }
 
 const state = {
@@ -258,23 +255,12 @@ function bindEvents() {
     elements.enableUnion.addEventListener('change', toggleUnionFields);
     elements.themeToggle.addEventListener('click', toggleTheme);
 
-    // Explicitly re-attach event listeners to buttons
-    const copyBtn = document.getElementById('copy-btn');
-    const downloadBtn = document.getElementById('download-btn');
-    
-    copyBtn.addEventListener('click', (e) => {
-        console.log('Copy button clicked');
-        handleCopy(e);
+    // Delegated so dynamically added JOIN/GROUP BY/HAVING inputs are covered too
+    elements.form.addEventListener('input', (e) => {
+        if (e.target.matches('input')) clearError(e.target);
     });
-    
-    downloadBtn.addEventListener('click', (e) => {
-        console.log('Download button clicked');
-        handleDownload(e);
-    });
-
-    document.querySelectorAll('.query-form input').forEach(input => {
-        input.addEventListener('input', () => clearError(input));
-        input.addEventListener('blur', () => validateField(input));
+    elements.form.addEventListener('focusout', (e) => {
+        if (e.target.matches('input')) validateField(e.target);
     });
 }
 
@@ -307,7 +293,6 @@ function handleGenerate(e) {
     let sql = getSqlFromInputs(state.currentType, joins, groupBys, havings);
 
     if (state.currentType === 'select' && elements.enableUnion.checked) {
-        console.log('Generating UNION SQL');
         const sql2 = getSqlFromInputs('select', [], [], [], '-2');
         sql = generateUnionQuery(sql, elements.unionType.value, sql2);
     }
@@ -343,28 +328,8 @@ function validateForm() {
     });
 
     if (state.currentType === 'select') {
-        const joinRows = elements.joinContainer.querySelectorAll('.join-row');
-        joinRows.forEach(row => {
-            const inputs = row.querySelectorAll('input');
-            inputs.forEach(input => {
-                if (!input.value.trim()) {
-                    showError(input, 'This field is required');
-                    isValid = false;
-                }
-            });
-        });
-        const groupbyRows = elements.groupbyContainer.querySelectorAll('.join-row');
-        groupbyRows.forEach(row => {
-            const input = row.querySelector('.groupby-col');
-            if (!input.value.trim()) {
-                showError(input, 'This field is required');
-                isValid = false;
-            }
-        });
-        const havingRows = elements.havingContainer.querySelectorAll('.join-row');
-        havingRows.forEach(row => {
-            const inputs = row.querySelectorAll('input');
-            inputs.forEach(input => {
+        [elements.joinContainer, elements.groupbyContainer, elements.havingContainer].forEach(container => {
+            container.querySelectorAll('input').forEach(input => {
                 if (!input.value.trim()) {
                     showError(input, 'This field is required');
                     isValid = false;
@@ -382,12 +347,12 @@ function validateForm() {
                 }
             });
         }
-    }
 
-    const limitInput = document.getElementById('select-limit');
-    if (limitInput && limitInput.value && (limitInput.value < 1 || !Number.isInteger(Number(limitInput.value)))) {
-        showError(limitInput, 'Limit must be a positive integer');
-        isValid = false;
+        const limitInput = document.getElementById('select-limit');
+        if (limitInput && limitInput.value && (limitInput.value < 1 || !Number.isInteger(Number(limitInput.value)))) {
+            showError(limitInput, 'Limit must be a positive integer');
+            isValid = false;
+        }
     }
 
     if (state.currentType === 'select' && elements.enableUnion.checked) {
@@ -449,16 +414,24 @@ function getValue(id) {
     return el ? el.value.trim() : '';
 }
 
+function setCopyButtonState(copied) {
+    elements.copyBtn.classList.toggle('copied', copied);
+    elements.copyBtn.querySelector('span').textContent = copied ? 'Copied!' : 'Copy';
+}
+
+function showCopied() {
+    setCopyButtonState(true);
+    setTimeout(() => setCopyButtonState(false), 2000);
+}
+
 function displaySQL(sql) {
     elements.sqlOutput.innerHTML = `<code>${highlightSQL(sql)}</code>`;
-    elements.copyBtn.classList.remove('copied');
-    elements.copyBtn.querySelector('span').textContent = 'Copy';
+    setCopyButtonState(false);
 }
 
 function resetOutput() {
     elements.sqlOutput.innerHTML = '<code>Select a query type and fill in the fields to generate SQL.</code>';
-    elements.copyBtn.classList.remove('copied');
-    elements.copyBtn.querySelector('span').textContent = 'Copy';
+    setCopyButtonState(false);
     elements.outputMessage.textContent = '';
 }
 
@@ -467,6 +440,9 @@ function handleClear() {
     clearAllErrors();
     resetOutput();
     elements.joinContainer.innerHTML = '';
+    elements.groupbyContainer.innerHTML = '';
+    elements.havingContainer.innerHTML = '';
+    toggleUnionFields();
 }
 
 export function getGeneratedSQL(codeEl) {
@@ -479,12 +455,7 @@ async function handleCopy() {
 
     try {
         await navigator.clipboard.writeText(text);
-        elements.copyBtn.classList.add('copied');
-        elements.copyBtn.querySelector('span').textContent = 'Copied!';
-        setTimeout(() => {
-            elements.copyBtn.classList.remove('copied');
-            elements.copyBtn.querySelector('span').textContent = 'Copy';
-        }, 2000);
+        showCopied();
     } catch (err) {
         fallbackCopy(text);
     }
@@ -522,12 +493,7 @@ function fallbackCopy(text) {
     textarea.select();
     try {
         document.execCommand('copy');
-        elements.copyBtn.classList.add('copied');
-        elements.copyBtn.querySelector('span').textContent = 'Copied!';
-        setTimeout(() => {
-            elements.copyBtn.classList.remove('copied');
-            elements.copyBtn.querySelector('span').textContent = 'Copy';
-        }, 2000);
+        showCopied();
     } catch (e) {
         console.error('Copy failed', e);
     }
