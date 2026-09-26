@@ -298,3 +298,14 @@ describe('examples', () => {
         expect(EXAMPLES[0].build().select.where.items).toHaveLength(1);
     });
 });
+
+describe('storage when full', () => {
+    test('existing data stays readable when writes fail', () => {
+        const backend = createMemoryBackend({ [`${STORAGE_PREFIX}x`]: '"kept"' });
+        backend.setItem = () => { throw new Error('QuotaExceededError'); };
+        const storage = createStorage(backend);
+        expect(storage.available).toBe(true);
+        expect(storage.get('x')).toBe('kept');
+        expect(storage.set('y', 1)).toBe(false);
+    });
+});

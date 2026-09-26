@@ -12,7 +12,7 @@
     --surface-2: #f0f3f7;
     --surface-3: #e4e9f0;
     --border: #d3dae3;
-    --border-strong: #8f9bab;
+    --border-strong: #7b8696;
     --text: #17202b;
     --text-2: #3f4b5a;
     --text-muted: #56626f;
@@ -24,7 +24,7 @@
     --danger-soft: #fdecea;
     --warning: #7a4f00;
     --warning-soft: #fff4d6;
-    --success: #1a7f3c;
+    --success: #16723a;
     --success-soft: #e3f5e9;
     --info-soft: #e8f0fb;
     --focus: #1d5fd6;
@@ -56,7 +56,7 @@
         --surface-2: #1d2430;
         --surface-3: #283141;
         --border: #313b4c;
-        --border-strong: #5a6679;
+        --border-strong: #66728a;
         --text: #eef1f6;
         --text-2: #c8d0dc;
         --text-muted: #a3aebd;
@@ -94,7 +94,7 @@
     --surface-2: #1d2430;
     --surface-3: #283141;
     --border: #313b4c;
-    --border-strong: #5a6679;
+    --border-strong: #66728a;
     --text: #eef1f6;
     --text-2: #c8d0dc;
     --text-muted: #a3aebd;
@@ -793,6 +793,7 @@ kbd {
     .row .alias { flex: 1 1 8rem; }
     .row-tools { margin-left: 0; }
     .btn-icon { width: 2.6rem; min-height: 2.6rem; }
+    .check input { width: 1.35rem; height: 1.35rem; }
     .builder-actions { display: grid; grid-template-columns: 1fr 1fr; }
     .builder-actions .btn-primary { grid-column: 1 / -1; }
     .output-actions { width: 100%; }

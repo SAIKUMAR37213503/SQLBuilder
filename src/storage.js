@@ -4,23 +4,31 @@
 
 export const STORAGE_PREFIX = 'sqlb:v1:';
 
-function detectLocalStorage() {
+function defaultBackend() {
     try {
-        const storage = globalThis.localStorage;
-        if (!storage) return null;
-        const probe = `${STORAGE_PREFIX}probe`;
-        storage.setItem(probe, '1');
-        storage.removeItem(probe);
-        return storage;
+        return globalThis.localStorage || null;
+    } catch {
+        return null; // some browsers throw just for reading window.localStorage
+    }
+}
+
+// Returns the backend if it can at least be read, otherwise null. A full
+// storage (quota exceeded) is still readable; writes then fail individually.
+function readable(backend) {
+    if (!backend) return null;
+    try {
+        backend.getItem(`${STORAGE_PREFIX}probe`);
+        return backend;
     } catch {
         return null;
     }
 }
 
 /**
- * @param {Storage | null} [backend] defaults to window.localStorage when usable
+ * @param {any} [candidate] a Storage-like object; defaults to window.localStorage
  */
-export function createStorage(backend = detectLocalStorage()) {
+export function createStorage(candidate = defaultBackend()) {
+    const backend = readable(candidate);
     return {
         available: backend !== null,
 

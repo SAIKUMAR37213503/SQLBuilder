@@ -98,6 +98,10 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
         clearData: $('clear-data-btn')
     };
 
+    // Listeners on document/window are tied to this signal so destroy() removes them
+    const lifetime = new AbortController();
+    const { signal } = lifetime;
+
     const history = createHistory(storage);
     const templates = createTemplateStore(storage);
     const undoStack = new UndoStack();
@@ -904,10 +908,10 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
         };
         const run = commands[cmd.dataset.command];
         if (run) run();
-    });
+    }, { signal });
     doc.addEventListener('click', (event) => {
         if (el.fileMenu.open && !el.fileMenu.contains(event.target)) el.fileMenu.open = false;
-    });
+    }, { signal });
 
     el.themeBtn.addEventListener('click', () => updateSettings({ theme: nextTheme(state.settings.theme) }));
     el.shortcutsBtn.addEventListener('click', () => showDialog(el.shortcutsDialog));
@@ -935,7 +939,7 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
 
     [el.settingsDialog, el.promptDialog, el.confirmDialog, el.shortcutsDialog].forEach(enhanceDialog);
 
-    bindShortcuts(doc, {
+    bindShortcuts(doc, signal, {
         generate,
         copy: copySql,
         undo,
@@ -950,7 +954,7 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
     });
 
     try {
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderThemeButton);
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderThemeButton, { signal });
     } catch {
         // matchMedia unavailable
     }
@@ -973,6 +977,7 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
     refresh();
 
     return {
+        destroy: () => lifetime.abort(),
         get state() { return state; },
         history,
         templates,

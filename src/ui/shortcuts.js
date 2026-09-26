@@ -21,10 +21,12 @@ export function modLabel() {
 }
 
 /**
+ * @param {EventTarget} target
+ * @param {AbortSignal} signal removes the listener when aborted
  * @param {{ generate: () => void, copy: () => void, undo: () => void, redo: () => void, help: () => void, escape: () => void }} handlers
  */
-export function bindShortcuts(target, handlers) {
-    target.addEventListener('keydown', (event) => {
+export function bindShortcuts(target, signal, handlers) {
+    target.addEventListener('keydown', (/** @type {any} */ event) => {
         const mod = event.ctrlKey || event.metaKey;
         const key = event.key.toLowerCase();
 
@@ -46,5 +48,5 @@ export function bindShortcuts(target, handlers) {
         } else if (key === 'escape') {
             handlers.escape();
         }
-    });
+    }, { signal });
 }
