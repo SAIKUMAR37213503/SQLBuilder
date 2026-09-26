@@ -171,6 +171,15 @@ describe('SELECT builder', () => {
         );
     });
 
+    test('changing group logic updates the AND/OR labels between rows', async () => {
+        await fillSimpleSelect();
+        add('select.where.items', 'condition');
+        add('select.where.items', 'condition');
+        expect($$('#builder .logic-label').map(l => l.textContent)).toEqual(['AND']);
+        choose('select.where.logic', 'OR');
+        expect($$('#builder .logic-label').map(l => l.textContent)).toEqual(['OR']);
+    });
+
     test('JOIN with ON conditions defaulting to column comparison', async () => {
         await fillSimpleSelect('users');
         type('select.from.alias', 'u');

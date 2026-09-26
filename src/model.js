@@ -212,10 +212,6 @@ export function joinPath(...parts) {
     return parts.filter(p => p !== '' && p !== undefined && p !== null).join('.');
 }
 
-export function clone(value) {
-    return structuredClone(value);
-}
-
 // ---------------------------------------------------------------------------
 // Queries over the model
 // ---------------------------------------------------------------------------

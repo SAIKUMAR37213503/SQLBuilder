@@ -1,7 +1,7 @@
 {
   "name": "sql-query-builder-pro-lite",
   "version": "1.0.0",
-  "description": "Lightweight SQL query builder - runs entirely in browser",
+  "description": "Browser-only visual SQL query builder: SELECT with joins, subqueries, CTEs and UNION, plus INSERT/UPDATE/DELETE. Never connects to a database.",
   "private": true,
   "type": "module",
   "scripts": {

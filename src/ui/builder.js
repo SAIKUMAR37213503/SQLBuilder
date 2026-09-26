@@ -355,7 +355,7 @@ class Renderer {
         return h('div', { class: `cond-group${root ? ' root' : ''}`, dataset: { path } },
             items.length > 1 || !root || group.negate ? h('div', { class: 'cond-group-header row' },
                 h('span', {}, 'Match'),
-                select(joinPath(path, 'logic'), group.logic, [['AND', 'ALL (AND)'], ['OR', 'ANY (OR)']], { label: `${clause} group logic`, className: 'select-narrow' }),
+                select(joinPath(path, 'logic'), group.logic, [['AND', 'ALL (AND)'], ['OR', 'ANY (OR)']], { label: `${clause} group logic`, rerender: true, className: 'select-narrow' }),
                 h('span', {}, 'of these'),
                 checkbox(joinPath(path, 'negate'), group.negate, 'NOT'),
                 root ? null : button('', 'remove-item', path, { icon: '✕', label: 'Remove group', variant: 'danger-ghost' })
