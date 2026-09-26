@@ -4,6 +4,8 @@ Build SQL visually in your browser: SELECT (with joins, nested conditions, subqu
 
 It is a static page with no server, no accounts and no analytics. It **never connects to a database or runs queries**, and nothing you type leaves your browser.
 
+**▶ Live app: [sql-builder-ten.vercel.app](https://sql-builder-ten.vercel.app)**. It is redeployed automatically from `main`.
+
 ---
 
 ## Features
@@ -114,7 +116,9 @@ A single column stays on the `SELECT` line (`SELECT * FROM …`); two or more ar
 
 ## Using it
 
-**Online / locally:** open `index.html` in a browser. Opening it straight from disk (`file://`) works too, because the app ships as one prebuilt script (`dist/sqlbuilder.js`).
+**Online:** [sql-builder-ten.vercel.app](https://sql-builder-ten.vercel.app).
+
+**Locally:** open `index.html` in a browser. Opening it straight from disk (`file://`) works too, because the app ships as one prebuilt script (`dist/sqlbuilder.js`).
 
 ```bash
 npm ci            # dev tooling only
