@@ -21,7 +21,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
-      - name: Committed bundle is up to date
+      - name: Committed bundle and asset versions are up to date
         run: |
           npm run build
-          git diff --exit-code -- dist/ || (echo "::error::dist/ is stale. Run 'npm run build' and commit the result." && exit 1)
+          git diff --exit-code -- dist/ index.html || (echo "::error::dist/ or index.html asset versions are stale. Run 'npm run build' and commit the result." && exit 1)
