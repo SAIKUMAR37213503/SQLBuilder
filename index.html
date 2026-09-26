@@ -3,183 +3,213 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Build SELECT, INSERT, UPDATE and DELETE statements visually. Runs entirely in your browser; nothing is sent anywhere.">
+    <meta name="color-scheme" content="light dark">
     <title>SQL Query Builder Pro Lite</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2'%3E%3Cellipse cx='12' cy='5' rx='9' ry='3'/%3E%3Cpath d='M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5'/%3E%3Cpath d='M3 12c0 1.66 4 3 9 3s9-1.34 9-3'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="app-container">
-        <header class="header">
-            <h1>SQL Query Builder</h1>
-            <button id="theme-toggle" class="theme-toggle" aria-label="Toggle dark mode" title="Toggle theme">
-                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-            </button>
+    <a class="skip-link" href="#builder">Skip to query builder</a>
+
+    <div class="app">
+        <header class="app-header">
+            <div class="brand">
+                <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+                <h1>SQL Query Builder <span class="brand-sub">Pro Lite</span></h1>
+            </div>
+            <div class="toolbar" role="toolbar" aria-label="Workspace">
+                <button type="button" class="btn btn-ghost" id="undo-btn" aria-keyshortcuts="Control+Z Meta+Z" disabled>Undo</button>
+                <button type="button" class="btn btn-ghost" id="redo-btn" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" disabled>Redo</button>
+                <details class="menu" id="file-menu">
+                    <summary class="btn btn-ghost">File</summary>
+                    <div class="menu-panel">
+                        <button type="button" class="menu-item" data-command="export-query">Export query (.json)</button>
+                        <button type="button" class="menu-item" data-command="import-query">Import query (.json)…</button>
+                        <button type="button" class="menu-item" data-command="download-sql">Download SQL (.sql)</button>
+                    </div>
+                </details>
+                <button type="button" class="btn btn-ghost" id="theme-btn">Theme</button>
+                <button type="button" class="btn btn-ghost" id="shortcuts-btn" aria-keyshortcuts="Shift+?">Shortcuts</button>
+                <button type="button" class="btn btn-ghost" id="settings-btn">Settings</button>
+            </div>
         </header>
 
-        <main class="main-content">
-            <section class="query-builder">
-                <div class="query-type-selector">
-                    <label class="query-type-btn" data-type="select">
-                        <input type="radio" name="query-type" value="select" checked>
-                        <span>SELECT</span>
-                    </label>
-                    <label class="query-type-btn" data-type="insert">
-                        <input type="radio" name="query-type" value="insert">
-                        <span>INSERT</span>
-                    </label>
-                    <label class="query-type-btn" data-type="update">
-                        <input type="radio" name="query-type" value="update">
-                        <span>UPDATE</span>
-                    </label>
-                    <label class="query-type-btn" data-type="delete">
-                        <input type="radio" name="query-type" value="delete">
-                        <span>DELETE</span>
-                    </label>
+        <main class="workspace">
+            <section class="panel builder-panel" aria-labelledby="builder-heading">
+                <div class="panel-header">
+                    <h2 id="builder-heading">Build</h2>
+                    <div class="type-tabs" role="radiogroup" aria-label="Query type">
+                        <label class="type-tab"><input type="radio" name="query-type" value="select" checked><span>SELECT</span></label>
+                        <label class="type-tab"><input type="radio" name="query-type" value="insert"><span>INSERT</span></label>
+                        <label class="type-tab"><input type="radio" name="query-type" value="update"><span>UPDATE</span></label>
+                        <label class="type-tab"><input type="radio" name="query-type" value="delete"><span>DELETE</span></label>
+                    </div>
                 </div>
 
-                <form id="query-form" class="query-form" novalidate>
-                    <div id="select-fields" class="query-fields">
-                        <div class="field-group">
-                            <label for="select-table">Table Name *</label>
-                            <input type="text" id="select-table" name="table" placeholder="e.g., Employees" required>
-                            <span class="error-message" aria-live="polite"></span>
-                        </div>
-                        <div class="field-group">
-                            <label for="select-columns">Columns *</label>
-                            <input type="text" id="select-columns" name="columns" placeholder="e.g., Name, Salary, Department" required>
-                            <span class="error-message" aria-live="polite"></span>
-                        </div>
-                        <div class="field-group">
-                            <label for="select-where">WHERE Condition</label>
-                            <input type="text" id="select-where" name="where" placeholder="e.g., Salary > 50000">
-                            <span class="error-message" aria-live="polite"></span>
-                        </div>
-                        <div class="field-group">
-                            <label for="select-order">ORDER BY</label>
-                            <input type="text" id="select-order" name="orderBy" placeholder="e.g., Salary DESC">
-                            <span class="error-message" aria-live="polite"></span>
-                        </div>
-                        <div class="field-group">
-                            <label for="select-limit">LIMIT</label>
-                            <input type="number" id="select-limit" name="limit" placeholder="e.g., 10" min="1">
-                            <span class="error-message" aria-live="polite"></span>
-                        </div>
-                        <div id="join-container" class="join-container"></div>
-                        <button type="button" class="btn btn-secondary" id="add-join-btn" style="margin-top: 0.5rem;">+ Add JOIN</button>
-                        
-                        <div id="groupby-container" class="join-container"></div>
-                        <button type="button" class="btn btn-secondary" id="add-groupby-btn" style="margin-top: 0.5rem;">+ Add GROUP BY</button>
+                <form id="builder" class="builder" novalidate aria-label="Query builder" tabindex="-1"></form>
 
-                        <div id="having-container" class="join-container"></div>
-                        <button type="button" class="btn btn-secondary" id="add-having-btn" style="margin-top: 0.5rem;">+ Add HAVING</button>
+                <div class="builder-actions">
+                    <button type="button" class="btn btn-primary" id="generate-btn" aria-keyshortcuts="Control+Enter Meta+Enter">Generate SQL</button>
+                    <button type="button" class="btn btn-secondary" id="clear-btn">Clear</button>
+                    <button type="button" class="btn btn-secondary" id="reset-btn">Reset all</button>
+                </div>
+            </section>
 
-                        <div id="union-container" class="union-container" style="margin-top: 1rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
-                            <label>
-                                <input type="checkbox" id="enable-union"> Enable UNION
-                            </label>
-                            <div id="union-fields" class="hidden" style="margin-top: 0.5rem;">
-                                <select id="union-type">
-                                    <option value="UNION">UNION</option>
-                                    <option value="UNION ALL">UNION ALL</option>
-                                </select>
-                                <div class="field-group" style="margin-top:0.5rem;">
-                                    <label for="select-table-2">Table Name *</label>
-                                    <input type="text" id="select-table-2" name="table" placeholder="e.g., Suppliers">
-                                </div>
-                                <div class="field-group">
-                                    <label for="select-columns-2">Columns *</label>
-                                    <input type="text" id="select-columns-2" name="columns" placeholder="e.g., Name, Email">
-                                </div>
-                                <div class="field-group">
-                                    <label for="select-where-2">WHERE Condition</label>
-                                    <input type="text" id="select-where-2" name="where" placeholder="e.g., country = 'India'">
-                                </div>
+            <div class="side">
+                <section class="panel output-panel" aria-labelledby="output-heading">
+                    <div class="panel-header">
+                        <h2 id="output-heading">SQL <span class="dialect-badge" id="dialect-badge"></span></h2>
+                        <div class="output-actions">
+                            <div class="segmented" role="group" aria-label="SQL layout">
+                                <button type="button" class="segment" data-output-mode="formatted" aria-pressed="true">Formatted</button>
+                                <button type="button" class="segment" data-output-mode="compact" aria-pressed="false">One line</button>
                             </div>
+                            <button type="button" class="btn btn-ghost" id="select-all-btn">Select all</button>
+                            <button type="button" class="btn btn-ghost" id="download-btn">Download</button>
+                            <button type="button" class="btn btn-copy" id="copy-btn" aria-keyshortcuts="Control+Shift+C Meta+Shift+C">Copy</button>
                         </div>
                     </div>
 
-                    <div id="insert-fields" class="query-fields hidden">
-                        <div class="field-group">
-                            <label for="insert-table">Table Name *</label>
-                            <input type="text" id="insert-table" name="table" placeholder="e.g., Employees" required>
-                            <span class="error-message" aria-live="polite"></span>
-                        </div>
-                        <div class="field-group">
-                            <label for="insert-columns">Columns *</label>
-                            <input type="text" id="insert-columns" name="columns" placeholder="e.g., Name, Salary" required>
-                            <span class="error-message" aria-live="polite"></span>
-                        </div>
-                        <div class="field-group">
-                            <label for="insert-values">Values *</label>
-                            <input type="text" id="insert-values" name="values" placeholder="e.g., 'John', 50000" required>
-                            <span class="error-message" aria-live="polite"></span>
-                        </div>
+                    <div id="output-state" class="output-state" aria-live="polite"></div>
+                    <pre id="sql-output" class="sql-output" tabindex="0" aria-label="Generated SQL" aria-describedby="output-state"><code id="sql-code"></code></pre>
+                    <p class="complexity" id="complexity"></p>
+
+                    <div class="issues" aria-labelledby="issues-heading">
+                        <h3 id="issues-heading" class="issues-heading">Checks <span id="issues-summary" class="issues-summary"></span></h3>
+                        <ul id="issues-list" class="issues-list"></ul>
                     </div>
 
-                    <div id="update-fields" class="query-fields hidden">
-                        <div class="field-group">
-                            <label for="update-table">Table Name *</label>
-                            <input type="text" id="update-table" name="table" placeholder="e.g., Employees" required>
-                            <span class="error-message" aria-live="polite"></span>
-                        </div>
-                        <div class="field-group">
-                            <label for="update-set">SET Clause *</label>
-                            <input type="text" id="update-set" name="set" placeholder="e.g., Salary=60000, Department='IT'" required>
-                            <span class="error-message" aria-live="polite"></span>
-                        </div>
-                        <div class="field-group">
-                            <label for="update-where">WHERE Condition *</label>
-                            <input type="text" id="update-where" name="where" placeholder="e.g., EmployeeID=1" required>
-                            <span class="error-message" aria-live="polite"></span>
-                        </div>
+                    <p class="security-note">
+                        <strong>Text only:</strong> this tool never connects to a database or runs queries, and nothing you type leaves your browser. Review generated SQL before running it anywhere.
+                    </p>
+                </section>
+
+                <section class="panel library-panel" aria-labelledby="library-heading">
+                    <h2 id="library-heading" class="visually-hidden">Library</h2>
+                    <div class="tabs" role="tablist" aria-label="Library">
+                        <button type="button" role="tab" id="tab-history" aria-controls="panel-history" aria-selected="true">History</button>
+                        <button type="button" role="tab" id="tab-templates" aria-controls="panel-templates" aria-selected="false" tabindex="-1">Templates</button>
+                        <button type="button" role="tab" id="tab-examples" aria-controls="panel-examples" aria-selected="false" tabindex="-1">Examples</button>
                     </div>
 
-                    <div id="delete-fields" class="query-fields hidden">
-                        <div class="field-group">
-                            <label for="delete-table">Table Name *</label>
-                            <input type="text" id="delete-table" name="table" placeholder="e.g., Employees" required>
-                            <span class="error-message" aria-live="polite"></span>
+                    <div role="tabpanel" id="panel-history" aria-labelledby="tab-history" class="tab-panel">
+                        <div class="library-toolbar">
+                            <label class="visually-hidden" for="history-search">Search history</label>
+                            <input type="search" id="history-search" class="input" placeholder="Search history…" autocomplete="off">
+                            <button type="button" class="btn btn-ghost btn-sm" id="history-clear-btn">Clear history</button>
                         </div>
-                        <div class="field-group">
-                            <label for="delete-where">WHERE Condition *</label>
-                            <input type="text" id="delete-where" name="where" placeholder="e.g., EmployeeID=1" required>
-                            <span class="error-message" aria-live="polite"></span>
-                        </div>
+                        <ul class="library-list" id="history-list"></ul>
                     </div>
 
-                    <div class="form-actions">
-                        <button type="submit" class="btn btn-primary" id="generate-btn">Generate SQL</button>
-                        <button type="button" class="btn btn-secondary" id="clear-btn">Clear Form</button>
+                    <div role="tabpanel" id="panel-templates" aria-labelledby="tab-templates" class="tab-panel" hidden>
+                        <div class="library-toolbar">
+                            <button type="button" class="btn btn-secondary btn-sm" id="template-save-btn">Save current query…</button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="template-import-btn">Import…</button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="template-export-btn">Export all</button>
+                        </div>
+                        <ul class="library-list" id="template-list"></ul>
                     </div>
-                </form>
-            </section>
 
-            <section class="output-section">
-                <div class="output-header">
-                    <h2>Generated SQL</h2>
-                    <div class="output-actions">
-                        <span id="output-message" class="output-message"></span>
-                        <button type="button" class="btn btn-secondary" id="download-btn" aria-label="Download SQL file">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                            <span>Download</span>
-                        </button>
-                        <button type="button" class="btn btn-copy" id="copy-btn" aria-label="Copy SQL to clipboard">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                            <span>Copy</span>
-                        </button>
+                    <div role="tabpanel" id="panel-examples" aria-labelledby="tab-examples" class="tab-panel" hidden>
+                        <ul class="library-list" id="example-list"></ul>
                     </div>
-                </div>
-                <pre id="sql-output" class="sql-output" aria-live="polite"><code>Select a query type and fill in the fields to generate SQL.</code></pre>
-                <div class="security-warning">
-                    <strong>Security Warning:</strong> This tool only generates SQL text. It does not connect to or execute queries against any database. Please review all generated SQL before execution. Do not execute untrusted or blindly generated SQL in any database environment.
-                </div>
-            </section>
+                </section>
+            </div>
         </main>
 
-        <footer class="footer">
-            <p>SQL Query Builder Pro Lite — Built with vanilla HTML, CSS & JavaScript</p>
+        <footer class="app-footer">
+            <p>SQL Query Builder Pro Lite · runs entirely in your browser · <span id="storage-note"></span></p>
         </footer>
     </div>
-    <script type="module" src="script.js"></script>
+
+    <!-- Mobile: keep the primary actions reachable -->
+    <div class="mobile-bar">
+        <button type="button" class="btn btn-primary" data-command="generate">Generate</button>
+        <button type="button" class="btn btn-secondary" data-command="copy">Copy</button>
+        <a class="btn btn-secondary" href="#sql-output">View SQL</a>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+    <input type="file" id="file-input" accept=".json,application/json" hidden>
+
+    <dialog id="settings-dialog" class="dialog" aria-labelledby="settings-title">
+        <form method="dialog" class="dialog-body">
+            <h2 id="settings-title" class="dialog-title">Settings</h2>
+
+            <div class="field">
+                <label class="field-label" for="setting-dialect">SQL dialect</label>
+                <select id="setting-dialect" class="select" data-setting="dialect"></select>
+                <p class="field-hint" id="dialect-notes"></p>
+            </div>
+
+            <fieldset class="fieldset">
+                <legend>Theme</legend>
+                <label class="check"><input type="radio" name="setting-theme" value="system" data-setting="theme"> <span>System</span></label>
+                <label class="check"><input type="radio" name="setting-theme" value="light" data-setting="theme"> <span>Light</span></label>
+                <label class="check"><input type="radio" name="setting-theme" value="dark" data-setting="theme"> <span>Dark</span></label>
+            </fieldset>
+
+            <fieldset class="fieldset">
+                <legend>Output</legend>
+                <label class="check"><input type="checkbox" data-setting="livePreview"> <span>Live preview while typing</span></label>
+                <label class="check"><input type="checkbox" data-setting="quoteIdentifiers"> <span>Quote table and column names (e.g. "name", `name`, [name])</span></label>
+            </fieldset>
+
+            <fieldset class="fieldset">
+                <legend>Privacy (stored only in this browser)</legend>
+                <label class="check"><input type="checkbox" data-setting="saveHistory"> <span>Save generated queries to history</span></label>
+                <label class="check"><input type="checkbox" data-setting="restoreSession"> <span>Restore my unsaved work when I come back</span></label>
+                <button type="button" class="btn btn-danger-ghost" id="clear-data-btn">Delete all saved data…</button>
+            </fieldset>
+
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary" value="close">Done</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="prompt-dialog" class="dialog dialog-sm" aria-labelledby="prompt-title">
+        <form method="dialog" class="dialog-body">
+            <h2 id="prompt-title" class="dialog-title">Name</h2>
+            <div class="field">
+                <label class="field-label" for="prompt-input">Name</label>
+                <input type="text" id="prompt-input" class="input" maxlength="80" autocomplete="off" aria-describedby="prompt-error">
+                <p class="dialog-error field-error" id="prompt-error" role="alert"></p>
+            </div>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary" value="confirm">Save</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="confirm-dialog" class="dialog dialog-sm" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+        <form method="dialog" class="dialog-body">
+            <h2 id="confirm-title" class="dialog-title">Are you sure?</h2>
+            <p id="confirm-message" class="dialog-message"></p>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-danger" value="confirm">Confirm</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="shortcuts-dialog" class="dialog dialog-sm" aria-labelledby="shortcuts-title">
+        <form method="dialog" class="dialog-body">
+            <h2 id="shortcuts-title" class="dialog-title">Keyboard shortcuts</h2>
+            <table class="shortcut-table">
+                <thead><tr><th scope="col">Keys</th><th scope="col">Action</th></tr></thead>
+                <tbody id="shortcut-rows"></tbody>
+            </table>
+            <p class="field-hint">Everything in the builder is reachable with Tab / Shift+Tab; buttons respond to Enter and Space.</p>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary" value="close">Close</button>
+            </div>
+        </form>
+    </dialog>
+
+    <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
+    <script src="dist/sqlbuilder.js" defer></script>
 </body>
 </html>

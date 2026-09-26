@@ -1,13 +1,18 @@
 {
   "name": "sql-query-builder-pro-lite",
   "version": "1.0.0",
-  "description": "Lightweight SQL query builder - runs entirely in browser",
+  "description": "Browser-only visual SQL query builder: SELECT with joins, subqueries, CTEs and UNION, plus INSERT/UPDATE/DELETE. Never connects to a database.",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "npx serve .",
-    "start": "npx serve .",
-    "deploy": "vercel --prod",
-    "test": "vitest run"
+    "dev": "serve .",
+    "start": "serve .",
+    "deploy": "npx vercel --prod",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "typecheck": "tsc -p jsconfig.json",
+    "build": "esbuild src/main.js --bundle --minify --sourcemap --format=iife --target=es2022 --legal-comments=none --outfile=dist/sqlbuilder.js"
   },
   "keywords": [
     "sql",
@@ -19,8 +24,16 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "serve": "^14.2.0",
-    "vercel": "^33.0.0",
-    "vitest": "^4.1.10"
+    "@eslint/js": "^9.39.5",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
+    "globals": "^17.12.0",
+    "jsdom": "^30.1.1",
+    "serve": "^14.2.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   }
 }
