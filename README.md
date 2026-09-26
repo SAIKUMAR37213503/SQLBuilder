@@ -5,9 +5,12 @@ A lightweight, zero-dependency web application for visually generating SQL queri
 ## Features
 
 - **Four Query Types**: SELECT, INSERT, UPDATE, DELETE
+- **Advanced SELECT**: JOINs, GROUP BY, HAVING, and UNION / UNION ALL
+- **Syntax Highlighting**: Keywords, strings, numbers and operators
 - **Clean SQL Output**: Keywords uppercase, consistent indentation, one clause per line
 - **Form Validation**: Required field checking with friendly error messages
 - **Copy to Clipboard**: One-click copy with visual feedback
+- **Download**: Save the generated query as a `.sql` file
 - **Clear Form**: Reset all fields instantly
 - **Dark/Light Mode**: Persisted theme preference with system detection
 - **Responsive Design**: Works on desktop, tablet, and mobile
@@ -59,6 +62,7 @@ The `vercel.json` handles all configuration automatically.
 ├── index.html      # Main HTML structure
 ├── style.css       # All styling (light/dark themes, responsive)
 ├── script.js       # Application logic (SQL generation, validation, theme)
+├── script.test.js  # Unit tests (Vitest) — run with `npm test`
 ├── vercel.json     # Vercel deployment configuration
 ├── package.json    # Project metadata & deploy scripts
 └── README.md       # This file
@@ -69,7 +73,7 @@ The `vercel.json` handles all configuration automatically.
 1. **Select Query Type**: Click SELECT, INSERT, UPDATE, or DELETE
 2. **Fill Fields**: Enter table name, columns, conditions as needed
 3. **Generate**: Click "Generate SQL" to produce formatted output
-4. **Copy**: Click "Copy" to copy the SQL to clipboard
+4. **Copy / Download**: Click "Copy" to copy the SQL to clipboard, or "Download" to save it as a `.sql` file
 5. **Clear**: Click "Clear Form" to reset all fields
 
 ### JOIN Queries (SELECT only)
@@ -81,7 +85,7 @@ The `vercel.json` handles all configuration automatically.
 ### GROUP BY and HAVING (SELECT only)
 1. Click SELECT.
 2. Click "+ Add GROUP BY" to group results by columns.
-3. Click "+ Add HAVING" to filter groups with aggregate conditions (e.g., `COUNT(*)` `>` `5`).
+3. Click "+ Add HAVING" to filter groups with aggregate conditions (e.g., `COUNT(*)` `>` `5`). Multiple HAVING conditions are combined with `AND`.
 
 ### UNION Queries (SELECT only)
 1. Click SELECT.
@@ -89,6 +93,7 @@ The `vercel.json` handles all configuration automatically.
 3. Select UNION type (UNION or UNION ALL).
 4. Configure the second SELECT query (Table, Columns, WHERE).
 5. The application validates that both SELECT queries have the same number of columns, where possible.
+6. ORDER BY and LIMIT from the first query are applied to the combined UNION result.
 
 ### Example Outputs
 
@@ -116,7 +121,8 @@ WHERE EmployeeID = 1;
 
 **DELETE**
 ```sql
-DELETE FROM Employees
+DELETE
+FROM Employees
 WHERE EmployeeID = 1;
 ```
 

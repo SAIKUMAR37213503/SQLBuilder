@@ -75,6 +75,7 @@ export function highlightSQL(sql) {
 
 const state = {
     currentType: 'select',
+    sql: '',
     theme: 'light'
 };
 
@@ -205,11 +206,14 @@ function toggleUnionFields() {
     elements.unionFields.classList.toggle('hidden', !elements.enableUnion.checked);
 }
 
-export function generateUnionQuery(sql1, type, sql2) {
-    // Remove trailing semicolon from first query if present
+// ORDER BY / LIMIT apply to the combined result, so they go after the last SELECT
+export function generateUnionQuery(sql1, type, sql2, orderBy = '', limit = '') {
     const cleanSql1 = sql1.replace(/;$/, '');
     const cleanSql2 = sql2.replace(/;$/, '');
-    return formatSQL(`${cleanSql1}\n${type}\n${cleanSql2};`);
+    let sql = `${cleanSql1}\n${type}\n${cleanSql2}`;
+    if (orderBy) sql += ` ORDER BY ${orderBy}`;
+    if (limit) sql += ` LIMIT ${limit}`;
+    return formatSQL(sql + ';');
 }
 
 
@@ -290,13 +294,16 @@ function handleGenerate(e) {
     const joins = state.currentType === 'select' ? getJoins() : [];
     const groupBys = state.currentType === 'select' ? getGroupBys() : [];
     const havings = state.currentType === 'select' ? getHavings() : [];
-    let sql = getSqlFromInputs(state.currentType, joins, groupBys, havings);
+    let sql;
 
     if (state.currentType === 'select' && elements.enableUnion.checked) {
+        const sql1 = generateSelect(getValue('select-table'), getValue('select-columns'), getValue('select-where'), '', '', joins, groupBys, havings);
         const sql2 = getSqlFromInputs('select', [], [], [], '-2');
-        sql = generateUnionQuery(sql, elements.unionType.value, sql2);
+        sql = generateUnionQuery(sql1, elements.unionType.value, sql2, getValue('select-order'), getValue('select-limit'));
+    } else {
+        sql = getSqlFromInputs(state.currentType, joins, groupBys, havings);
     }
-    
+
     displaySQL(sql);
 }
 
@@ -425,11 +432,13 @@ function showCopied() {
 }
 
 function displaySQL(sql) {
+    state.sql = sql;
     elements.sqlOutput.innerHTML = `<code>${highlightSQL(sql)}</code>`;
     setCopyButtonState(false);
 }
 
 function resetOutput() {
+    state.sql = '';
     elements.sqlOutput.innerHTML = '<code>Select a query type and fill in the fields to generate SQL.</code>';
     setCopyButtonState(false);
     elements.outputMessage.textContent = '';
@@ -445,13 +454,12 @@ function handleClear() {
     toggleUnionFields();
 }
 
-export function getGeneratedSQL(codeEl) {
-    return codeEl ? codeEl.textContent : '';
-}
-
 async function handleCopy() {
-    const text = getGeneratedSQL(elements.sqlOutput.querySelector('code'));
-    if (!text || text.includes('Select a query type')) return;
+    const text = state.sql;
+    if (!text) {
+        showMessage('Generate a query first!');
+        return;
+    }
 
     try {
         await navigator.clipboard.writeText(text);
@@ -462,8 +470,8 @@ async function handleCopy() {
 }
 
 function handleDownload() {
-    const text = getGeneratedSQL(elements.sqlOutput.querySelector('code'));
-    if (!text || text.includes('Select a query type')) {
+    const text = state.sql;
+    if (!text) {
         showMessage('Generate a query first!');
         return;
     }

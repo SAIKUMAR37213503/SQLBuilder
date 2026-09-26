@@ -1,5 +1,5 @@
 import { expect, test, describe } from 'vitest';
-import { generateSelect, generateInsert, generateUpdate, generateDelete, formatSQL, highlightSQL, getGeneratedSQL, generateUnionQuery, countColumns } from './script.js';
+import { generateSelect, generateInsert, generateUpdate, generateDelete, formatSQL, highlightSQL, generateUnionQuery, countColumns } from './script.js';
 
 describe('SQL Generation', () => {
     test('SELECT basic', () => {
@@ -90,13 +90,6 @@ describe('Highlighting & Security', () => {
     });
 });
 
-describe('Utility Helpers', () => {
-    test('getGeneratedSQL extracts clean text from HTML', () => {
-        const codeEl = { textContent: 'SELECT * FROM users;' };
-        expect(getGeneratedSQL(codeEl)).toBe('SELECT * FROM users;');
-    });
-});
-
 test('generateSelect with UNION', () => {
     const sql1 = "SELECT Name FROM table1";
     const sql2 = "SELECT Name FROM table2";
@@ -109,6 +102,11 @@ test('generateSelect with UNION ALL', () => {
     expect(generateUnionQuery(sql1, 'UNION ALL', sql2)).toBe("SELECT Name\nFROM table1\nUNION ALL\nSELECT Name\nFROM table2;");
 });
 
+test('UNION applies ORDER BY and LIMIT to the combined result', () => {
+    const sql1 = generateSelect('customers', 'name', '', '', '');
+    const sql2 = generateSelect('suppliers', 'name', '', '', '');
+    expect(generateUnionQuery(sql1, 'UNION', sql2, 'name', '10')).toBe("SELECT name\nFROM customers\nUNION\nSELECT name\nFROM suppliers\nORDER BY name\nLIMIT 10;");
+});
 
 test('countColumns utility handles normal columns', () => {
     expect(countColumns('a, b')).toBe(2);
