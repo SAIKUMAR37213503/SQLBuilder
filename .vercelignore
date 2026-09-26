@@ -1,7 +1,7 @@
 # Deploy only the static app. Everything else in the repo (Power BI / Fabric
-# sync content, tests, tooling) must not be publicly served.
+# sync content, sources, tests, tooling) must not be publicly served.
 /*
 !index.html
-!script.js
 !style.css
+!dist
 !vercel.json

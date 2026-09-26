@@ -10,8 +10,9 @@
     "deploy": "npx vercel --prod",
     "test": "vitest run",
     "lint": "eslint .",
-    "check": "npm run lint && npm run typecheck && npm test",
-    "typecheck": "tsc -p jsconfig.json"
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "typecheck": "tsc -p jsconfig.json",
+    "build": "esbuild src/main.js --bundle --minify --sourcemap --format=iife --target=es2022 --legal-comments=none --outfile=dist/sqlbuilder.js"
   },
   "keywords": [
     "sql",
@@ -24,6 +25,7 @@
   "license": "MIT",
   "devDependencies": {
     "@eslint/js": "^9.39.5",
+    "esbuild": "^0.28.2",
     "eslint": "^9.39.5",
     "globals": "^17.12.0",
     "jsdom": "^30.1.1",

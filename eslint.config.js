@@ -7,15 +7,6 @@ export default [
     },
     js.configs.recommended,
     {
-        // Legacy single-file app (replaced by src/ + dist/ in a later step)
-        files: ['script.js'],
-        languageOptions: {
-            ecmaVersion: 2022,
-            sourceType: 'script',
-            globals: { ...globals.browser }
-        }
-    },
-    {
         files: ['src/**/*.js'],
         languageOptions: {
             ecmaVersion: 2022,

@@ -13,7 +13,6 @@
     "types": []
   },
   "include": [
-    "script.js",
     "src/**/*.js"
   ]
 }
