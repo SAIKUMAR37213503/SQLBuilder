@@ -1,0 +1,300 @@
+import { describe, expect, test } from 'vitest';
+import { createStorage, createMemoryBackend, STORAGE_PREFIX } from '../src/storage.js';
+import { loadSettings, saveSettings, sanitizeSettings, DEFAULT_SETTINGS } from '../src/settings.js';
+import { createHistory, HISTORY_LIMIT } from '../src/history.js';
+import { createTemplateStore, TemplateError } from '../src/templates.js';
+import { UndoStack } from '../src/undo.js';
+import {
+    normalizeWorkspace, parseQueryFile, createQueryExport, parseTemplatesFile, createTemplatesExport, ImportError, APP_ID
+} from '../src/serialization.js';
+import { EXAMPLES } from '../src/examples.js';
+import { createWorkspace, createCondition, createGroup } from '../src/model.js';
+import { generateSQL } from '../src/generator.js';
+import { validateWorkspace, hasErrors } from '../src/validation.js';
+
+const memoryStorage = (initial) => createStorage(createMemoryBackend(initial));
+
+function throwingBackend() {
+    const fail = () => { throw new Error('blocked'); };
+    return { getItem: fail, setItem: fail, removeItem: fail };
+}
+
+describe('storage', () => {
+    test('round-trips JSON under a prefix', () => {
+        const backend = createMemoryBackend();
+        const storage = createStorage(backend);
+        expect(storage.set('x', { a: 1 })).toBe(true);
+        expect(backend.getItem(`${STORAGE_PREFIX}x`)).toBe('{"a":1}');
+        expect(storage.get('x')).toEqual({ a: 1 });
+    });
+
+    test('never throws when storage is blocked or corrupt', () => {
+        const blocked = createStorage(throwingBackend());
+        expect(blocked.get('x', 'fallback')).toBe('fallback');
+        expect(blocked.set('x', 1)).toBe(false);
+        expect(() => blocked.remove('x')).not.toThrow();
+
+        const corrupt = memoryStorage({ [`${STORAGE_PREFIX}x`]: '{not json' });
+        expect(corrupt.get('x', 'fallback')).toBe('fallback');
+
+        const none = createStorage(null);
+        expect(none.available).toBe(false);
+        expect(none.get('x', 1)).toBe(1);
+    });
+});
+
+describe('settings', () => {
+    test('defaults and sanitisation of untrusted values', () => {
+        expect(loadSettings(memoryStorage())).toEqual(DEFAULT_SETTINGS);
+        expect(sanitizeSettings({ dialect: 'oracle', theme: 'neon', livePreview: 'yes', saveHistory: false })).toEqual({
+            ...DEFAULT_SETTINGS, saveHistory: false
+        });
+    });
+
+    test('persists and reloads', () => {
+        const storage = memoryStorage();
+        saveSettings(storage, { ...DEFAULT_SETTINGS, theme: 'dark', dialect: 'mysql' });
+        expect(loadSettings(storage)).toMatchObject({ theme: 'dark', dialect: 'mysql' });
+    });
+
+    test('migrates the legacy "theme" key', () => {
+        expect(loadSettings(memoryStorage({ theme: 'dark' })).theme).toBe('dark');
+    });
+});
+
+describe('history', () => {
+    const ws = (table) => {
+        const w = createWorkspace('delete');
+        w.delete.table = table;
+        return w;
+    };
+    const entry = (table) => ({ type: 'delete', dialect: 'generic', sql: `DELETE FROM ${table};`, workspace: ws(table) });
+
+    test('adds newest first, persists and reloads', () => {
+        const storage = memoryStorage();
+        let clock = 0;
+        const history = createHistory(storage, { now: () => ++clock });
+        history.add(entry('a'));
+        history.add(entry('b'));
+        expect(history.list().map(e => e.sql)).toEqual(['DELETE FROM b;', 'DELETE FROM a;']);
+        expect(createHistory(storage).list()).toHaveLength(2);
+    });
+
+    test('stores a snapshot, not a live reference', () => {
+        const history = createHistory(memoryStorage());
+        const w = ws('a');
+        history.add({ ...entry('a'), workspace: w });
+        w.delete.table = 'changed';
+        expect(history.list()[0].workspace.delete.table).toBe('a');
+    });
+
+    test('consecutive duplicates update the timestamp instead of adding', () => {
+        let clock = 0;
+        const history = createHistory(memoryStorage(), { now: () => ++clock });
+        history.add(entry('a'));
+        history.add(entry('a'));
+        expect(history.list()).toHaveLength(1);
+        expect(history.list()[0].timestamp).toBe(2);
+    });
+
+    test('is capped', () => {
+        const history = createHistory(memoryStorage());
+        for (let i = 0; i < HISTORY_LIMIT + 10; i++) history.add(entry(`t${i}`));
+        expect(history.list()).toHaveLength(HISTORY_LIMIT);
+        expect(history.list()[0].sql).toBe(`DELETE FROM t${HISTORY_LIMIT + 9};`);
+    });
+
+    test('search, remove, clear', () => {
+        const storage = memoryStorage();
+        const history = createHistory(storage);
+        history.add(entry('orders'));
+        history.add(entry('users'));
+        expect(history.search('ORDERS').map(e => e.sql)).toEqual(['DELETE FROM orders;']);
+        history.remove(history.search('users')[0].id);
+        expect(history.list()).toHaveLength(1);
+        history.clear();
+        expect(history.list()).toEqual([]);
+        expect(createHistory(storage).list()).toEqual([]);
+    });
+
+    test('ignores malformed stored entries', () => {
+        const storage = memoryStorage({
+            [`${STORAGE_PREFIX}history`]: JSON.stringify([{ id: 'x', sql: 'ok', workspace: { type: 'nope' } }, 'junk', { id: 'y', sql: 'ok', type: 'delete', workspace: ws('t') }])
+        });
+        expect(createHistory(storage).list().map(e => e.id)).toEqual(['y']);
+    });
+
+    test('shrinks when storage quota is exceeded', () => {
+        const backend = createMemoryBackend();
+        const original = backend.setItem;
+        backend.setItem = (key, value) => {
+            if (value.length > 2000) throw new Error('QuotaExceededError');
+            original(key, value);
+        };
+        const history = createHistory(createStorage(backend));
+        for (let i = 0; i < 20; i++) history.add(entry(`table_${i}`));
+        expect(history.list().length).toBeLessThan(20);
+        expect(history.list()[0].sql).toBe('DELETE FROM table_19;');
+    });
+});
+
+describe('templates', () => {
+    const w = createWorkspace();
+
+    test('create, rename, duplicate, delete, reload', () => {
+        const storage = memoryStorage();
+        const store = createTemplateStore(storage);
+        const a = store.create('  Monthly   report ', w);
+        expect(a.name).toBe('Monthly report');
+        const b = store.duplicate(a.id);
+        expect(b.name).toBe('Monthly report copy');
+        expect(store.rename(b.id, 'Weekly').name).toBe('Weekly');
+        expect(createTemplateStore(storage).list().map(t => t.name)).toEqual(['Monthly report', 'Weekly']);
+        store.remove(a.id);
+        expect(store.list().map(t => t.name)).toEqual(['Weekly']);
+    });
+
+    test('names are required, bounded and made unique', () => {
+        const store = createTemplateStore(memoryStorage());
+        expect(() => store.create('  ', w)).toThrow(TemplateError);
+        expect(() => store.create('x'.repeat(81), w)).toThrow(/at most 80/);
+        store.create('Report', w);
+        expect(store.create('report', w).name).toBe('report (2)');
+        expect(store.create('Report', w).name).toBe('Report (3)');
+    });
+
+    test('rename of a missing template fails without changes', () => {
+        const store = createTemplateStore(memoryStorage());
+        expect(() => store.rename('missing', 'x')).toThrow('no longer exists');
+    });
+
+    test('storage failures roll back and explain', () => {
+        const store = createTemplateStore(createStorage(throwingBackend()));
+        expect(() => store.create('x', w)).toThrow(TemplateError);
+        expect(store.list()).toEqual([]);
+    });
+
+    test('importMany', () => {
+        const store = createTemplateStore(memoryStorage());
+        store.create('A', w);
+        const added = store.importMany([{ name: 'A', workspace: w }, { name: 'B', workspace: w }]);
+        expect(added.map(t => t.name)).toEqual(['A (2)', 'B']);
+    });
+});
+
+describe('undo stack', () => {
+    test('undo / redo / branch', () => {
+        const stack = new UndoStack();
+        stack.reset({ v: 0 });
+        stack.push({ v: 1 });
+        stack.push({ v: 2 });
+        expect(stack.push({ v: 2 })).toBe(false);
+        expect(stack.undo()).toEqual({ v: 1 });
+        expect(stack.undo()).toEqual({ v: 0 });
+        expect(stack.undo()).toBeNull();
+        expect(stack.redo()).toEqual({ v: 1 });
+        stack.push({ v: 9 });
+        expect(stack.canRedo).toBe(false);
+        expect(stack.undo()).toEqual({ v: 1 });
+    });
+
+    test('is bounded', () => {
+        const stack = new UndoStack(3);
+        stack.reset(0);
+        for (let i = 1; i <= 10; i++) stack.push(i);
+        let steps = 0;
+        while (stack.undo() !== null) steps++;
+        expect(steps).toBe(3);
+    });
+});
+
+describe('import / export', () => {
+    test('query export round-trips', () => {
+        const ws = EXAMPLES.find(e => e.id === 'not-exists').build();
+        const text = JSON.stringify(createQueryExport(ws, { dialect: 'postgresql' }));
+        const result = parseQueryFile(text);
+        expect(result).toMatchObject({ ok: true, dialect: 'postgresql' });
+        expect(result.workspace).toEqual(ws);
+    });
+
+    test('accepts a bare workspace or a single query node', () => {
+        expect(parseQueryFile(JSON.stringify(createWorkspace('update'))).workspace.type).toBe('update');
+        const node = parseQueryFile(JSON.stringify({ kind: 'delete', table: 'x' }));
+        expect(node.workspace.type).toBe('delete');
+        expect(node.workspace.delete.table).toBe('x');
+    });
+
+    test.each([
+        ['not json', "isn't valid JSON"],
+        ['[]', 'must be a JSON object'],
+        ['{"type":"drop"}', 'unsupported value'],
+        ['{"type":"select","select":{"columns":"a"}}', 'must be a list'],
+        ['{"type":"select","select":{"columns":[{"expr":5,"alias":{}}]}}', 'must be text'],
+        ['{"type":"select","select":{"where":{"items":[{"kind":"evil"}]}}}', 'kind must be'],
+        ['{"type":"select","select":{"joins":[{"type":"NATURAL JOIN","source":{}}]}}', 'unsupported value'],
+        ['{"version":99}', 'newer version'],
+        ['{"kind":"templates","templates":[]}', 'templates file']
+    ])('rejects %s', (text, message) => {
+        const result = parseQueryFile(text);
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain(message);
+    });
+
+    test('rejects huge files and deeply nested queries', () => {
+        expect(parseQueryFile(' '.repeat(1024 * 1024 + 1)).error).toMatch(/too large/);
+        let q = { kind: 'select' };
+        for (let i = 0; i < 12; i++) q = { kind: 'select', from: { kind: 'subquery', query: q, alias: 's' } };
+        expect(parseQueryFile(JSON.stringify(q)).error).toMatch(/too deeply/);
+    });
+
+    test('drops unknown keys and prototype-pollution attempts', () => {
+        const ws = normalizeWorkspace(JSON.parse('{"type":"delete","delete":{"table":"t","__proto__":{"polluted":true},"extra":1}}'));
+        expect(ws.delete).toEqual({ kind: 'delete', table: 't', where: createGroup() });
+        expect({}.polluted).toBeUndefined();
+    });
+
+    test('numbers in text fields are accepted as text', () => {
+        const ws = normalizeWorkspace({ type: 'select', select: { limit: 10 } });
+        expect(ws.select.limit).toBe('10');
+    });
+
+    test('ImportError is exported for callers', () => {
+        expect(() => normalizeWorkspace(null)).toThrow(ImportError);
+    });
+
+    test('templates export round-trips; malformed templates are rejected', () => {
+        const store = createTemplateStore(memoryStorage());
+        store.create('Example', EXAMPLES[0].build());
+        const text = JSON.stringify(createTemplatesExport(store.list()));
+        const parsed = parseTemplatesFile(text);
+        expect(parsed.ok).toBe(true);
+        expect(parsed.templates[0].name).toBe('Example');
+
+        expect(parseTemplatesFile('{"kind":"query"}').error).toMatch(/isn't a templates file/);
+        expect(parseTemplatesFile(JSON.stringify({ app: APP_ID, kind: 'templates', templates: [{ name: '', workspace: {} }] })).error).toMatch(/has no name/);
+        expect(parseTemplatesFile(JSON.stringify({ kind: 'templates', templates: [{ name: 'Bad', workspace: { type: 'x' } }] })).error).toMatch(/Template “Bad”/);
+    });
+});
+
+describe('examples', () => {
+    test.each(EXAMPLES.map(e => [e.name, e]))('%s generates valid SQL for every dialect', (_name, example) => {
+        const ws = example.build();
+        for (const dialect of ['generic', 'postgresql', 'mysql', 'sqlserver']) {
+            const issues = validateWorkspace(ws, { dialect });
+            expect(hasErrors(issues), JSON.stringify(issues)).toBe(false);
+            expect(generateSQL(ws, { dialect })).toMatch(/;$/);
+        }
+    });
+
+    test('the documented example output', () => {
+        expect(generateSQL(EXAMPLES[0].build())).toBe(
+            'SELECT\n    Name,\n    Salary\nFROM Employees\nWHERE Salary > 50000\nORDER BY Salary DESC\nLIMIT 10;'
+        );
+    });
+
+    test('example builders return fresh objects', () => {
+        const a = EXAMPLES[0].build();
+        a.select.where.items.push(createCondition());
+        expect(EXAMPLES[0].build().select.where.items).toHaveLength(1);
+    });
+});
