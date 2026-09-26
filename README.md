@@ -133,11 +133,11 @@ Requires Node.js 22.22+ (or 24.15+).
 npm test            # unit + UI tests (Vitest, jsdom)
 npm run lint        # ESLint
 npm run typecheck   # TypeScript checkJs over src/
-npm run build       # bundle src/ → dist/sqlbuilder.js (esbuild)
+npm run build       # bundle src/ → dist/sqlbuilder.js (esbuild), then version asset URLs in index.html
 npm run check       # all of the above; CI runs the same and fails if dist/ is stale
 ```
 
-Source is plain ES modules in `src/`. The committed `dist/sqlbuilder.js` is what the page loads; **run `npm run build` and commit `dist/` after changing `src/`**.
+Source is plain ES modules in `src/`. The committed `dist/sqlbuilder.js` is what the page loads; **run `npm run build` and commit `dist/` and `index.html` after changing `src/` or `style.css`**. The build appends a content hash to the asset URLs (`style.css?v=…`, `dist/sqlbuilder.js?v=…`, via `scripts/stamp-assets.mjs`), so browsers always fetch changed files instead of reusing an old cached copy.
 
 ## Architecture
 
