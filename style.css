@@ -462,7 +462,8 @@ kbd {
 .input:focus, .select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
 .input:focus-visible, .select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
-.select-narrow { flex: 0 0 auto; }
+.select { max-width: 100%; }
+.select-narrow { flex: 0 1 auto; }
 .select-op { flex: 0 0 auto; font-family: var(--font-mono); font-size: 0.85rem; }
 
 /* Invalid fields stay red even while focused */
@@ -536,6 +537,14 @@ kbd {
 .select-editor { display: grid; gap: 0.6rem; min-width: 0; }
 .select-editor.nested .section { background: var(--surface); }
 .join-on { display: grid; gap: 0.35rem; }
+.window-over {
+    display: grid;
+    gap: 0.4rem;
+    padding: 0.6rem;
+    border-left: 3px solid var(--tok-func);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+}
 .source { min-width: 0; }
 
 .builder-actions {

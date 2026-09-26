@@ -8,12 +8,44 @@ export const QUERY_TYPES = ['select', 'insert', 'update', 'delete'];
 
 export const JOIN_TYPES = ['INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'CROSS JOIN'];
 
-// Set operators combine SELECTs. INTERSECT / EXCEPT can be added here later.
-export const SET_OPERATORS = ['UNION', 'UNION ALL'];
+// Set operators combine SELECTs. Dialect support is checked in validation.
+export const SET_OPERATORS = ['UNION', 'UNION ALL', 'INTERSECT', 'INTERSECT ALL', 'EXCEPT', 'EXCEPT ALL'];
 
 export const AGGREGATES = ['', 'COUNT', 'COUNT DISTINCT', 'SUM', 'AVG', 'MIN', 'MAX'];
 
 export const SORT_DIRECTIONS = ['ASC', 'DESC'];
+
+// Window functions, grouped by the arguments they take:
+//   none    – RANK()            ntile  – NTILE(n)
+//   offset  – LAG(expr[, offset[, default]])
+//   value   – FIRST_VALUE(expr) nth    – NTH_VALUE(expr, n)
+//   aggregate – SUM(expr) etc.; COUNT with no argument is COUNT(*)
+// ordered: needs ORDER BY in OVER to be meaningful (required by SQL Server)
+// frame:   accepts a ROWS frame
+export const WINDOW_FUNCTIONS = {
+    'ROW_NUMBER': { args: 'none', ordered: true, frame: false },
+    'RANK': { args: 'none', ordered: true, frame: false },
+    'DENSE_RANK': { args: 'none', ordered: true, frame: false },
+    'PERCENT_RANK': { args: 'none', ordered: true, frame: false },
+    'CUME_DIST': { args: 'none', ordered: true, frame: false },
+    'NTILE': { args: 'ntile', ordered: true, frame: false },
+    'LAG': { args: 'offset', ordered: true, frame: false },
+    'LEAD': { args: 'offset', ordered: true, frame: false },
+    'FIRST_VALUE': { args: 'value', ordered: false, frame: true },
+    'LAST_VALUE': { args: 'value', ordered: false, frame: true },
+    'NTH_VALUE': { args: 'nth', ordered: false, frame: true },
+    'SUM': { args: 'aggregate', ordered: false, frame: true },
+    'AVG': { args: 'aggregate', ordered: false, frame: true },
+    'MIN': { args: 'aggregate', ordered: false, frame: true },
+    'MAX': { args: 'aggregate', ordered: false, frame: true },
+    'COUNT': { args: 'aggregate', ordered: false, frame: true }
+};
+
+// Window frame presets (ROWS frames)
+//   running – from the partition start to the current row (running totals)
+//   whole   – the entire partition
+//   moving  – N preceding rows plus the current row (moving averages)
+export const WINDOW_FRAMES = ['', 'running', 'whole', 'moving'];
 
 export const LOGIC_OPERATORS = ['AND', 'OR'];
 
@@ -78,6 +110,19 @@ export function createColumn(expr = '', overrides = {}) {
 
 export function createCaseColumn() {
     return { kind: 'case', cases: [{ when: '', then: '' }], elseValue: '', alias: '' };
+}
+
+export function createWindowColumn() {
+    return {
+        kind: 'window',
+        func: 'ROW_NUMBER',
+        args: '',
+        partitionBy: [],
+        orderBy: [],
+        frame: '',
+        frameSize: '',
+        alias: ''
+    };
 }
 
 export function createTableSource(table = '', alias = '') {

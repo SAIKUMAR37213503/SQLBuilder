@@ -12,11 +12,13 @@
 //
 // Only errors block generation; warnings never stop the user.
 
-import { OPERATORS, JOIN_TYPES, SET_OPERATORS, AGGREGATES, LOGIC_OPERATORS, joinPath } from './model.js';
+import {
+    OPERATORS, JOIN_TYPES, SET_OPERATORS, AGGREGATES, LOGIC_OPERATORS, WINDOW_FUNCTIONS, WINDOW_FRAMES, joinPath
+} from './model.js';
 import { getDialect } from './dialects.js';
 import {
     findSyntaxProblem, isQualifiedName, isIdentifier, isColumnReference, splitTopLevel,
-    containsAggregateCall, normalizeExpr, isNumberLiteral, isQuotedString, isBareIdentifier
+    containsAggregateCall, normalizeExpr, isNumberLiteral, isQuotedString, isBareIdentifier, stripStrings
 } from './sql-utils.js';
 
 export const MAX_NESTING_DEPTH = 4;
@@ -118,6 +120,7 @@ class Validator {
         this.columns(q, path, scope);
         this.sources(q, path, ctx);
         this.group(q.where, joinPath(path, 'where'), scope, ctx, 'WHERE');
+        this.windowFilters(q, path, scope);
 
         q.groupBy.forEach((g, i) => this.fragment(g.expr, joinPath(path, 'groupBy', i, 'expr'), scope, { label: 'a column to group by' }));
         this.group(q.having, joinPath(path, 'having'), scope, ctx, 'HAVING');
@@ -125,7 +128,7 @@ class Validator {
 
         if (ctx.branch) {
             if (q.orderBy.length || !blank(q.limit) || !blank(q.offset)) {
-                this.add('warning', 'builder', 'ORDER BY, LIMIT and OFFSET inside a UNION part are ignored; set them on the main query.', joinPath(path, 'orderBy'), scope);
+                this.add('warning', 'builder', 'ORDER BY, LIMIT and OFFSET inside a UNION / INTERSECT / EXCEPT part are ignored; set them on the main query.', joinPath(path, 'orderBy'), scope);
             }
         } else {
             q.orderBy.forEach((o, i) => {
@@ -172,7 +175,9 @@ class Validator {
         const outputNames = new Map();
         q.columns.forEach((col, i) => {
             const cPath = joinPath(path, 'columns', i);
-            if (col.kind === 'case') {
+            if (col.kind === 'window') {
+                this.windowColumn(col, cPath, scope);
+            } else if (col.kind === 'case') {
                 if (col.cases.length === 0) this.add('error', 'builder', 'A CASE column needs at least one WHEN.', joinPath(cPath, 'cases'), scope);
                 col.cases.forEach((c, j) => {
                     this.fragment(c.when, joinPath(cPath, 'cases', j, 'when'), scope, { label: 'a WHEN condition' });
@@ -199,6 +204,108 @@ class Validator {
                 outputNames.set(key, i);
             }
         });
+    }
+
+    windowColumn(col, path, scope) {
+        const spec = WINDOW_FUNCTIONS[col.func];
+        if (!spec) {
+            this.add('error', 'builder', `Unknown window function ${quote(col.func)}.`, joinPath(path, 'func'), scope);
+            return;
+        }
+        const fn = col.func;
+        const argsPath = joinPath(path, 'args');
+        const args = splitTopLevel(String(col.args)).filter(a => a !== '');
+        const argsOk = blank(col.args) || this.fragment(col.args, argsPath, scope);
+        const isWholeNumber = (text, min) => /^\d+$/.test(text) && Number(text) >= min;
+
+        if (argsOk) {
+            if (spec.args === 'none' && args.length > 0) {
+                this.add('error', 'builder', `${fn}() takes no arguments; leave the argument empty.`, argsPath, scope);
+            } else if (spec.args === 'ntile' && !(args.length === 1 && isWholeNumber(args[0], 1))) {
+                this.add('error', 'builder', 'NTILE needs the number of groups, e.g. 4.', argsPath, scope);
+            } else if (spec.args === 'offset') {
+                if (args.length < 1 || args.length > 3) {
+                    this.add('error', 'builder', `${fn} needs a column, optionally followed by an offset and a default, e.g. salary, 1, 0.`, argsPath, scope);
+                } else if (args.length > 1 && !isWholeNumber(args[1], 0)) {
+                    this.add('error', 'builder', `The ${fn} offset (second argument) must be a whole number.`, argsPath, scope);
+                }
+            } else if (spec.args === 'value' && args.length !== 1) {
+                this.add('error', 'builder', `${fn} needs one column or expression.`, argsPath, scope);
+            } else if (spec.args === 'nth' && !(args.length === 2 && isWholeNumber(args[1], 1))) {
+                this.add('error', 'builder', 'NTH_VALUE needs a column and a position, e.g. salary, 2.', argsPath, scope);
+            } else if (spec.args === 'aggregate') {
+                const allowed = fn === 'COUNT' ? args.length <= 1 : args.length === 1;
+                if (!allowed) this.add('error', 'builder', `${fn} needs one column or expression${fn === 'COUNT' ? ' (or none for COUNT(*))' : ''}.`, argsPath, scope);
+                else if (fn !== 'COUNT' && args[0] === '*') this.add('error', 'builder', `${fn}(*) isn't valid; choose a column.`, argsPath, scope);
+            }
+        }
+        if (fn === 'NTH_VALUE' && !this.dialect.supportsNthValue) {
+            this.add('error', 'builder', `${this.dialect.label} doesn't support NTH_VALUE.`, joinPath(path, 'func'), scope);
+        }
+
+        col.partitionBy.forEach((p, i) => this.fragment(p.expr, joinPath(path, 'partitionBy', i, 'expr'), scope, { label: 'a column to partition by' }));
+        col.orderBy.forEach((o, i) => {
+            this.fragment(o.expr, joinPath(path, 'orderBy', i, 'expr'), scope, { label: 'a column to order by' });
+            if (o.direction !== 'ASC' && o.direction !== 'DESC') {
+                this.add('error', 'builder', 'Sort direction must be ASC or DESC.', joinPath(path, 'orderBy', i, 'direction'), scope);
+            }
+        });
+
+        const strict = this.dialect.id === 'sqlserver';
+        const ordered = col.orderBy.length > 0;
+        if (spec.ordered && !ordered) {
+            this.add(strict ? 'error' : 'warning', 'builder',
+                `${fn} needs ORDER BY inside OVER (…) to give a meaningful result${strict ? ` in ${this.dialect.label}` : ''}.`,
+                joinPath(path, 'orderBy'), scope);
+        }
+
+        if (!WINDOW_FRAMES.includes(col.frame)) {
+            this.add('error', 'builder', `Unknown window frame ${quote(col.frame)}.`, joinPath(path, 'frame'), scope);
+        } else if (col.frame) {
+            if (!spec.frame) {
+                this.add('error', 'builder', `${fn} doesn't take a window frame; choose "Default".`, joinPath(path, 'frame'), scope);
+            } else {
+                if (col.frame === 'moving' && !isWholeNumber(String(col.frameSize).trim(), 1)) {
+                    this.add('error', 'builder', 'Enter how many preceding rows the moving window covers (1 or more).', joinPath(path, 'frameSize'), scope);
+                }
+                if (!ordered) {
+                    this.add(strict ? 'error' : 'warning', 'builder', 'A window frame needs ORDER BY inside OVER (…) to define the row order.', joinPath(path, 'orderBy'), scope);
+                }
+            }
+        }
+        if (fn === 'LAST_VALUE' && ordered && col.frame !== 'whole') {
+            this.add('info', 'builder', 'With ORDER BY, LAST_VALUE only looks up to the current row. Choose the "Whole partition" frame to get the last value of the partition.', joinPath(path, 'frame'), scope);
+        }
+        if (blank(col.alias)) {
+            this.add('info', 'builder', 'Give the window column an alias so the result has a readable name.', joinPath(path, 'alias'), scope);
+        }
+    }
+
+    // Window functions are computed after WHERE and HAVING, so their results
+    // can't be filtered there — a common mistake worth a clear message.
+    windowFilters(q, path, scope) {
+        const windowAliases = new Set(q.columns
+            .filter(c => c.kind === 'window' && !blank(c.alias))
+            .map(c => normalizeExpr(String(c.alias))));
+        const check = (group, gPath, clause) => group.items.forEach((item, i) => {
+            const iPath = joinPath(gPath, 'items', i);
+            if (item.kind === 'group') return check(item, iPath, clause);
+            const texts = item.kind === 'raw'
+                ? [[item.sql, 'sql']]
+                : [[item.left, 'left'], ...(item.valueType === 'column' ? [[item.value, 'value'], [item.value2, 'value2']] : [])];
+            for (const [text, key] of texts) {
+                const value = String(text ?? '');
+                const isWindowCall = /\bOVER\s*\(/i.test(stripStrings(value));
+                if (isWindowCall || (value.trim() && windowAliases.has(normalizeExpr(value)))) {
+                    this.add('error', 'builder',
+                        `${isWindowCall ? 'Window functions' : `${quote(value)} is a window function result and`} can't be used in ${clause}, which runs before window functions. Filter it in an outer query instead (put this query in a CTE or FROM subquery).`,
+                        joinPath(iPath, key), scope);
+                    return;
+                }
+            }
+        });
+        check(q.where, joinPath(path, 'where'), 'WHERE');
+        check(q.having, joinPath(path, 'having'), 'HAVING');
     }
 
     source(source, path, scope, ctx, role) {
@@ -334,9 +441,11 @@ class Validator {
     }
 
     grouping(q, path, scope) {
-        const isAggregated = (col) => col.kind === 'column'
-            ? Boolean(col.aggregate) || containsAggregateCall(col.expr)
-            : col.cases.some(c => containsAggregateCall(c.when) || containsAggregateCall(c.then));
+        const isAggregated = (col) => {
+            if (col.kind === 'column') return Boolean(col.aggregate) || containsAggregateCall(col.expr);
+            if (col.kind === 'case') return col.cases.some(c => containsAggregateCall(c.when) || containsAggregateCall(c.then));
+            return false; // window functions are evaluated after grouping
+        };
         const aggregated = q.columns.some(isAggregated);
         const groupKeys = new Set(q.groupBy.map(g => normalizeExpr(String(g.expr))).filter(Boolean));
 
@@ -386,11 +495,20 @@ class Validator {
 
     setOps(q, path, ctx) {
         if (q.setOps.length === 0) return;
+        const isIntersect = (op) => op.startsWith('INTERSECT');
+        if (q.setOps.some(s => isIntersect(s.op)) && q.setOps.some(s => !isIntersect(s.op))) {
+            this.add('info', 'builder', 'INTERSECT is evaluated before UNION and EXCEPT, not left to right. For a different order, build part of the query as a CTE or subquery.', joinPath(path, 'setOps'), ctx.scope);
+        }
         const mainCount = outputColumnCount(q);
         q.setOps.forEach((setOp, i) => {
             const sPath = joinPath(path, 'setOps', i);
             if (!SET_OPERATORS.includes(setOp.op)) {
                 this.add('error', 'builder', `Unknown set operator ${quote(setOp.op)}.`, joinPath(sPath, 'op'), ctx.scope);
+            } else if (!this.dialect.setOperators.includes(setOp.op)) {
+                this.add('error', 'builder', `${this.dialect.label} doesn't support ${setOp.op}.`, joinPath(sPath, 'op'), ctx.scope);
+            } else {
+                const minVersion = this.dialect.setOperatorMinVersion?.[setOp.op.split(' ')[0]];
+                if (minVersion) this.add('info', 'builder', `${setOp.op} needs ${this.dialect.label} ${minVersion} or later.`, joinPath(sPath, 'op'), ctx.scope);
             }
             const label = `${setOp.op} query ${i + 1}`;
             this.select(setOp.query, joinPath(sPath, 'query'), {
@@ -399,7 +517,7 @@ class Validator {
             const count = outputColumnCount(setOp.query);
             if (mainCount > 0 && count > 0 && count !== mainCount) {
                 this.add('error', 'builder',
-                    `${label} returns ${count} column${count === 1 ? '' : 's'} but the first query returns ${mainCount}. UNION queries must select the same number of columns.`,
+                    `${label} returns ${count} column${count === 1 ? '' : 's'} but the first query returns ${mainCount}. Queries combined with ${setOp.op} must select the same number of columns.`,
                     joinPath(sPath, 'query', 'columns'), ctx.scope);
             }
         });

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { validateQuery, validateWorkspace, hasErrors, summarize, outputColumnCount } from '../src/validation.js';
 import {
-    createSelect, createColumn, createCaseColumn, createCondition, createRawCondition, createGroup, createJoin,
+    createSelect, createColumn, createCaseColumn, createWindowColumn, createCondition, createRawCondition, createGroup, createJoin,
     createTableSource, createSubquerySource, createCte, createSetOp, createGroupByItem, createOrderItem,
     createInsert, createUpdate, createDelete, createWorkspace
 } from '../src/model.js';
@@ -217,7 +217,7 @@ describe('subqueries, CTEs, UNION', () => {
     test('ORDER BY inside a UNION branch warns', () => {
         const u = createSetOp('UNION');
         u.query = select({ orderBy: [createOrderItem('x')] });
-        expect(find(validateQuery(select({ setOps: [u] })), 'inside a UNION part are ignored')).toBeTruthy();
+        expect(find(validateQuery(select({ setOps: [u] })), 'inside a UNION / INTERSECT / EXCEPT part are ignored')).toBeTruthy();
     });
 
     test('nesting depth is limited', () => {
@@ -308,5 +308,95 @@ describe('workspace helpers', () => {
 
     test('summarize counts levels', () => {
         expect(summarize([{ level: 'error' }, { level: 'warning' }, { level: 'warning' }, { level: 'info' }])).toEqual({ errors: 1, warnings: 2, infos: 1 });
+    });
+});
+
+describe('INTERSECT / EXCEPT validation', () => {
+    const combined = (...ops) => select({
+        columns: [createColumn('id')],
+        setOps: ops.map(op => ({ ...createSetOp(op), query: select({ columns: [createColumn('id')] }) }))
+    });
+
+    test('supported everywhere except ALL variants on SQL Server', () => {
+        expect(hasErrors(validateQuery(combined('INTERSECT ALL', 'EXCEPT ALL'), { dialect: 'postgresql' }))).toBe(false);
+        expect(messages(validateQuery(combined('INTERSECT ALL'), { dialect: 'sqlserver' }), 'error')).toEqual(["SQL Server doesn't support INTERSECT ALL."]);
+        expect(hasErrors(validateQuery(combined('INTERSECT', 'EXCEPT'), { dialect: 'sqlserver' }))).toBe(false);
+    });
+
+    test('MySQL version tip', () => {
+        expect(messages(validateQuery(combined('EXCEPT'), { dialect: 'mysql' }), 'info')).toEqual(['EXCEPT needs MySQL 8.0.31 or later.']);
+    });
+
+    test('precedence tip only when INTERSECT is mixed with other operators', () => {
+        expect(find(validateQuery(combined('UNION', 'INTERSECT')), 'INTERSECT is evaluated before')).toMatchObject({ level: 'info' });
+        expect(find(validateQuery(combined('INTERSECT', 'INTERSECT ALL')), 'INTERSECT is evaluated before')).toBeUndefined();
+    });
+
+    test('column count mismatch names the operator', () => {
+        const q = combined('EXCEPT');
+        q.setOps[0].query.columns.push(createColumn('name'));
+        expect(find(validateQuery(q), 'Queries combined with EXCEPT must select the same number of columns')).toBeTruthy();
+    });
+});
+
+describe('window function validation', () => {
+    const order = [{ expr: 'day', direction: 'ASC' }];
+    const win = (overrides) => ({ ...createWindowColumn(), alias: 'w', ...overrides });
+    const check = (col, dialect) => validateQuery(select({ columns: [col] }), { dialect });
+
+    test('a complete window column has no issues', () => {
+        expect(check(win({ func: 'ROW_NUMBER', orderBy: order }))).toEqual([]);
+        expect(check(win({ func: 'SUM', args: 'amount', orderBy: order, frame: 'moving', frameSize: '3' }))).toEqual([]);
+    });
+
+    test.each([
+        [{ func: 'RANK', args: 'x', orderBy: order }, 'RANK() takes no arguments; leave the argument empty.'],
+        [{ func: 'NTILE', args: '0', orderBy: order }, 'NTILE needs the number of groups, e.g. 4.'],
+        [{ func: 'LAG', args: '', orderBy: order }, 'LAG needs a column, optionally followed by an offset and a default, e.g. salary, 1, 0.'],
+        [{ func: 'LEAD', args: 'price, x', orderBy: order }, 'The LEAD offset (second argument) must be a whole number.'],
+        [{ func: 'FIRST_VALUE', args: 'a, b' }, 'FIRST_VALUE needs one column or expression.'],
+        [{ func: 'NTH_VALUE', args: 'a' }, 'NTH_VALUE needs a column and a position, e.g. salary, 2.'],
+        [{ func: 'SUM', args: '*' }, "SUM(*) isn't valid; choose a column."],
+        [{ func: 'AVG', args: '' }, 'AVG needs one column or expression.'],
+        [{ func: 'ROW_NUMBER', orderBy: order, frame: 'running' }, 'ROW_NUMBER doesn\'t take a window frame; choose "Default".'],
+        [{ func: 'SUM', args: 'a', orderBy: order, frame: 'moving', frameSize: '0' }, 'Enter how many preceding rows the moving window covers (1 or more).'],
+        [{ func: 'SUM', args: 'SUM(a' }, '“SUM(a” has an opening "(" without a matching ")".']
+    ])('%o', (overrides, message) => {
+        expect(messages(check(win(overrides)), 'error')).toEqual([message]);
+    });
+
+    test('ranking without ORDER BY: warning generally, error on SQL Server', () => {
+        const col = win({ func: 'ROW_NUMBER' });
+        expect(find(check(col), 'needs ORDER BY inside OVER')).toMatchObject({ level: 'warning' });
+        expect(find(check(col, 'sqlserver'), 'needs ORDER BY inside OVER')).toMatchObject({ level: 'error' });
+    });
+
+    test('frame without ORDER BY', () => {
+        expect(find(check(win({ func: 'SUM', args: 'a', frame: 'running' })), 'window frame needs ORDER BY')).toMatchObject({ level: 'warning' });
+    });
+
+    test('NTH_VALUE is rejected on SQL Server; LAST_VALUE frame tip; alias tip', () => {
+        expect(find(check(win({ func: 'NTH_VALUE', args: 'a, 2' }), 'sqlserver'), "doesn't support NTH_VALUE")).toBeTruthy();
+        expect(find(check(win({ func: 'LAST_VALUE', args: 'a', orderBy: order })), 'Whole partition')).toMatchObject({ level: 'info' });
+        expect(find(check(win({ func: 'ROW_NUMBER', orderBy: order, alias: '' })), 'alias')).toMatchObject({ level: 'info' });
+    });
+
+    test('filtering a window result in WHERE or HAVING is an error', () => {
+        const q = select({
+            columns: [createColumn('name'), win({ func: 'ROW_NUMBER', orderBy: order, alias: 'rn' })],
+            where: where(cond('RN', '<=', '3'), createRawCondition('RANK() OVER (ORDER BY x) = 1'))
+        });
+        const errors = validateQuery(q, {}, 'select').filter(i => i.level === 'error');
+        expect(errors.map(e => e.path)).toEqual(['select.where.items.0.left', 'select.where.items.1.sql']);
+        expect(errors[0].message).toContain('“RN” is a window function result and can\'t be used in WHERE');
+        expect(errors[1].message).toContain('Window functions can\'t be used in WHERE');
+    });
+
+    test('window columns are ignored by the GROUP BY consistency check', () => {
+        const q = select({
+            columns: [createColumn('dept'), createColumn('', { aggregate: 'COUNT' }), win({ func: 'RANK', orderBy: [{ expr: 'COUNT(*)', direction: 'DESC' }] })],
+            groupBy: [createGroupByItem('dept')]
+        });
+        expect(validateQuery(q)).toEqual([]);
     });
 });

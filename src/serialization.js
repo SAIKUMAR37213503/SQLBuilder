@@ -7,7 +7,7 @@
 
 import {
     MODEL_VERSION, QUERY_TYPES, JOIN_TYPES, SET_OPERATORS, AGGREGATES, SORT_DIRECTIONS,
-    LOGIC_OPERATORS, OPERATORS, VALUE_TYPES, createWorkspace
+    LOGIC_OPERATORS, OPERATORS, VALUE_TYPES, WINDOW_FUNCTIONS, WINDOW_FRAMES, createWorkspace
 } from './model.js';
 import { MAX_NESTING_DEPTH } from './validation.js';
 
@@ -105,7 +105,23 @@ function readPredicate(data, where, depth) {
     }
 }
 
+function readOrderItem(o, w) {
+    return { expr: str(o, 'expr', w), direction: oneOf(o, 'direction', SORT_DIRECTIONS, w, 'ASC') };
+}
+
 function readColumn(data, where) {
+    if (data.kind === 'window') {
+        return {
+            kind: 'window',
+            func: oneOf(data, 'func', Object.keys(WINDOW_FUNCTIONS), where, 'ROW_NUMBER'),
+            args: str(data, 'args', where),
+            partitionBy: list(data, 'partitionBy', where, (p, w) => ({ expr: str(p, 'expr', w) })),
+            orderBy: list(data, 'orderBy', where, readOrderItem),
+            frame: oneOf(data, 'frame', WINDOW_FRAMES, where, ''),
+            frameSize: str(data, 'frameSize', where),
+            alias: str(data, 'alias', where)
+        };
+    }
     if (data.kind === 'case') {
         return {
             kind: 'case',
@@ -114,7 +130,7 @@ function readColumn(data, where) {
             alias: str(data, 'alias', where)
         };
     }
-    if (data.kind !== undefined && data.kind !== 'column') throw new ImportError(`${where}.kind must be "column" or "case".`);
+    if (data.kind !== undefined && data.kind !== 'column') throw new ImportError(`${where}.kind must be "column", "case" or "window".`);
     return {
         kind: 'column',
         expr: str(data, 'expr', where),
@@ -156,10 +172,7 @@ function readSelect(data, where, depth = 0) {
         where: data.where === undefined ? structuredClone(emptyGroup) : readGroup(obj(data, 'where', where), `${where}.where`, depth),
         groupBy: list(data, 'groupBy', where, (g, w) => ({ expr: str(g, 'expr', w) })),
         having: data.having === undefined ? structuredClone(emptyGroup) : readGroup(obj(data, 'having', where), `${where}.having`, depth),
-        orderBy: list(data, 'orderBy', where, (o, w) => ({
-            expr: str(o, 'expr', w),
-            direction: oneOf(o, 'direction', SORT_DIRECTIONS, w, 'ASC')
-        })),
+        orderBy: list(data, 'orderBy', where, readOrderItem),
         limit: str(data, 'limit', where),
         offset: str(data, 'offset', where),
         setOps: list(data, 'setOps', where, (s, w) => ({

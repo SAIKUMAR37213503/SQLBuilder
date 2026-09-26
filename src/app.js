@@ -2,7 +2,7 @@
 // and re-renders. Rendering lives in ./ui/*, SQL logic in the core modules.
 
 import {
-    createWorkspace, createEmptyFor, createColumn, createCaseColumn, createCondition, createRawCondition,
+    createWorkspace, createEmptyFor, createColumn, createCaseColumn, createWindowColumn, createCondition, createRawCondition,
     createGroup, createJoin, createTableSource, createSubquerySource, createCte, createSetOp, createOrderItem,
     createGroupByItem, createAssignment, createSelect, OPERATORS, getAt, setAt, parentPath, splitPath,
     isPristine, describeComplexity
@@ -33,6 +33,7 @@ const DRAFT_KEY = 'draft';
 const ITEM_FACTORIES = {
     column: () => createColumn(),
     case: () => createCaseColumn(),
+    window: () => createWindowColumn(),
     caseWhen: () => ({ when: '', then: '' }),
     join: () => createJoin(),
     condition: () => createCondition(),
@@ -366,6 +367,7 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
         const current = getAt(state.workspace, objectPath);
         let next;
         if (kind === 'case') next = { ...createCaseColumn(), alias: current.alias };
+        else if (kind === 'window') next = { ...createWindowColumn(), alias: current.alias };
         else if (kind === 'column') next = createColumn('', { alias: current.alias });
         else if (kind === 'subquery') next = { ...createSubquerySource(), alias: current.alias };
         else if (kind === 'table') next = createTableSource('', current.alias);

@@ -1,6 +1,6 @@
 # SQL Query Builder Pro Lite
 
-Build SQL visually in your browser: SELECT (with joins, nested conditions, subqueries, CTEs, CASE, grouping and UNION), INSERT, UPDATE and DELETE. The output is clean, consistently formatted SQL for Generic SQL, PostgreSQL, MySQL or SQL Server.
+Build SQL visually in your browser: SELECT (with joins, nested conditions, subqueries, CTEs, CASE, window functions, grouping and UNION / INTERSECT / EXCEPT), INSERT, UPDATE and DELETE. The output is clean, consistently formatted SQL for Generic SQL, PostgreSQL, MySQL or SQL Server.
 
 It is a static page with no server, no accounts and no analytics. It **never connects to a database or runs queries**, and nothing you type leaves your browser.
 
@@ -11,6 +11,12 @@ It is a static page with no server, no accounts and no analytics. It **never con
 **Query types:** SELECT, INSERT (one or many rows), UPDATE, DELETE.
 
 **SELECT builder**
+- **Window functions** (`… OVER (PARTITION BY … ORDER BY … frame)`):
+  - ranking: `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`, `CUME_DIST`, `NTILE(n)`
+  - offset: `LAG` / `LEAD` (with optional offset and default)
+  - value: `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`
+  - aggregates: `SUM`, `AVG`, `MIN`, `MAX`, `COUNT`
+  - frame presets: running total, whole partition, moving N rows
 - Columns with aliases, calculated expressions, aggregates (`COUNT`, `COUNT(DISTINCT …)`, `SUM`, `AVG`, `MIN`, `MAX`) and `CASE WHEN … THEN … ELSE … END` columns. Leaving the column of a `COUNT` empty gives `COUNT(*)`.
 - `DISTINCT`
 - `FROM` a table (with alias or `schema.table`) or a subquery (derived table)
@@ -25,7 +31,7 @@ It is a static page with no server, no accounts and no analytics. It **never con
   - custom SQL conditions
 - `GROUP BY`, `ORDER BY` (multiple columns, ASC/DESC), `LIMIT`, `OFFSET`
 - `WITH` (common table expressions) on the main query
-- `UNION` / `UNION ALL` with any number of queries. `ORDER BY` / `LIMIT` apply to the combined result.
+- `UNION`, `UNION ALL`, `INTERSECT`, `INTERSECT ALL`, `EXCEPT` and `EXCEPT ALL` with any number of queries. `ORDER BY` / `LIMIT` apply to the combined result. As in SQL, `INTERSECT` binds tighter than `UNION`/`EXCEPT`; a tip points this out when they are mixed.
 - Subqueries nest up to 4 levels deep.
 
 **Values vs. expressions:** every condition value is either
@@ -40,21 +46,22 @@ It is a static page with no server, no accounts and no analytics. It **never con
 - Copy, Select all, Download `.sql`
 
 **Checks:** the checks panel shows three kinds of message:
-- **Errors** (block generation): missing fields, invalid names or aliases, unbalanced quotes or parentheses, a join without a condition, UNION column-count mismatches, INSERT value/column mismatches, …
+- **Errors** (block generation): missing fields, invalid names or aliases, unbalanced quotes or parentheses, a join without a condition, column-count mismatches between combined queries, INSERT value/column mismatches, wrong window-function arguments, a window result used in WHERE/HAVING, operators or functions the dialect lacks, …
 - **Warnings** (never block):
   - UPDATE or DELETE without WHERE
   - columns missing from GROUP BY
   - `= NULL`
   - duplicate column names
   - unquoted text in INSERT values
-- **Tips**, e.g. LIMIT without ORDER BY, or LIKE without a wildcard.
+  - ranking window functions without ORDER BY (an error on SQL Server)
+- **Tips**, e.g. LIMIT without ORDER BY, LIKE without a wildcard, or INTERSECT precedence.
 
 "Go to field" jumps to the problem.
 
 **Workspace**
 - **History** of generated queries: search, restore, copy, delete, clear. It keeps the last 50, and can be turned off.
 - **Templates**: save, load, rename, duplicate, delete, and import/export as JSON.
-- **Examples**: ten starter queries.
+- **Examples**: twelve starter queries.
 - Import/export of the current query as JSON (validated, never executed), and download of the SQL.
 - Undo / redo of every change.
 - Unsaved work is restored when you come back; this can be turned off.
@@ -74,6 +81,9 @@ Generic SQL is the default. Dialects change only what is listed here:
 | LIMIT n OFFSET m | `LIMIT n OFFSET m` | same | same | `OFFSET m ROWS FETCH NEXT n ROWS ONLY` (adds `ORDER BY (SELECT NULL)` if there is no ORDER BY) |
 | OFFSET only | `OFFSET m` | `OFFSET m` | `LIMIT 18446744073709551615 OFFSET m` | `OFFSET m ROWS` |
 | FULL JOIN | ✓ | ✓ | reported as an error | ✓ |
+| INTERSECT / EXCEPT | ✓ (+ `ALL`) | ✓ (+ `ALL`) | ✓ (+ `ALL`), tip: needs 8.0.31+ | ✓ (no `ALL` variants) |
+| NTH_VALUE | ✓ | ✓ | ✓ | reported as an error |
+| Ranking functions without ORDER BY | warning | warning | warning | error (required) |
 
 Not dialect-aware (yet): date/time functions, parameter placeholders, `RETURNING`/`OUTPUT`, upserts. Expressions you type are passed through unchanged.
 
@@ -149,7 +159,7 @@ src/
 ```
 
 Design decisions:
-- **One structured model.** The builder, generator, validator, history, templates, import/export and undo all operate on the same JSON model, so SQL is never parsed back from text. New constructs (window functions, `INTERSECT`/`EXCEPT`, …) are added as a model field, a generator branch, a validation rule and an editor control.
+- **One structured model.** The builder, generator, validator, history, templates, import/export and undo all operate on the same JSON model, so SQL is never parsed back from text. New constructs are added as a model field, a generator branch, a validation rule and an editor control. Window functions and `INTERSECT`/`EXCEPT` were added exactly this way.
 - **Formatting happens during generation.** The generator emits `[indent, text]` lines and pretty-prints or joins them, so user values are never reformatted.
 - **No framework.** Rendering uses a ~30-line `h()` helper with `textContent`/`setAttribute`; there is no `innerHTML`. Events are delegated: inputs carry `data-path` (their location in the model) and buttons carry `data-action`.
 - **Bundled classic script.** ES modules can't load from `file://`, so esbuild bundles them into one IIFE. The only runtime dependency is the browser.
@@ -204,15 +214,16 @@ Fabric_Sync/                                      ← unrelated Power BI content
 - INSERT values are SQL expressions: write text in quotes. A warning flags likely unquoted text.
 - GROUP BY checking is a heuristic: it compares expressions textually and can't know about functional dependencies.
 - Dialect support covers only the differences listed above.
+- Window frames are limited to three `ROWS` presets.
+- MySQL's minimum versions (8.0 for window functions, 8.0.31 for INTERSECT/EXCEPT) aren't enforced; they're shown only as notes and tips.
 
 ## Roadmap
 
 Candidates, in rough priority order:
-- `INTERSECT` / `EXCEPT` (the model's set operators are ready for them)
-- Window functions (`OVER (PARTITION BY … ORDER BY …)`)
 - `INSERT … SELECT` and upserts (`ON CONFLICT`, `ON DUPLICATE KEY`, `MERGE`)
 - Parameter placeholders per dialect (`$1`, `?`, `@p1`)
 - Recursive CTEs
+- More window options: named `WINDOW` clauses, `RANGE`/`GROUPS` frames and custom frame bounds
 - Optional schema hints (known tables/columns) for autocomplete and validation
 
 ## License

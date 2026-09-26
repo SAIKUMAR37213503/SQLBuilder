@@ -309,3 +309,21 @@ describe('storage when full', () => {
         expect(storage.set('y', 1)).toBe(false);
     });
 });
+
+describe('import of window functions and set operators', () => {
+    test('round-trips and rejects unknown values', () => {
+        const ws = EXAMPLES.find(e => e.id === 'window').build();
+        expect(parseQueryFile(JSON.stringify(ws)).workspace).toEqual(ws);
+        expect(parseQueryFile(JSON.stringify(EXAMPLES.find(e => e.id === 'intersect').build())).ok).toBe(true);
+
+        const bad = (patch) => {
+            const copy = structuredClone(ws);
+            Object.assign(copy.select.columns[3], patch);
+            return parseQueryFile(JSON.stringify(copy));
+        };
+        expect(bad({ func: 'DROP_TABLE' }).error).toMatch(/func has an unsupported value/);
+        expect(bad({ frame: 'RANGE 1 PRECEDING' }).error).toMatch(/frame has an unsupported value/);
+        expect(bad({ partitionBy: 'dept' }).error).toMatch(/must be a list/);
+        expect(parseQueryFile('{"type":"select","select":{"setOps":[{"op":"MINUS","query":{}}]}}').error).toMatch(/unsupported value/);
+    });
+});

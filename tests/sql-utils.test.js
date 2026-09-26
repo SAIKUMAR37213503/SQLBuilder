@@ -97,3 +97,11 @@ describe('tokenize', () => {
         expect(tokenize(sql).map(t => t.text).join('')).toBe(sql);
     });
 });
+
+describe('tokenize: window functions and set operators', () => {
+    test('keywords', () => {
+        const kinds = tokenize('RANK() OVER (PARTITION BY d ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) INTERSECT ALL EXCEPT')
+            .filter(t => t.type === 'keyword').map(t => t.text);
+        expect(kinds).toEqual(['OVER', 'PARTITION BY', 'ROWS', 'BETWEEN', 'PRECEDING', 'AND', 'CURRENT ROW', 'INTERSECT ALL', 'EXCEPT']);
+    });
+});

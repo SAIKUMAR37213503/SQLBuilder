@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { generateQuery, generateSQL, formatLiteral } from '../src/generator.js';
 import {
-    createSelect, createColumn, createCaseColumn, createCondition, createRawCondition, createGroup,
+    createSelect, createColumn, createCaseColumn, createWindowColumn, createCondition, createRawCondition, createGroup,
     createJoin, createTableSource, createSubquerySource, createCte, createSetOp, createOrderItem,
     createGroupByItem, createInsert, createUpdate, createDelete, createWorkspace
 } from '../src/model.js';
@@ -364,5 +364,78 @@ describe('formatLiteral', () => {
 
     test('dialect booleans', () => {
         expect(formatLiteral('true', 'sqlserver')).toBe('1');
+    });
+});
+
+describe('INTERSECT / EXCEPT', () => {
+    test.each(['INTERSECT', 'INTERSECT ALL', 'EXCEPT', 'EXCEPT ALL'])('%s', (op) => {
+        const s = createSetOp(op);
+        s.query = select({ table: 'b', columns: ['id'] });
+        const q = select({ table: 'a', columns: ['id'], setOps: [s], orderBy: [createOrderItem('id')] });
+        expect(generateQuery(q)).toBe(`SELECT id\nFROM a\n${op}\nSELECT id\nFROM b\nORDER BY id;`);
+    });
+
+    test('mixed operators are emitted in order (SQL precedence applies)', () => {
+        const u = createSetOp('UNION');
+        u.query = select({ table: 'b', columns: ['id'] });
+        const i = createSetOp('INTERSECT');
+        i.query = select({ table: 'c', columns: ['id'] });
+        const q = select({ table: 'a', columns: ['id'], setOps: [u, i] });
+        expect(generateQuery(q, { pretty: false })).toBe('SELECT id FROM a UNION SELECT id FROM b INTERSECT SELECT id FROM c;');
+    });
+
+    test('SQL Server with EXCEPT and LIMIT uses OFFSET/FETCH', () => {
+        const e = createSetOp('EXCEPT');
+        e.query = select({ table: 'b', columns: ['id'] });
+        const q = select({ table: 'a', columns: ['id'], setOps: [e], orderBy: [createOrderItem('id')], limit: '5' });
+        expect(generateQuery(q, { dialect: 'sqlserver' })).toBe(
+            'SELECT id\nFROM a\nEXCEPT\nSELECT id\nFROM b\nORDER BY id\nOFFSET 0 ROWS\nFETCH NEXT 5 ROWS ONLY;'
+        );
+    });
+});
+
+describe('window functions', () => {
+    const win = (overrides) => ({ ...createWindowColumn(), ...overrides });
+    const gen = (col, options) => generateQuery(select({ columns: [col] }), options).split('\n')[0];
+
+    test('ranking with PARTITION BY and ORDER BY', () => {
+        expect(gen(win({
+            func: 'ROW_NUMBER', partitionBy: [{ expr: 'dept' }], orderBy: [{ expr: 'salary', direction: 'DESC' }], alias: 'rn'
+        }))).toBe('SELECT ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn');
+        expect(gen(win({ func: 'DENSE_RANK', orderBy: [{ expr: 'score', direction: 'ASC' }] })))
+            .toBe('SELECT DENSE_RANK() OVER (ORDER BY score)');
+    });
+
+    test('NTILE, LAG/LEAD with offset and default, NTH_VALUE', () => {
+        const order = [{ expr: 'day', direction: 'ASC' }];
+        expect(gen(win({ func: 'NTILE', args: '4', orderBy: order }))).toBe('SELECT NTILE(4) OVER (ORDER BY day)');
+        expect(gen(win({ func: 'LAG', args: 'price,1,0', orderBy: order, alias: 'prev' }))).toBe('SELECT LAG(price, 1, 0) OVER (ORDER BY day) AS prev');
+        expect(gen(win({ func: 'LEAD', args: 'price', orderBy: order }))).toBe('SELECT LEAD(price) OVER (ORDER BY day)');
+        expect(gen(win({ func: 'NTH_VALUE', args: 'price, 2', orderBy: order, frame: 'whole' })))
+            .toBe('SELECT NTH_VALUE(price, 2) OVER (ORDER BY day ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)');
+    });
+
+    test('aggregates with frames: running, whole, moving', () => {
+        const order = [{ expr: 'day', direction: 'ASC' }];
+        expect(gen(win({ func: 'SUM', args: 'amount', orderBy: order, frame: 'running', alias: 'running_total' })))
+            .toBe('SELECT SUM(amount) OVER (ORDER BY day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total');
+        expect(gen(win({ func: 'AVG', args: 'amount', orderBy: order, frame: 'moving', frameSize: '6' })))
+            .toBe('SELECT AVG(amount) OVER (ORDER BY day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)');
+        expect(gen(win({ func: 'MAX', args: 'amount', partitionBy: [{ expr: 'region' }] })))
+            .toBe('SELECT MAX(amount) OVER (PARTITION BY region)');
+    });
+
+    test('COUNT without an argument is COUNT(*); empty OVER is allowed', () => {
+        expect(gen(win({ func: 'COUNT' }))).toBe('SELECT COUNT(*) OVER ()');
+    });
+
+    test('identifiers inside OVER are quoted when enabled', () => {
+        expect(gen(win({ func: 'SUM', args: 'amount', partitionBy: [{ expr: 'region' }], orderBy: [{ expr: 'day', direction: 'DESC' }] }), { dialect: 'sqlserver', quoteIdentifiers: true }))
+            .toBe('SELECT SUM([amount]) OVER (PARTITION BY [region] ORDER BY [day] DESC)');
+    });
+
+    test('mixed with regular columns in a formatted SELECT list', () => {
+        const q = select({ columns: ['name', win({ func: 'RANK', orderBy: [{ expr: 'salary', direction: 'DESC' }], alias: 'pay_rank' })] });
+        expect(generateQuery(q)).toBe('SELECT\n    name,\n    RANK() OVER (ORDER BY salary DESC) AS pay_rank\nFROM Employees;');
     });
 });

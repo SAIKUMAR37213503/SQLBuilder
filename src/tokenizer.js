@@ -2,11 +2,12 @@
 // is done by the UI with DOM text nodes, so no HTML is ever built from SQL.
 
 const KEYWORDS = [
-    'ORDER\\s+BY', 'GROUP\\s+BY', 'INSERT\\s+INTO', 'DELETE\\s+FROM', 'UNION\\s+ALL',
+    'ORDER\\s+BY', 'GROUP\\s+BY', 'PARTITION\\s+BY', 'INSERT\\s+INTO', 'DELETE\\s+FROM',
+    '(?:UNION|INTERSECT|EXCEPT)(?:\\s+ALL)?', 'CURRENT\\s+ROW', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING', 'OVER',
     '(?:INNER|LEFT|RIGHT|FULL|CROSS)\\s+JOIN', 'IS\\s+NOT\\s+NULL', 'IS\\s+NULL',
     'NOT\\s+IN', 'NOT\\s+LIKE', 'NOT\\s+BETWEEN', 'NOT\\s+EXISTS',
     'SELECT', 'DISTINCT', 'TOP', 'FROM', 'WHERE', 'HAVING', 'LIMIT', 'OFFSET', 'FETCH', 'NEXT',
-    'ROWS', 'ONLY', 'VALUES', 'UPDATE', 'SET', 'WITH', 'AS', 'ON', 'JOIN', 'UNION', 'AND', 'OR',
+    'ROWS', 'ONLY', 'VALUES', 'UPDATE', 'SET', 'WITH', 'AS', 'ON', 'JOIN', 'AND', 'OR',
     'NOT', 'IN', 'LIKE', 'BETWEEN', 'EXISTS', 'IS', 'NULL', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
     'ASC', 'DESC', 'TRUE', 'FALSE'
 ];

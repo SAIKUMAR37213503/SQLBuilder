@@ -2,7 +2,7 @@
 // workspaces built with the model factories, so they also exercise the model.
 
 import {
-    createWorkspace, createColumn, createCaseColumn, createCondition, createGroup, createJoin,
+    createWorkspace, createColumn, createCaseColumn, createWindowColumn, createCondition, createGroup, createJoin,
     createTableSource, createCte, createSetOp, createSelect, createGroupByItem
 } from './model.js';
 
@@ -120,6 +120,35 @@ export const EXAMPLES = [
             union.query = createSelect({ columns: [createColumn('name'), createColumn('email')], from: createTableSource('suppliers') });
             q.setOps = [union];
             q.orderBy = [{ expr: 'name', direction: 'ASC' }];
+        })
+    },
+    {
+        id: 'window',
+        name: 'Window functions: rank and running total',
+        description: 'RANK per department and a running SUM ordered by date.',
+        build: () => workspace('select', (q) => {
+            const rank = {
+                ...createWindowColumn(), func: 'RANK', alias: 'dept_rank',
+                partitionBy: [{ expr: 'department' }], orderBy: [{ expr: 'salary', direction: 'DESC' }]
+            };
+            const running = {
+                ...createWindowColumn(), func: 'SUM', args: 'salary', alias: 'running_payroll',
+                orderBy: [{ expr: 'hired_on', direction: 'ASC' }], frame: 'running'
+            };
+            q.columns = [createColumn('name'), createColumn('department'), createColumn('salary'), rank, running];
+            q.from = createTableSource('employees');
+        })
+    },
+    {
+        id: 'intersect',
+        name: 'INTERSECT: customers who are also suppliers',
+        description: 'Rows present in both queries.',
+        build: () => workspace('select', (q) => {
+            q.columns = [createColumn('email')];
+            q.from = createTableSource('customers');
+            const both = createSetOp('INTERSECT');
+            both.query = createSelect({ columns: [createColumn('email')], from: createTableSource('suppliers') });
+            q.setOps = [both];
         })
     },
     {

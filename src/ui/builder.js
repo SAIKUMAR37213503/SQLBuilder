@@ -9,7 +9,32 @@
 // Only this module decides what the editor looks like; it never mutates the model.
 
 import { h } from './dom.js';
-import { OPERATORS, JOIN_TYPES, SET_OPERATORS, AGGREGATES, joinPath } from '../model.js';
+import { OPERATORS, JOIN_TYPES, SET_OPERATORS, AGGREGATES, WINDOW_FUNCTIONS, joinPath } from '../model.js';
+
+const SET_OPERATOR_LABELS = {
+    'UNION': 'UNION — rows in either query (no duplicates)',
+    'UNION ALL': 'UNION ALL — rows in either query (keep duplicates)',
+    'INTERSECT': 'INTERSECT — rows in both queries',
+    'INTERSECT ALL': 'INTERSECT ALL — rows in both, keep duplicates',
+    'EXCEPT': 'EXCEPT — rows in the first query but not this one',
+    'EXCEPT ALL': 'EXCEPT ALL — like EXCEPT, keep duplicates'
+};
+
+/** @type {[string, string[]][]} */
+const WINDOW_GROUPS = [
+    ['Ranking', ['ROW_NUMBER', 'RANK', 'DENSE_RANK', 'PERCENT_RANK', 'CUME_DIST', 'NTILE']],
+    ['Offset', ['LAG', 'LEAD']],
+    ['Value', ['FIRST_VALUE', 'LAST_VALUE', 'NTH_VALUE']],
+    ['Aggregate', ['SUM', 'AVG', 'MIN', 'MAX', 'COUNT']]
+];
+
+const WINDOW_ARG_PLACEHOLDERS = {
+    ntile: 'number of groups, e.g. 4',
+    offset: 'column[, offset[, default]], e.g. salary, 1, 0',
+    value: 'column, e.g. salary',
+    nth: 'column, position, e.g. salary, 2',
+    aggregate: 'column, e.g. amount'
+};
 import { MAX_NESTING_DEPTH } from '../validation.js';
 
 const fieldId = (path) => `f-${path.replace(/[^\w-]/g, '-')}`;
@@ -182,9 +207,9 @@ class Renderer {
                 this.grouping(q, path, ctx)),
             ctx.branch ? null : this.section(`${path}:sorting`, 'ORDER BY, LIMIT & OFFSET', { open: hasSorting, count: q.orderBy.length },
                 this.sorting(q, path)),
-            ctx.branch ? null : this.section(`${path}:setops`, 'UNION', {
+            ctx.branch ? null : this.section(`${path}:setops`, 'UNION / INTERSECT / EXCEPT', {
                 open: q.setOps.length > 0, count: q.setOps.length,
-                description: 'Append the rows of other SELECT queries. Each must return the same number of columns.'
+                description: 'Combine this query with other SELECT queries. Each must return the same number of columns.'
             }, this.setOps(q, path, ctx))
         );
     }
@@ -211,8 +236,11 @@ class Renderer {
             checkbox(joinPath(path, 'distinct'), q.distinct, 'DISTINCT — remove duplicate rows'),
             h('ol', { class: 'item-list' }, cols.map((col, i) => {
                 const cPath = joinPath(path, 'columns', i);
-                const kindSelect = select(joinPath(cPath, 'kind'), col.kind, [['column', 'Column'], ['case', 'CASE']],
+                const kindSelect = select(joinPath(cPath, 'kind'), col.kind, [['column', 'Column'], ['case', 'CASE'], ['window', 'Window']],
                     { label: `Column ${i + 1} type`, rerender: true, className: 'select-narrow' });
+                if (col.kind === 'window') {
+                    return this.windowColumn(col, cPath, i, cols.length, kindSelect);
+                }
                 if (col.kind === 'case') {
                     return h('li', { class: 'card', dataset: { path: cPath } },
                         h('div', { class: 'row' },
@@ -252,9 +280,68 @@ class Renderer {
             })),
             addBar(
                 button('+ Column', 'add-item', joinPath(path, 'columns'), { arg: 'column' }),
-                button('+ CASE column', 'add-item', joinPath(path, 'columns'), { arg: 'case' })
+                button('+ CASE column', 'add-item', joinPath(path, 'columns'), { arg: 'case' }),
+                button('+ Window function', 'add-item', joinPath(path, 'columns'), { arg: 'window' })
             )
         ];
+    }
+
+    // FUNC(args) OVER (PARTITION BY … ORDER BY … frame)
+    windowColumn(col, cPath, i, count, kindSelect) {
+        const spec = WINDOW_FUNCTIONS[col.func] || WINDOW_FUNCTIONS.ROW_NUMBER;
+        const n = `Column ${i + 1}`;
+        const funcSelect = h('select', {
+            id: fieldId(joinPath(cPath, 'func')),
+            class: 'select select-op',
+            'aria-label': `${n} window function`,
+            dataset: { path: joinPath(cPath, 'func'), bind: 'select', rerender: true }
+        }, WINDOW_GROUPS.map(([groupLabel, funcs]) => h('optgroup', { label: groupLabel },
+            funcs.map(f => h('option', { value: f, selected: f === col.func }, `${f}()`)))));
+
+        return h('li', { class: 'card', dataset: { path: cPath } },
+            h('div', { class: 'row' },
+                kindSelect,
+                funcSelect,
+                spec.args === 'none' ? null : textInput(joinPath(cPath, 'args'), col.args, {
+                    label: `${n} function arguments`, hidden: true, className: 'grow',
+                    placeholder: col.func === 'COUNT' ? 'column (empty = all rows)' : WINDOW_ARG_PLACEHOLDERS[spec.args]
+                }),
+                textInput(joinPath(cPath, 'alias'), col.alias, { label: `${n} alias`, hidden: true, placeholder: 'AS alias', className: 'alias' }),
+                rowTools(cPath, i, count, 'column')
+            ),
+            h('div', { class: 'window-over' },
+                h('p', { class: 'subquery-label' }, 'OVER'),
+                h('h4', { class: 'sub-heading' }, 'PARTITION BY'),
+                h('ol', { class: 'item-list' }, col.partitionBy.map((p, j) => {
+                    const pPath = joinPath(cPath, 'partitionBy', j);
+                    return h('li', { class: 'row', dataset: { path: pPath } },
+                        textInput(joinPath(pPath, 'expr'), p.expr, { label: `${n} partition column ${j + 1}`, hidden: true, placeholder: 'column', className: 'grow' }),
+                        button('', 'remove-item', pPath, { icon: '✕', label: `Remove partition column ${j + 1}`, variant: 'danger-ghost' }));
+                })),
+                addBar(button('+ Partition column', 'add-item', joinPath(cPath, 'partitionBy'), { arg: 'groupBy' })),
+                h('h4', { class: 'sub-heading' }, 'ORDER BY'),
+                h('ol', { class: 'item-list' }, col.orderBy.map((o, j) => {
+                    const oPath = joinPath(cPath, 'orderBy', j);
+                    return h('li', { class: 'row', dataset: { path: oPath } },
+                        textInput(joinPath(oPath, 'expr'), o.expr, { label: `${n} window order column ${j + 1}`, hidden: true, placeholder: 'column', className: 'grow' }),
+                        select(joinPath(oPath, 'direction'), o.direction, [['ASC', 'Ascending'], ['DESC', 'Descending']], { label: `${n} window order ${j + 1} direction`, className: 'select-narrow' }),
+                        button('', 'remove-item', oPath, { icon: '✕', label: `Remove window order column ${j + 1}`, variant: 'danger-ghost' }));
+                })),
+                addBar(button('+ Order column', 'add-item', joinPath(cPath, 'orderBy'), { arg: 'orderBy' })),
+                spec.frame ? h('div', { class: 'row' },
+                    h('label', { class: 'field-label', for: fieldId(joinPath(cPath, 'frame')) }, 'Frame'),
+                    select(joinPath(cPath, 'frame'), col.frame, [
+                        ['', 'Default'],
+                        ['running', 'Running total (start → current row)'],
+                        ['whole', 'Whole partition'],
+                        ['moving', 'Moving (N rows back → current row)']
+                    ], { rerender: true }),
+                    col.frame === 'moving' ? textInput(joinPath(cPath, 'frameSize'), col.frameSize, {
+                        label: `${n} preceding rows in the moving frame`, hidden: true, placeholder: 'N rows', numeric: true, className: 'alias'
+                    }) : null
+                ) : null
+            )
+        );
     }
 
     source(source, path, ctx, role) {
@@ -338,12 +425,12 @@ class Renderer {
                 const sPath = joinPath(path, 'setOps', i);
                 return h('li', { class: 'card', dataset: { path: sPath } },
                     h('div', { class: 'card-header' },
-                        select(joinPath(sPath, 'op'), setOp.op, SET_OPERATORS.map(o => [o, o === 'UNION' ? 'UNION (remove duplicates)' : 'UNION ALL (keep duplicates)']), { label: `Set operation ${i + 1}` }),
+                        select(joinPath(sPath, 'op'), setOp.op, SET_OPERATORS.map(o => [o, SET_OPERATOR_LABELS[o]]), { label: `Set operation ${i + 1}` }),
                         rowTools(sPath, i, q.setOps.length, 'UNION query')),
                     this.select(setOp.query, joinPath(sPath, 'query'), { depth: ctx.depth + 1, top: false, branch: true })
                 );
             })),
-            addBar(button('+ UNION query', 'add-item', joinPath(path, 'setOps'), { arg: 'setOp', variant: 'ghost' }))
+            addBar(button('+ Combined query', 'add-item', joinPath(path, 'setOps'), { arg: 'setOp', variant: 'ghost' }))
         ];
     }
 

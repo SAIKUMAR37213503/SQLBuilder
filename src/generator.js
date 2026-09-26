@@ -5,7 +5,7 @@
 // into a single compact line. No regex post-processing of SQL text is used,
 // so user-entered values can never be re-formatted by accident.
 
-import { OPERATORS } from './model.js';
+import { OPERATORS, WINDOW_FUNCTIONS } from './model.js';
 import { getDialect, DEFAULT_DIALECT } from './dialects.js';
 import { splitTopLevel, isNumberLiteral, isQuotedString } from './sql-utils.js';
 
@@ -194,11 +194,9 @@ function renderSelect(q, ctx, { branch = false } = {}) {
     }
 
     if (!branch) {
-        const orderBy = q.orderBy
-            .filter(o => String(o.expr).trim() !== '')
-            .map(o => expr(o.expr, ctx) + (o.direction === 'DESC' ? ' DESC' : ''));
-        if (orderBy.length > 0) {
-            lines.push([0, `ORDER BY ${orderBy.join(', ')}`]);
+        const orderBy = renderOrderList(q.orderBy, ctx);
+        if (orderBy) {
+            lines.push([0, `ORDER BY ${orderBy}`]);
         } else if (pagination.needsOrderBy) {
             // SQL Server's OFFSET … FETCH requires an ORDER BY
             lines.push([0, 'ORDER BY (SELECT NULL)']);
@@ -209,7 +207,40 @@ function renderSelect(q, ctx, { branch = false } = {}) {
     return lines;
 }
 
+const FRAME_CLAUSES = {
+    running: 'ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW',
+    whole: 'ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+};
+
+function renderOrderList(items, ctx) {
+    return items
+        .filter(o => String(o.expr).trim() !== '')
+        .map(o => expr(o.expr, ctx) + (o.direction === 'DESC' ? ' DESC' : ''))
+        .join(', ');
+}
+
+// FUNC(args) OVER (PARTITION BY … ORDER BY … frame)
+function renderWindow(col, ctx) {
+    const spec = WINDOW_FUNCTIONS[col.func];
+    let args = '';
+    if (spec && spec.args !== 'none') {
+        args = splitTopLevel(String(col.args)).filter(Boolean).map(a => expr(a, ctx)).join(', ');
+        if (args === '' && col.func === 'COUNT') args = '*';
+    }
+    const over = [];
+    const partition = col.partitionBy.map(p => expr(p.expr, ctx)).filter(Boolean);
+    if (partition.length) over.push(`PARTITION BY ${partition.join(', ')}`);
+    const order = renderOrderList(col.orderBy, ctx);
+    if (order) over.push(`ORDER BY ${order}`);
+    if (col.frame === 'moving') over.push(`ROWS BETWEEN ${String(col.frameSize).trim()} PRECEDING AND CURRENT ROW`);
+    else if (FRAME_CLAUSES[col.frame]) over.push(FRAME_CLAUSES[col.frame]);
+    return `${col.func}(${args}) OVER (${over.join(' ')})`;
+}
+
 function renderColumn(col, ctx) {
+    if (col.kind === 'window') {
+        return [[0, renderWindow(col, ctx) + alias(col.alias, ctx)]];
+    }
     if (col.kind === 'case') {
         const body = col.cases.map(c => [0, `WHEN ${String(c.when).trim()} THEN ${String(c.then).trim()}`]);
         if (String(col.elseValue).trim() !== '') body.push([0, `ELSE ${String(col.elseValue).trim()}`]);

@@ -257,7 +257,7 @@ describe('SELECT builder', () => {
         type('select.setOps.0.query.columns.1.expr', 'y');
         await settle();
         expect($('#sql-output').hidden).toBe(true);
-        expect(issues().join()).toContain('UNION queries must select the same number of columns');
+        expect(issues().join()).toContain('Queries combined with UNION must select the same number of columns');
     });
 
     test('custom SQL condition', async () => {
@@ -687,7 +687,14 @@ describe('keyboard and accessibility', () => {
         add('select.where.items', 'group');
         add('select.where.items', 'raw');
         add('select.columns', 'case');
+        add('select.columns', 'window');
+        const windowPath = `select.columns.${app.state.workspace.select.columns.length - 1}`;
+        choose(`${windowPath}.func`, 'SUM');
+        add(`${windowPath}.partitionBy`, 'groupBy');
+        add(`${windowPath}.orderBy`, 'orderBy');
+        choose(`${windowPath}.frame`, 'moving');
         await settle();
+        expect(field(`${windowPath}.frameSize`)).toBeTruthy();
         const unnamed = $$('#builder input, #builder select, #builder button').filter(control => {
             if (control.getAttribute('aria-label')) return false;
             if (control.id && document.querySelector(`label[for="${control.id}"]`)) return false;
@@ -729,5 +736,63 @@ describe('keyboard and accessibility', () => {
         expect(document.activeElement).toBe(field('select.where.items.0.left'));
         $('[data-action="remove-item"][data-path="select.where.items.0"]').click();
         expect(document.activeElement.dataset.action).toBe('add-item');
+    });
+});
+
+describe('INTERSECT / EXCEPT and window functions in the UI', () => {
+    test('choosing INTERSECT and EXCEPT', async () => {
+        await fillSimpleSelect('customers', 'email');
+        add('select.setOps', 'setOp');
+        choose('select.setOps.0.op', 'INTERSECT');
+        type('select.setOps.0.query.from.table', 'suppliers');
+        type('select.setOps.0.query.columns.0.expr', 'email');
+        await settle();
+        expect(sql()).toBe('SELECT email\nFROM customers\nINTERSECT\nSELECT email\nFROM suppliers;');
+        choose('select.setOps.0.op', 'EXCEPT ALL');
+        await settle();
+        expect(sql()).toContain('\nEXCEPT ALL\n');
+        expect($$('[data-path="select.setOps.0.op"] option').map(o => o.value)).toEqual(['UNION', 'UNION ALL', 'INTERSECT', 'INTERSECT ALL', 'EXCEPT', 'EXCEPT ALL']);
+    });
+
+    test('building a window function column', async () => {
+        await fillSimpleSelect('sales', 'region');
+        add('select.columns', 'window');
+        const w = 'select.columns.1';
+        expect(field(`${w}.args`)).toBeNull(); // ROW_NUMBER takes no arguments
+        choose(`${w}.func`, 'AVG');
+        type(`${w}.args`, 'amount');
+        type(`${w}.alias`, 'moving_avg');
+        add(`${w}.partitionBy`, 'groupBy');
+        type(`${w}.partitionBy.0.expr`, 'region');
+        add(`${w}.orderBy`, 'orderBy');
+        type(`${w}.orderBy.0.expr`, 'day');
+        choose(`${w}.frame`, 'moving');
+        type(`${w}.frameSize`, '6');
+        await settle();
+        expect(sql()).toBe('SELECT\n    region,\n    AVG(amount) OVER (PARTITION BY region ORDER BY day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS moving_avg\nFROM sales;');
+    });
+
+    test('ranking functions hide the frame selector and flag missing ORDER BY', async () => {
+        await fillSimpleSelect();
+        add('select.columns', 'window');
+        await settle();
+        expect(field('select.columns.1.frame')).toBeNull();
+        expect(issues().join()).toContain('ROW_NUMBER needs ORDER BY inside OVER');
+    });
+
+    test('switching a window column back to a plain column keeps the alias', async () => {
+        await fillSimpleSelect();
+        add('select.columns', 'window');
+        type('select.columns.1.alias', 'keep_me');
+        choose('select.columns.1.kind', 'column');
+        expect(field('select.columns.1.alias').value).toBe('keep_me');
+        expect(field('select.columns.1.expr')).toBeTruthy();
+    });
+
+    test('the window example loads and generates', async () => {
+        $$('#example-list .library-item').find(li => li.textContent.includes('Window functions')).querySelector('button').click();
+        await settle();
+        expect(sql()).toContain('RANK() OVER (PARTITION BY department ORDER BY salary DESC) AS dept_rank');
+        expect(sql()).toContain('SUM(salary) OVER (ORDER BY hired_on ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_payroll');
     });
 });
