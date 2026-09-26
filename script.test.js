@@ -1,5 +1,7 @@
 import { expect, test, describe } from 'vitest';
-import { generateSelect, generateInsert, generateUpdate, generateDelete, formatSQL, highlightSQL, generateUnionQuery, countColumns } from './script.js';
+import './script.js';
+
+const { generateSelect, generateInsert, generateUpdate, generateDelete, formatSQL, highlightSQL, generateUnionQuery, countColumns } = globalThis.SQLBuilder;
 
 describe('SQL Generation', () => {
     test('SELECT basic', () => {
@@ -64,6 +66,7 @@ describe('Formatting', () => {
     test('formatSQL handles multiple clauses', () => {
         const sql = "SELECT * FROM users WHERE age > 18 ORDER BY name LIMIT 10";
         const formatted = "SELECT *\nFROM users\nWHERE age > 18\nORDER BY name\nLIMIT 10";
+        expect(formatSQL(sql)).toBe(formatted);
         expect(generateSelect('users', '*', 'age > 18', 'name', '10')).toBe(formatted + ';');
     });
 
@@ -114,6 +117,12 @@ test('countColumns utility handles normal columns', () => {
 
 test('countColumns utility handles *', () => {
     expect(countColumns('*')).toBe(-1);
+    expect(countColumns('a, t.*')).toBe(-1);
+});
+
+test('countColumns ignores commas inside function calls', () => {
+    expect(countColumns("CONCAT(first, ' ', last), COALESCE(a, b, c)")).toBe(2);
+    expect(countColumns('')).toBe(0);
 });
 
 describe('Regression fixes', () => {

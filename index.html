@@ -66,31 +66,31 @@
                             <span class="error-message" aria-live="polite"></span>
                         </div>
                         <div id="join-container" class="join-container"></div>
-                        <button type="button" class="btn btn-secondary" id="add-join-btn" style="margin-top: 0.5rem;">+ Add JOIN</button>
+                        <button type="button" class="btn btn-secondary btn-add-row" id="add-join-btn">+ Add JOIN</button>
                         
                         <div id="groupby-container" class="join-container"></div>
-                        <button type="button" class="btn btn-secondary" id="add-groupby-btn" style="margin-top: 0.5rem;">+ Add GROUP BY</button>
+                        <button type="button" class="btn btn-secondary btn-add-row" id="add-groupby-btn">+ Add GROUP BY</button>
 
                         <div id="having-container" class="join-container"></div>
-                        <button type="button" class="btn btn-secondary" id="add-having-btn" style="margin-top: 0.5rem;">+ Add HAVING</button>
+                        <button type="button" class="btn btn-secondary btn-add-row" id="add-having-btn">+ Add HAVING</button>
 
-                        <div id="union-container" class="union-container" style="margin-top: 1rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
-                            <label>
+                        <div id="union-container" class="union-container">
+                            <label class="checkbox-label">
                                 <input type="checkbox" id="enable-union"> Enable UNION
                             </label>
-                            <div id="union-fields" class="hidden" style="margin-top: 0.5rem;">
-                                <select id="union-type" aria-label="UNION type">
+                            <div id="union-fields" class="union-fields hidden">
+                                <select id="union-type" class="select-input" aria-label="UNION type">
                                     <option value="UNION">UNION</option>
                                     <option value="UNION ALL">UNION ALL</option>
                                 </select>
-                                <div class="field-group" style="margin-top:0.5rem;">
+                                <div class="field-group">
                                     <label for="select-table-2">Table Name *</label>
-                                    <input type="text" id="select-table-2" name="table" placeholder="e.g., Suppliers">
+                                    <input type="text" id="select-table-2" name="table" placeholder="e.g., Suppliers" required>
                                     <span class="error-message" aria-live="polite"></span>
                                 </div>
                                 <div class="field-group">
                                     <label for="select-columns-2">Columns *</label>
-                                    <input type="text" id="select-columns-2" name="columns" placeholder="e.g., Name, Email">
+                                    <input type="text" id="select-columns-2" name="columns" placeholder="e.g., Name, Email" required>
                                     <span class="error-message" aria-live="polite"></span>
                                 </div>
                                 <div class="field-group">
@@ -184,6 +184,6 @@
             <p>SQL Query Builder Pro Lite — Built with vanilla HTML, CSS & JavaScript</p>
         </footer>
     </div>
-    <script type="module" src="script.js"></script>
+    <script src="script.js" defer></script>
 </body>
 </html>

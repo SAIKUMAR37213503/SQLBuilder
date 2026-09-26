@@ -1,7 +1,11 @@
+// Loaded as a classic script (not a module) so index.html also works when
+// opened directly from disk (file://). The pure SQL helpers are exposed on
+// globalThis.SQLBuilder for tests.
+(function () {
 'use strict';
 
 // SQL Generation Functions
-export function generateSelect(table, columns, where, orderBy, limit, joins = [], groupBys = [], havings = []) {
+function generateSelect(table, columns, where, orderBy, limit, joins = [], groupBys = [], havings = []) {
     let sql = `SELECT ${columns} FROM ${table}`;
     joins.forEach(join => {
         sql += ` ${join.type} ${join.table} ON ${join.leftCol} = ${join.rightCol}`;
@@ -16,38 +20,42 @@ export function generateSelect(table, columns, where, orderBy, limit, joins = []
     return formatSQL(sql + ';');
 }
 
-export function generateInsert(table, columns, values) {
+function generateInsert(table, columns, values) {
     return formatSQL(`INSERT INTO ${table} (${columns})\nVALUES (${values});`);
 }
 
-export function generateUpdate(table, setClause, where) {
+function generateUpdate(table, setClause, where) {
     return formatSQL(`UPDATE ${table}\nSET ${setClause}\nWHERE ${where};`);
 }
 
-export function generateDelete(table, where) {
+function generateDelete(table, where) {
     return formatSQL(`DELETE FROM ${table}\nWHERE ${where};`);
 }
 
-export function formatSQL(sql) {
-    // Basic SQL Formatter
-    // Placeholder for strings to avoid formatting keywords inside them
+// ORDER BY / LIMIT apply to the combined result, so they go after the last SELECT
+function generateUnionQuery(sql1, type, sql2, orderBy = '', limit = '') {
+    const cleanSql1 = sql1.replace(/;$/, '');
+    const cleanSql2 = sql2.replace(/;$/, '');
+    let sql = `${cleanSql1}\n${type}\n${cleanSql2}`;
+    if (orderBy) sql += ` ORDER BY ${orderBy}`;
+    if (limit) sql += ` LIMIT ${limit}`;
+    return formatSQL(sql + ';');
+}
+
+function formatSQL(sql) {
+    // Swap string literals for placeholders so keywords inside them are left alone
     const strings = [];
     const tempSql = sql.replace(/'[^']*'/g, (match) => {
         const placeholder = `___STRING_${strings.length}___`;
         strings.push(match);
         return placeholder;
     });
-    
-    let formatted = tempSql
-        .replace(/\n/g, ' ')
+
+    const formatted = tempSql
         .replace(/\s+/g, ' ')
         .replace(/ (SELECT|FROM|WHERE|ORDER BY|LIMIT|INSERT INTO|VALUES|UPDATE|SET|DELETE FROM|INNER JOIN|LEFT JOIN|RIGHT JOIN|ON|GROUP BY|HAVING|UNION ALL|UNION)\b/gi, '\n$1')
-        .replace(/\nDELETE/gi, 'DELETE')
-        .replace(/\s\n/g, '\n')
-        .replace(/^\n/, '')
         .trim();
-    
-    // Restore strings
+
     return formatted.replace(/___STRING_(\d+)___/g, (match, index) => strings[index]);
 }
 
@@ -60,7 +68,7 @@ const HIGHLIGHT_RE = new RegExp([
     '\\b(\\d+(?:\\.\\d+)?)\\b'
 ].join('|'), 'gi');
 
-export function highlightSQL(sql) {
+function highlightSQL(sql) {
     let result = '';
     let lastIndex = 0;
     for (const match of sql.matchAll(HIGHLIGHT_RE)) {
@@ -73,39 +81,87 @@ export function highlightSQL(sql) {
     return result + escapeHtml(sql.slice(lastIndex));
 }
 
+// Counts top-level columns (commas inside parentheses, e.g. CONCAT(a, b), don't count).
+// Returns -1 when a wildcard makes the count unknowable.
+function countColumns(columnString) {
+    if (!columnString || !columnString.trim()) return 0;
+    const cols = [];
+    let depth = 0;
+    let current = '';
+    for (const ch of columnString) {
+        if (ch === '(') depth++;
+        if (ch === ')') depth = Math.max(0, depth - 1);
+        if (ch === ',' && depth === 0) {
+            cols.push(current.trim());
+            current = '';
+        } else {
+            current += ch;
+        }
+    }
+    cols.push(current.trim());
+    const nonEmpty = cols.filter(c => c.length > 0);
+    if (nonEmpty.some(c => c === '*' || c.endsWith('.*'))) return -1;
+    return nonEmpty.length;
+}
+
+function escapeHtml(text) {
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+// ---------------------------------------------------------------------------
+// UI
+// ---------------------------------------------------------------------------
+
+const PLACEHOLDER_TEXT = 'Select a query type and fill in the fields to generate SQL.';
+
 const state = {
     currentType: 'select',
     sql: '',
     theme: 'light'
 };
 
-const elements = {
-    form: null,
-    typeRadios: null,
-    fieldSections: {},
-    generateBtn: null,
-    clearBtn: null,
-    copyBtn: null,
-    downloadBtn: null,
-    outputMessage: null,
-    sqlOutput: null,
-    themeToggle: null,
-    joinContainer: null,
-    addJoinBtn: null
-};
+const elements = {};
 
-const selectors = {
-    fieldSections: {
-        select: 'select-fields',
-        insert: 'insert-fields',
-        update: 'update-fields',
-        delete: 'delete-fields'
+// Templates for the repeatable SELECT rows (static markup only, never user input)
+const ROW_TEMPLATES = {
+    join: {
+        title: 'JOIN',
+        fields: `
+            <div class="join-fields">
+                <select class="join-type" aria-label="JOIN type">
+                    <option value="INNER JOIN">INNER JOIN</option>
+                    <option value="LEFT JOIN">LEFT JOIN</option>
+                    <option value="RIGHT JOIN">RIGHT JOIN</option>
+                </select>
+                <input type="text" class="join-table" placeholder="Table Name" aria-label="JOIN table" required>
+                <input type="text" class="join-left" placeholder="Left Column" aria-label="Left column" required>
+                <input type="text" class="join-right" placeholder="Right Column" aria-label="Right column" required>
+            </div>`
     },
-    requiredFields: {
-        select: ['select-table', 'select-columns'],
-        insert: ['insert-table', 'insert-columns', 'insert-values'],
-        update: ['update-table', 'update-set', 'update-where'],
-        delete: ['delete-table', 'delete-where']
+    groupby: {
+        title: 'GROUP BY',
+        fields: '<input type="text" class="groupby-col full-width" placeholder="Column" aria-label="GROUP BY column" required>'
+    },
+    having: {
+        title: 'HAVING',
+        fields: `
+            <div class="join-fields">
+                <input type="text" class="having-col" placeholder="Column/Expr" aria-label="HAVING expression" required>
+                <select class="having-op" aria-label="HAVING operator">
+                    <option value="=">=</option>
+                    <option value="!=">!=</option>
+                    <option value="&gt;">&gt;</option>
+                    <option value="&lt;">&lt;</option>
+                    <option value="&gt;=">&gt;=</option>
+                    <option value="&lt;=">&lt;=</option>
+                </select>
+                <input type="text" class="having-val span-2" placeholder="Value" aria-label="HAVING value" required>
+            </div>`
     }
 };
 
@@ -114,134 +170,36 @@ function init() {
     bindEvents();
     loadTheme();
     updateFieldVisibility();
+    toggleUnionFields();
 }
-
-function addJoinUI() {
-    const row = document.createElement('div');
-    row.className = 'join-row';
-    row.innerHTML = `
-        <div class="join-row-header">
-            <strong>JOIN</strong>
-            <button type="button" class="remove-join-btn">Remove</button>
-        </div>
-        <div class="join-fields">
-            <select class="join-type">
-                <option value="INNER JOIN">INNER JOIN</option>
-                <option value="LEFT JOIN">LEFT JOIN</option>
-                <option value="RIGHT JOIN">RIGHT JOIN</option>
-            </select>
-            <input type="text" class="join-table" placeholder="Table Name" required>
-            <input type="text" class="join-left" placeholder="Left Column" required>
-            <input type="text" class="join-right" placeholder="Right Column" required>
-        </div>
-    `;
-    row.querySelector('.remove-join-btn').addEventListener('click', () => row.remove());
-    elements.joinContainer.appendChild(row);
-}
-
-function getJoins() {
-    const rows = elements.joinContainer.querySelectorAll('.join-row');
-    return Array.from(rows).map(row => ({
-        type: row.querySelector('.join-type').value,
-        table: row.querySelector('.join-table').value.trim(),
-        leftCol: row.querySelector('.join-left').value.trim(),
-        rightCol: row.querySelector('.join-right').value.trim()
-    }));
-}
-
-function addGroupbyUI() {
-    const row = document.createElement('div');
-    row.className = 'join-row';
-    row.innerHTML = `
-        <div class="join-row-header">
-            <strong>GROUP BY</strong>
-            <button type="button" class="remove-join-btn">Remove</button>
-        </div>
-        <input type="text" class="groupby-col" placeholder="Column" required style="width:100%">
-    `;
-    row.querySelector('.remove-join-btn').addEventListener('click', () => row.remove());
-    elements.groupbyContainer.appendChild(row);
-}
-
-function addHavingUI() {
-    const row = document.createElement('div');
-    row.className = 'join-row';
-    row.innerHTML = `
-        <div class="join-row-header">
-            <strong>HAVING</strong>
-            <button type="button" class="remove-join-btn">Remove</button>
-        </div>
-        <div class="join-fields">
-            <input type="text" class="having-col" placeholder="Column/Expr" required>
-            <select class="having-op">
-                <option value="=">=</option>
-                <option value="!=">!=</option>
-                <option value=">">></option>
-                <option value="<"><</option>
-                <option value=">=">>=</option>
-                <option value="<="><=</option>
-            </select>
-            <input type="text" class="having-val" placeholder="Value" required style="grid-column: span 2">
-        </div>
-    `;
-    row.querySelector('.remove-join-btn').addEventListener('click', () => row.remove());
-    elements.havingContainer.appendChild(row);
-}
-
-function getGroupBys() {
-    const rows = elements.groupbyContainer.querySelectorAll('.join-row');
-    return Array.from(rows).map(row => row.querySelector('.groupby-col').value.trim());
-}
-
-function getHavings() {
-    const rows = elements.havingContainer.querySelectorAll('.join-row');
-    return Array.from(rows).map(row => ({
-        col: row.querySelector('.having-col').value.trim(),
-        op: row.querySelector('.having-op').value,
-        val: row.querySelector('.having-val').value.trim()
-    }));
-}
-
-function toggleUnionFields() {
-    elements.unionFields.classList.toggle('hidden', !elements.enableUnion.checked);
-}
-
-// ORDER BY / LIMIT apply to the combined result, so they go after the last SELECT
-export function generateUnionQuery(sql1, type, sql2, orderBy = '', limit = '') {
-    const cleanSql1 = sql1.replace(/;$/, '');
-    const cleanSql2 = sql2.replace(/;$/, '');
-    let sql = `${cleanSql1}\n${type}\n${cleanSql2}`;
-    if (orderBy) sql += ` ORDER BY ${orderBy}`;
-    if (limit) sql += ` LIMIT ${limit}`;
-    return formatSQL(sql + ';');
-}
-
 
 function cacheElements() {
-    elements.form = document.getElementById('query-form');
+    const byId = id => document.getElementById(id);
+    elements.form = byId('query-form');
     elements.typeRadios = document.querySelectorAll('input[name="query-type"]');
-    Object.keys(selectors.fieldSections).forEach(key => {
-        elements.fieldSections[key] = document.getElementById(selectors.fieldSections[key]);
-    });
-    elements.generateBtn = document.getElementById('generate-btn');
-    elements.clearBtn = document.getElementById('clear-btn');
-    elements.copyBtn = document.getElementById('copy-btn');
-    elements.downloadBtn = document.getElementById('download-btn');
-    elements.outputMessage = document.getElementById('output-message');
-    elements.sqlOutput = document.getElementById('sql-output');
-    elements.themeToggle = document.getElementById('theme-toggle');
-    elements.joinContainer = document.getElementById('join-container');
-    elements.addJoinBtn = document.getElementById('add-join-btn');
-    elements.groupbyContainer = document.getElementById('groupby-container');
-    elements.addGroupbyBtn = document.getElementById('add-groupby-btn');
-    elements.havingContainer = document.getElementById('having-container');
-    elements.addHavingBtn = document.getElementById('add-having-btn');
-    elements.enableUnion = document.getElementById('enable-union');
-    elements.unionFields = document.getElementById('union-fields');
-    elements.unionType = document.getElementById('union-type');
-    elements.selectTable2 = document.getElementById('select-table-2');
-    elements.selectColumns2 = document.getElementById('select-columns-2');
-    elements.selectWhere2 = document.getElementById('select-where-2');
+    elements.fieldSections = {
+        select: byId('select-fields'),
+        insert: byId('insert-fields'),
+        update: byId('update-fields'),
+        delete: byId('delete-fields')
+    };
+    elements.clearBtn = byId('clear-btn');
+    elements.copyBtn = byId('copy-btn');
+    elements.downloadBtn = byId('download-btn');
+    elements.outputMessage = byId('output-message');
+    elements.sqlOutput = byId('sql-output');
+    elements.themeToggle = byId('theme-toggle');
+    elements.rowContainers = {
+        join: byId('join-container'),
+        groupby: byId('groupby-container'),
+        having: byId('having-container')
+    };
+    elements.addJoinBtn = byId('add-join-btn');
+    elements.addGroupbyBtn = byId('add-groupby-btn');
+    elements.addHavingBtn = byId('add-having-btn');
+    elements.enableUnion = byId('enable-union');
+    elements.unionFields = byId('union-fields');
+    elements.unionType = byId('union-type');
 }
 
 function bindEvents() {
@@ -253,9 +211,9 @@ function bindEvents() {
     elements.clearBtn.addEventListener('click', handleClear);
     elements.copyBtn.addEventListener('click', handleCopy);
     elements.downloadBtn.addEventListener('click', handleDownload);
-    elements.addJoinBtn.addEventListener('click', addJoinUI);
-    elements.addGroupbyBtn.addEventListener('click', addGroupbyUI);
-    elements.addHavingBtn.addEventListener('click', addHavingUI);
+    elements.addJoinBtn.addEventListener('click', () => addRow('join'));
+    elements.addGroupbyBtn.addEventListener('click', () => addRow('groupby'));
+    elements.addHavingBtn.addEventListener('click', () => addRow('having'));
     elements.enableUnion.addEventListener('change', toggleUnionFields);
     elements.themeToggle.addEventListener('click', toggleTheme);
 
@@ -266,6 +224,55 @@ function bindEvents() {
     elements.form.addEventListener('focusout', (e) => {
         if (e.target.matches('input')) validateField(e.target);
     });
+    elements.form.addEventListener('click', (e) => {
+        const removeBtn = e.target.closest('.remove-join-btn');
+        if (removeBtn) removeBtn.closest('.join-row').remove();
+    });
+}
+
+function addRow(kind) {
+    const { title, fields } = ROW_TEMPLATES[kind];
+    const row = document.createElement('div');
+    row.className = 'join-row';
+    row.innerHTML = `
+        <div class="join-row-header">
+            <strong>${title}</strong>
+            <button type="button" class="remove-join-btn">Remove</button>
+        </div>
+        ${fields}`;
+    elements.rowContainers[kind].appendChild(row);
+    row.querySelector('input').focus();
+}
+
+function readRows(kind, mapRow) {
+    return Array.from(elements.rowContainers[kind].querySelectorAll('.join-row'), mapRow);
+}
+
+const fieldValue = (row, selector) => row.querySelector(selector).value.trim();
+
+function getJoins() {
+    return readRows('join', row => ({
+        type: row.querySelector('.join-type').value,
+        table: fieldValue(row, '.join-table'),
+        leftCol: fieldValue(row, '.join-left'),
+        rightCol: fieldValue(row, '.join-right')
+    }));
+}
+
+function getGroupBys() {
+    return readRows('groupby', row => fieldValue(row, '.groupby-col'));
+}
+
+function getHavings() {
+    return readRows('having', row => ({
+        col: fieldValue(row, '.having-col'),
+        op: row.querySelector('.having-op').value,
+        val: fieldValue(row, '.having-val')
+    }));
+}
+
+function toggleUnionFields() {
+    elements.unionFields.classList.toggle('hidden', !elements.enableUnion.checked);
 }
 
 function handleTypeChange(e) {
@@ -276,41 +283,46 @@ function handleTypeChange(e) {
 }
 
 function updateFieldVisibility() {
-    Object.keys(elements.fieldSections).forEach(key => {
-        const section = elements.fieldSections[key];
-        if (section) {
-            section.classList.toggle('hidden', key !== state.currentType);
-        }
+    Object.entries(elements.fieldSections).forEach(([key, section]) => {
+        section.classList.toggle('hidden', key !== state.currentType);
     });
+}
+
+function isUnionEnabled() {
+    return state.currentType === 'select' && elements.enableUnion.checked;
 }
 
 function handleGenerate(e) {
     e.preventDefault();
 
     if (!validateForm()) {
+        const firstError = elements.form.querySelector('input.error');
+        if (firstError) firstError.focus();
         return;
     }
 
-    const joins = state.currentType === 'select' ? getJoins() : [];
-    const groupBys = state.currentType === 'select' ? getGroupBys() : [];
-    const havings = state.currentType === 'select' ? getHavings() : [];
-    let sql;
-
-    if (state.currentType === 'select' && elements.enableUnion.checked) {
-        const sql1 = generateSelect(getValue('select-table'), getValue('select-columns'), getValue('select-where'), '', '', joins, groupBys, havings);
-        const sql2 = getSqlFromInputs('select', [], [], [], '-2');
-        sql = generateUnionQuery(sql1, elements.unionType.value, sql2, getValue('select-order'), getValue('select-limit'));
-    } else {
-        sql = getSqlFromInputs(state.currentType, joins, groupBys, havings);
-    }
-
-    displaySQL(sql);
+    displaySQL(buildSQL());
 }
 
-function getSqlFromInputs(type, joins = [], groupBys = [], havings = [], suffix = '') {
-    switch (type) {
-        case 'select':
-            return generateSelect(getValue(`select-table${suffix}`), getValue(`select-columns${suffix}`), getValue(`select-where${suffix}`), getValue(`select-order${suffix}`), getValue(`select-limit${suffix}`), joins, groupBys, havings);
+function buildSQL() {
+    switch (state.currentType) {
+        case 'select': {
+            const joins = getJoins();
+            const groupBys = getGroupBys();
+            const havings = getHavings();
+            const orderBy = getValue('select-order');
+            const limit = getValue('select-limit');
+            const table = getValue('select-table');
+            const columns = getValue('select-columns');
+            const where = getValue('select-where');
+
+            if (!isUnionEnabled()) {
+                return generateSelect(table, columns, where, orderBy, limit, joins, groupBys, havings);
+            }
+            const sql1 = generateSelect(table, columns, where, '', '', joins, groupBys, havings);
+            const sql2 = generateSelect(getValue('select-table-2'), getValue('select-columns-2'), getValue('select-where-2'), '', '');
+            return generateUnionQuery(sql1, elements.unionType.value, sql2, orderBy, limit);
+        }
         case 'insert':
             return generateInsert(getValue('insert-table'), getValue('insert-columns'), getValue('insert-values'));
         case 'update':
@@ -323,66 +335,36 @@ function getSqlFromInputs(type, joins = [], groupBys = [], havings = [], suffix 
 }
 
 function validateForm() {
-    const requiredIds = selectors.requiredFields[state.currentType] || [];
+    const section = elements.fieldSections[state.currentType];
     let isValid = true;
 
-    requiredIds.forEach(id => {
-        const input = document.getElementById(id);
-        if (input && !input.value.trim()) {
-            showError(input, 'This field is required');
-            isValid = false;
-        }
+    // Every visible [required] input in the active section, including dynamic rows
+    section.querySelectorAll('input[required]').forEach(input => {
+        if (input.closest('.hidden')) return;
+        if (!validateField(input)) isValid = false;
     });
 
     if (state.currentType === 'select') {
-        [elements.joinContainer, elements.groupbyContainer, elements.havingContainer].forEach(container => {
-            container.querySelectorAll('input').forEach(input => {
-                if (!input.value.trim()) {
-                    showError(input, 'This field is required');
-                    isValid = false;
-                }
-            });
-        });
-
-        if (elements.enableUnion.checked) {
-            const secondFields = ['select-table-2', 'select-columns-2'];
-            secondFields.forEach(id => {
-                const input = document.getElementById(id);
-                if (input && !input.value.trim()) {
-                    showError(input, 'This field is required');
-                    isValid = false;
-                }
-            });
-        }
-
-        const limitInput = document.getElementById('select-limit');
-        if (limitInput && limitInput.value && (limitInput.value < 1 || !Number.isInteger(Number(limitInput.value)))) {
+        const limitInput = inputById('select-limit');
+        const limit = Number(limitInput.value);
+        if (limitInput.value && !(Number.isInteger(limit) && limit >= 1)) {
             showError(limitInput, 'Limit must be a positive integer');
             isValid = false;
         }
     }
 
-    if (state.currentType === 'select' && elements.enableUnion.checked) {
-        const col1 = document.getElementById('select-columns').value;
-        const col2 = document.getElementById('select-columns-2').value;
-        const count1 = countColumns(col1);
-        const count2 = countColumns(col2);
+    if (isUnionEnabled()) {
+        const columns2 = inputById('select-columns-2');
+        const count1 = countColumns(getValue('select-columns'));
+        const count2 = countColumns(columns2.value);
 
-        if (count1 !== -1 && count2 !== -1 && count1 !== count2) {
-            showError(document.getElementById('select-columns-2'), 'UNION queries must select the same number of columns.');
+        if (count1 > 0 && count2 > 0 && count1 !== count2) {
+            showError(columns2, 'UNION queries must select the same number of columns.');
             isValid = false;
         }
     }
 
     return isValid;
-}
-
-export function countColumns(columnString) {
-    if (!columnString) return 0;
-    const trimmed = columnString.trim();
-    if (trimmed === '*') return -1;
-    const cols = trimmed.split(',').map(c => c.trim()).filter(c => c.length > 0);
-    return cols.length;
 }
 
 function validateField(input) {
@@ -396,6 +378,8 @@ function validateField(input) {
 
 function showError(input, message) {
     input.classList.add('error');
+    input.setAttribute('aria-invalid', 'true');
+    input.title = message;
     const errorEl = input.parentElement.querySelector('.error-message');
     if (errorEl) {
         errorEl.textContent = message;
@@ -404,6 +388,8 @@ function showError(input, message) {
 
 function clearError(input) {
     input.classList.remove('error');
+    input.removeAttribute('aria-invalid');
+    input.removeAttribute('title');
     const errorEl = input.parentElement.querySelector('.error-message');
     if (errorEl) {
         errorEl.textContent = '';
@@ -411,13 +397,19 @@ function clearError(input) {
 }
 
 function clearAllErrors() {
-    document.querySelectorAll('.query-form input.error').forEach(input => {
-        clearError(input);
-    });
+    elements.form.querySelectorAll('input.error').forEach(clearError);
+}
+
+/**
+ * @param {string} id
+ * @returns {HTMLInputElement}
+ */
+function inputById(id) {
+    return /** @type {HTMLInputElement} */ (document.getElementById(id));
 }
 
 function getValue(id) {
-    const el = document.getElementById(id);
+    const el = inputById(id);
     return el ? el.value.trim() : '';
 }
 
@@ -435,11 +427,12 @@ function displaySQL(sql) {
     state.sql = sql;
     elements.sqlOutput.innerHTML = `<code>${highlightSQL(sql)}</code>`;
     setCopyButtonState(false);
+    elements.outputMessage.textContent = '';
 }
 
 function resetOutput() {
     state.sql = '';
-    elements.sqlOutput.innerHTML = '<code>Select a query type and fill in the fields to generate SQL.</code>';
+    elements.sqlOutput.innerHTML = `<code>${PLACEHOLDER_TEXT}</code>`;
     setCopyButtonState(false);
     elements.outputMessage.textContent = '';
 }
@@ -448,9 +441,7 @@ function handleClear() {
     elements.form.reset();
     clearAllErrors();
     resetOutput();
-    elements.joinContainer.innerHTML = '';
-    elements.groupbyContainer.innerHTML = '';
-    elements.havingContainer.innerHTML = '';
+    Object.values(elements.rowContainers).forEach(container => container.replaceChildren());
     toggleUnionFields();
 }
 
@@ -464,8 +455,29 @@ async function handleCopy() {
     try {
         await navigator.clipboard.writeText(text);
         showCopied();
-    } catch (err) {
-        fallbackCopy(text);
+    } catch {
+        // Clipboard API unavailable (e.g. insecure context) or permission denied
+        if (fallbackCopy(text)) {
+            showCopied();
+        } else {
+            showMessage('Copy failed — select the SQL and copy manually.');
+        }
+    }
+}
+
+function fallbackCopy(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.className = 'visually-hidden';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        return document.execCommand('copy');
+    } catch {
+        return false;
+    } finally {
+        textarea.remove();
     }
 }
 
@@ -483,57 +495,69 @@ function handleDownload() {
     a.download = `sqlbuilder-${state.currentType}.sql`;
     document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    a.remove();
+    // Revoke on the next tick so the download has started in every browser
+    setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+let messageTimer;
 function showMessage(msg) {
+    clearTimeout(messageTimer);
     elements.outputMessage.textContent = msg;
-    setTimeout(() => { elements.outputMessage.textContent = ''; }, 3000);
+    messageTimer = setTimeout(() => { elements.outputMessage.textContent = ''; }, 3000);
 }
 
-function fallbackCopy(text) {
-    const textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.style.position = 'fixed';
-    textarea.style.opacity = '0';
-    document.body.appendChild(textarea);
-    textarea.select();
+// localStorage can throw (privacy modes, blocked storage); the theme is a nicety,
+// so failures must never stop the app from initialising.
+function readStoredTheme() {
     try {
-        document.execCommand('copy');
-        showCopied();
-    } catch (e) {
-        console.error('Copy failed', e);
+        return localStorage.getItem('theme');
+    } catch {
+        return null;
     }
-    document.body.removeChild(textarea);
+}
+
+function storeTheme(theme) {
+    try {
+        localStorage.setItem('theme', theme);
+    } catch {
+        // ignore
+    }
 }
 
 function toggleTheme() {
     state.theme = state.theme === 'light' ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', state.theme);
-    localStorage.setItem('theme', state.theme);
+    storeTheme(state.theme);
 }
 
 function loadTheme() {
-    const saved = localStorage.getItem('theme');
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    state.theme = saved || (prefersDark ? 'dark' : 'light');
+    const saved = readStoredTheme();
+    const prefersDark = typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    state.theme = saved === 'dark' || saved === 'light' ? saved : (prefersDark ? 'dark' : 'light');
     document.documentElement.setAttribute('data-theme', state.theme);
 }
 
-function escapeHtml(text) {
-    return text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
+globalThis.SQLBuilder = {
+    generateSelect,
+    generateInsert,
+    generateUpdate,
+    generateDelete,
+    generateUnionQuery,
+    formatSQL,
+    highlightSQL,
+    countColumns
+};
 
 if (typeof document !== 'undefined') {
+    const start = () => {
+        if (document.getElementById('query-form')) init();
+    };
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
+        document.addEventListener('DOMContentLoaded', start);
     } else {
-        init();
+        start();
     }
 }
+})();

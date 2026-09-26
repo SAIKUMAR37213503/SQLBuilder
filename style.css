@@ -200,8 +200,19 @@ body {
     gap: 1rem;
 }
 
-.query-fields.hidden {
-    display: none;
+/* Generic so it also hides #union-fields (previously only .query-fields was hidden) */
+.hidden {
+    display: none !important;
+}
+
+.visually-hidden {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
 }
 
 .field-group {
@@ -470,3 +481,76 @@ body {
 .token.string { color: var(--token-string); }
 .token.number { color: var(--token-number); }
 .token.operator { color: var(--token-operator); }
+
+/* Inputs and selects inside dynamic rows and the UNION panel */
+.join-fields input,
+.join-fields select,
+.join-row > input,
+.select-input {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    font-family: inherit;
+    min-width: 0;
+}
+
+.join-fields input:focus,
+.join-fields select:focus,
+.join-row > input:focus,
+.select-input:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+/* Any invalid input, including dynamic rows that have no .error-message slot.
+   Declared after the :focus rules with matching specificity so it wins when focused. */
+input.error,
+.join-fields input.error:focus,
+.join-row > input.error:focus {
+    border-color: var(--error-color);
+}
+
+.join-fields input.error:focus,
+.join-row > input.error:focus {
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
+}
+
+.full-width {
+    width: 100%;
+}
+
+.span-2 {
+    grid-column: span 2;
+}
+
+.btn-add-row {
+    margin-top: 0.5rem;
+}
+
+.join-container:empty {
+    display: none;
+}
+
+.union-container {
+    margin-top: 1rem;
+    border-top: 1px solid var(--border-color);
+    padding-top: 1rem;
+}
+
+.checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+}
+
+.union-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-top: 0.75rem;
+}

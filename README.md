@@ -32,14 +32,26 @@ A lightweight, zero-dependency web application for visually generating SQL queri
 2. Open `index.html` in any modern web browser
 3. Start building SQL queries immediately
 
-No build step, no server, no installation required.
+No build step, no server, no installation required — the page also works when opened straight from disk (`file://`).
+
+### Development
+
+Requires Node.js 22.22+ (or 24.15+).
+
+```bash
+npm ci              # install dev tooling
+npm run dev         # serve locally at http://localhost:3000
+npm test            # unit + UI tests (Vitest, jsdom)
+npm run lint        # ESLint
+npm run typecheck   # TypeScript checkJs over script.js
+npm run check       # all of the above; also runs in CI on every PR
+```
 
 ### Deploy to Vercel
 
 **Option 1: Vercel CLI**
 ```bash
-npm install -g vercel
-vercel --prod
+npm run deploy      # runs `npx vercel --prod`
 ```
 
 **Option 2: GitHub Integration**
@@ -53,7 +65,7 @@ vercel --prod
 2. Run `npm run dev` to preview locally at `http://localhost:3000`
 3. Drag the project folder to [vercel.com/new](https://vercel.com/new)
 
-The `vercel.json` handles all configuration automatically.
+`vercel.json` sets the security headers and caching; `.vercelignore` ensures only `index.html`, `script.js` and `style.css` are published (the rest of the repo, e.g. `Fabric_Sync/`, is not).
 
 ## Folder Structure
 
@@ -62,9 +74,13 @@ The `vercel.json` handles all configuration automatically.
 ├── index.html      # Main HTML structure
 ├── style.css       # All styling (light/dark themes, responsive)
 ├── script.js       # Application logic (SQL generation, validation, theme)
-├── script.test.js  # Unit tests (Vitest) — run with `npm test`
-├── vercel.json     # Vercel deployment configuration
-├── package.json    # Project metadata & deploy scripts
+├── script.test.js  # Unit tests for the SQL helpers (Vitest)
+├── ui.test.js      # UI tests against index.html (Vitest + jsdom)
+├── vercel.json     # Vercel config: security headers (CSP), caching
+├── .vercelignore   # Deploy allowlist — only the app files are published
+├── eslint.config.js
+├── jsconfig.json   # Type-checking config (checkJs)
+├── package.json    # Project metadata & scripts
 └── README.md       # This file
 ```
 
