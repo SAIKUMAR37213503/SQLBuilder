@@ -28,7 +28,7 @@ Nothing here is submitted automatically; every Play Console step is manual. Goog
 
 ## 2. Build the release
 
-- [ ] `npm run android:bundle`
+- [ ] `npm run android:bundle`, or run the **Android release (Play upload AAB)** workflow on GitHub (see ANDROID.md) and download `app-release-aab-for-play`
 - [ ] `jarsigner -verify android/app/build/outputs/bundle/release/app-release.aab` reports "jar verified"
 - [ ] Install a release build on a real device and smoke-test it. One way: `bundletool build-apks --connected-device --bundle=… --output=app.apks --ks=…` then `bundletool install-apks --apks=app.apks`.
   - [ ] launches, with the splash screen then the app
@@ -72,11 +72,11 @@ Nothing here is submitted automatically; every Play Console step is manual. Goog
 - [ ] Phone screenshots, at least 2 (take them from a device or emulator; the CI artifact `e2e-screenshots-and-logs` has emulator captures to start from). Suggested set: the builder with a JOIN query, generated SQL in dark mode, the examples/templates library, the export share sheet.
 - [ ] 7" and 10" tablet screenshots (optional, needed for tablet promotion)
 - [ ] Category: **Tools** (or Productivity)
-- [ ] Contact email (required); website optional (the Vercel URL)
+- [ ] Contact email: pappalapandit@gmail.com (required); website: https://sql-builder-saikumar.vercel.app
 
 ## 5. App content (Policy → App content)
 
-- [ ] **Privacy policy URL**: publish `PRIVACY.md` at a public URL, for example GitHub's rendered file view or a page on the website, after filling in the contact email.
+- [ ] **Privacy policy URL**: publish `PRIVACY.md` at a public URL, for example GitHub's rendered file view or a page on the website (contact: pappalapandit@gmail.com).
 - [ ] **Ads**: "No, my app does not contain ads"
 - [ ] **App access**: "All functionality is available without special access"
 - [ ] **Content rating**: complete the IARC questionnaire (utility app, no user-generated content shared between users, no violence and so on)
