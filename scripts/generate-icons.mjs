@@ -113,6 +113,33 @@ function featureGraphic() {
 `;
 }
 
+/** Microsoft Store logo: brand gradient, the symbol in a tile, and the app name (poster 9:16 or box 1:1). */
+function storeLogo(width, height) {
+    const tile = Math.round(width * 0.46);
+    const tileX = (width - tile) / 2;
+    const tileY = Math.round(height * (height > width ? 0.26 : 0.18));
+    const scale = (tile * 0.62) / 24;
+    const off = (tile - 24 * scale) / 2;
+    const titleY = tileY + tile + Math.round(width * 0.16);
+    const font = Math.round(width * 0.085);
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1D5FD6"/>
+      <stop offset="1" stop-color="#123E91"/>
+    </linearGradient>
+  </defs>
+  <rect width="${width}" height="${height}" fill="url(#bg)"/>
+  <rect x="${tileX}" y="${tileY}" width="${tile}" height="${tile}" rx="${tile * 0.18}" fill="#FFFFFF" fill-opacity="0.12"/>
+  <g transform="translate(${tileX + off} ${tileY + off}) scale(${scale})" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    ${SYMBOL_PATHS.map(d => `<path d="${d}"/>`).join('\n    ')}
+  </g>
+  <text x="${width / 2}" y="${titleY}" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="${font}" font-weight="bold" fill="#FFFFFF">SQL Builder</text>
+  <text x="${width / 2}" y="${titleY + Math.round(font * 1.25)}" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="${Math.round(font * 0.8)}" fill="#DCE7FB">Pro Lite</text>
+</svg>
+`;
+}
+
 async function png(svg, file, size, { opaque = false } = {}) {
     mkdirSync(join(file, '..'), { recursive: true });
     let image = sharp(Buffer.from(svg), { density: 72 }).resize(size.width ?? size, size.height ?? size);
@@ -160,6 +187,10 @@ async function main() {
     // Google Play listing
     await png(artwork(512, { shape: 'square', symbolFraction: 0.5 }), join(root, 'store/play-icon-512.png'), 512);
     await png(featureGraphic(), join(root, 'store/feature-graphic-1024x500.png'), { width: 1024, height: 500 }, { opaque: true });
+
+    // Microsoft Store logos (exact sizes Partner Center accepts)
+    await png(storeLogo(1440, 2160), join(root, 'store/windows/poster-art-1440x2160.png'), { width: 1440, height: 2160 }, { opaque: true });
+    await png(storeLogo(2160, 2160), join(root, 'store/windows/box-art-2160x2160.png'), { width: 2160, height: 2160 }, { opaque: true });
 
     console.log('Icons generated.');
 }
