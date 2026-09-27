@@ -11,17 +11,18 @@ import { join } from 'node:path';
 const root = join(import.meta.dirname, '..');
 const ASSETS = ['style.css', 'dist/sqlbuilder.js'];
 
-export function hashOf(file) {
-    return createHash('sha256').update(readFileSync(join(root, file))).digest('hex').slice(0, 12);
+export function hashOf(file, base = root) {
+    return createHash('sha256').update(readFileSync(join(base, file))).digest('hex').slice(0, 12);
 }
 
-export function stamp(html) {
+/** @param {string} html @param {string} [base] directory the asset paths are relative to */
+export function stamp(html, base = root) {
     let result = html;
     for (const file of ASSETS) {
         const escaped = file.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
         const pattern = new RegExp(`(["'])${escaped}(?:\\?v=[0-9a-f]+)?\\1`, 'g');
         if (!pattern.test(result)) throw new Error(`index.html does not reference ${file}`);
-        result = result.replace(pattern, `$1${file}?v=${hashOf(file)}$1`);
+        result = result.replace(pattern, `$1${file}?v=${hashOf(file, base)}$1`);
     }
     return result;
 }
