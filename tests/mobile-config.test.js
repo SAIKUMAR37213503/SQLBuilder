@@ -98,3 +98,18 @@ describe('Android project', () => {
         expect(strings).toContain('<string name="app_name">SQL Builder Pro Lite</string>');
     });
 });
+
+describe('Android XML resources are well-formed', () => {
+    test('no "--" inside XML comments and balanced comments (aapt2 rejects them)', () => {
+        const files = readdirSync(join(root, 'android/app/src'), { recursive: true })
+            .map(String).filter(f => f.endsWith('.xml'));
+        expect(files.length).toBeGreaterThan(5);
+        for (const file of files) {
+            const text = readFileSync(join(root, 'android/app/src', file), 'utf8');
+            for (const [, body] of text.matchAll(/<!--([\s\S]*?)-->/g)) {
+                expect(body.includes('--'), `${file}: "--" inside a comment`).toBe(false);
+            }
+            expect((text.match(/<!--/g) || []).length, file).toBe((text.match(/-->/g) || []).length);
+        }
+    });
+});
