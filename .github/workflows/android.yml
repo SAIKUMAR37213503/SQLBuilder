@@ -1,0 +1,134 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build APK + AAB
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Android SDK packages (API 36)
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+
+      - run: npm ci
+      - name: Web build + Capacitor sync
+        run: |
+          npm run build
+          npm run cap:sync
+
+      - name: Debug APK
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Android lint
+        working-directory: android
+        run: ./gradlew --no-daemon lintDebug
+
+      - name: Release AAB (signed with a throwaway CI key — NOT for Play upload)
+        working-directory: android
+        run: |
+          keytool -genkeypair -keystore "$RUNNER_TEMP/ci-only.jks" -storepass ci-only-pass -keypass ci-only-pass \
+            -alias ci-only -keyalg RSA -keysize 2048 -validity 1 -dname "CN=CI test key, O=Not for release" > /dev/null
+          ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/ci-only.jks" ANDROID_KEYSTORE_PASSWORD=ci-only-pass \
+          ANDROID_KEY_ALIAS=ci-only ANDROID_KEY_PASSWORD=ci-only-pass \
+            ./gradlew --no-daemon bundleRelease
+          jarsigner -verify app/build/outputs/bundle/release/app-release.aab | tail -1
+
+      - name: Inspect packaged manifests
+        run: |
+          AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          echo "== debug APK =="
+          "$AAPT2" dump badging android/app/build/outputs/apk/debug/app-debug.apk | grep -E "^package:|sdkVersion|targetSdkVersion|uses-permission|application-label:" 
+          curl -sSfL -o "$RUNNER_TEMP/bundletool.jar" https://repo1.maven.org/maven2/com/android/tools/build/bundletool/1.18.1/bundletool-1.18.1.jar \
+            || curl -sSfL -o "$RUNNER_TEMP/bundletool.jar" https://dl.google.com/dl/android/maven2/com/android/tools/build/bundletool/1.18.1/bundletool-1.18.1.jar
+          echo "== release AAB manifest =="
+          java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle android/app/build/outputs/bundle/release/app-release.aab \
+            | grep -E "package=|versionCode|versionName|uses-sdk|minSdkVersion|targetSdkVersion|uses-permission|allowBackup|debuggable"
+          ls -la android/app/build/outputs/apk/debug/ android/app/build/outputs/bundle/release/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-release-aab-ci-signed-not-for-play
+          path: android/app/build/outputs/bundle/release/app-release.aab
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lint-report
+          path: android/app/build/reports/lint-results-debug.html
+
+  emulator:
+    name: Emulator E2E (API 36, offline)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - run: npm run cap:sync
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-debug-apk
+          path: apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Instrumented tests + end-to-end checks
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # Each line runs in its own shell. Instrumented-test failures are recorded
+          # so the E2E checks still run, then fail the job at the end.
+          script: |
+            cd android && ./gradlew --no-daemon connectedDebugAndroidTest || touch ../instrumented-tests-failed
+            node scripts/android-e2e.mjs apk/app-debug.apk
+            test ! -f instrumented-tests-failed
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshots-and-logs
+          path: |
+            e2e-output/
+            android/app/build/reports/androidTests/
