@@ -335,7 +335,7 @@ async function main() {
         await sleep(400);
         await page.eval(JS.click('#template-save-btn'));
         await sleep(300);
-        await page.eval(`(() => { document.getElementById('prompt-input').value = 'E2E template'; document.querySelector('#prompt-dialog [value="confirm"]').click(); return true; })()`);
+        await page.eval(`(() => { document.getElementById('template-name').value = 'E2E template'; document.querySelector('#template-dialog [value="confirm"]').click(); return true; })()`);
         // WebView writes localStorage to disk asynchronously; give it time as a real
         // app would have before being reclaimed, then kill and relaunch
         await sleep(6000);
