@@ -149,12 +149,9 @@ export function hasLeadingZero(text) {
     return LEADING_ZERO_RE.test(text) && isNumberLiteral(text);
 }
 
-// Returns true when `text` contains the word AND or OR outside quotes and
-// parentheses, i.e. when it would change meaning next to other conditions.
-//   hasTopLevelLogic("a = 1 OR b = 2")   -> true
-//   hasTopLevelLogic("(a = 1 OR b = 2)") -> false
-//   hasTopLevelLogic("x = 'A OR B'")     -> false
-export function hasTopLevelLogic(text) {
+// Calls visit(word, depth) for every bare word outside quotes and quoted
+// identifiers, with its parenthesis depth; stops when visit returns true.
+function scanWords(text, visit) {
     let depth = 0;
     let quote = null;
     let word = '';
@@ -171,7 +168,7 @@ export function hasTopLevelLogic(text) {
             word += ch;
             continue;
         }
-        if (depth === 0 && /^(and|or)$/i.test(word)) return true;
+        if (word && visit(word, depth)) return true;
         word = '';
         if (ch === "'" || ch === '"' || ch === '`') quote = ch;
         else if (ch === '[') quote = ']';
@@ -179,4 +176,28 @@ export function hasTopLevelLogic(text) {
         else if (ch === ')') depth = Math.max(0, depth - 1);
     }
     return false;
+}
+
+// Returns true when `text` contains the word AND or OR outside quotes and
+// parentheses, i.e. when it would change meaning next to other conditions.
+//   hasTopLevelLogic("a = 1 OR b = 2")   -> true
+//   hasTopLevelLogic("(a = 1 OR b = 2)") -> false
+//   hasTopLevelLogic("x = 'A OR B'")     -> false
+export function hasTopLevelLogic(text) {
+    return scanWords(text, (word, depth) => depth === 0 && /^(and|or)$/i.test(word));
+}
+
+/**
+ * The first of `words` (upper case) used as a bare word in `text`, outside
+ * quotes and quoted identifiers, or ''.
+ * @param {string} text
+ * @param {string[]} words
+ */
+export function findBareWord(text, words) {
+    let found = '';
+    scanWords(text, (word) => {
+        if (words.includes(word.toUpperCase())) found = word;
+        return found !== '';
+    });
+    return found;
 }

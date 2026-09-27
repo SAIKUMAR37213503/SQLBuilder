@@ -18,7 +18,8 @@ import {
 import { getDialect } from './dialects.js';
 import {
     findSyntaxProblem, isQualifiedName, isIdentifier, isColumnReference, splitTopLevel,
-    containsAggregateCall, normalizeExpr, isNumberLiteral, isQuotedString, isBareIdentifier, stripStrings, hasLeadingZero
+    containsAggregateCall, normalizeExpr, isNumberLiteral, isQuotedString, isBareIdentifier, stripStrings, hasLeadingZero,
+    findBareWord
 } from './sql-utils.js';
 
 export const MAX_NESTING_DEPTH = 4;
@@ -93,10 +94,7 @@ class Validator {
     finish() {
         if (this.ignoredParam) {
             const { path, scope } = this.ignoredParam;
-            this.add('info', 'builder', this.dialect.id === 'mysql'
-                ? 'MySQL parameters are written as ?, so parameter names aren\'t part of the SQL. Bind the values in the order the ? appear.'
-                : 'PostgreSQL parameters are numbered ($1, $2, … in order), so parameter names aren\'t part of the SQL. Enter a number instead of a name to choose the position.',
-            path, scope);
+            this.add('info', 'dialect', this.dialect.parameters.ignoredNote, path, scope);
         }
     }
 
@@ -109,12 +107,12 @@ class Validator {
             this.add('error', 'builder', `Parameter name ${quote(text)} can only contain letters, numbers and _, and must start with a letter.`, path, scope);
             return;
         }
-        const id = this.dialect.id;
-        if (id === 'mysql' || (id === 'postgresql' && !numeric)) {
+        const { names } = this.dialect.parameters;
+        if (names === 'ignored' || (names === 'numbered' && !numeric)) {
             // Reported once per statement by finish()
             if (!this.ignoredParam) this.ignoredParam = { path, scope };
-        } else if (id !== 'postgresql' && numeric) {
-            this.add('error', 'builder', `Parameter name ${quote(text)} must start with a letter in ${this.dialect.label}.`, path, scope);
+        } else if (names === 'kept' && numeric) {
+            this.add('error', 'dialect', `Parameter name ${quote(text)} must start with a letter in ${this.dialect.shortLabel}.`, path, scope);
         }
     }
 
@@ -144,7 +142,21 @@ class Validator {
             this.add('error', 'syntax', `${quote(text)} ${problem}.`, path, scope);
             return false;
         }
+        this.dialectWords(String(text), path, scope);
         return true;
+    }
+
+    // Hand-written SQL is passed through unchanged, so point out words the
+    // selected dialect doesn't understand instead of rewriting them
+    dialectWords(text, path, scope) {
+        if (!this.dialect.supports.booleanKeywords) {
+            const word = findBareWord(text, ['TRUE', 'FALSE']);
+            if (word) {
+                this.add('warning', 'dialect',
+                    `${this.dialect.shortLabel} has no ${word.toUpperCase()} keyword; booleans are written ${this.dialect.booleanLiteral(true)}/${this.dialect.booleanLiteral(false)}. Write ${this.dialect.booleanLiteral(word.toUpperCase() === 'TRUE')} instead.`,
+                    path, scope);
+            }
+        }
     }
 
     tableName(name, path, scope, label = 'a table name') {
@@ -209,9 +221,9 @@ class Validator {
     // ORDER BY inside a subquery or CTE only matters together with LIMIT/OFFSET
     nestedOrderBy(q, path, scope) {
         if (q.orderBy.length === 0 || !blank(q.limit) || !blank(q.offset)) return;
-        if (this.dialect.subqueryOrderByNeedsLimit) {
-            this.add('error', 'builder',
-                `${this.dialect.label} doesn't allow ORDER BY inside a subquery or CTE without LIMIT or OFFSET. Remove the sort here and sort the main query, or add a LIMIT.`,
+        if (this.dialect.restrictions.subqueryOrderByNeedsLimit) {
+            this.add('error', 'dialect',
+                `${this.dialect.shortLabel} doesn't allow ORDER BY inside a subquery or CTE without LIMIT or OFFSET. Remove the sort here and sort the main query, or add a LIMIT.`,
                 joinPath(path, 'orderBy'), scope);
         } else {
             this.add('info', 'builder',
@@ -321,8 +333,8 @@ class Validator {
                 else if (fn !== 'COUNT' && args[0] === '*') this.add('error', 'builder', `${fn}(*) isn't valid; choose a column.`, argsPath, scope);
             }
         }
-        if (fn === 'NTH_VALUE' && !this.dialect.supportsNthValue) {
-            this.add('error', 'builder', `${this.dialect.label} doesn't support NTH_VALUE.`, joinPath(path, 'func'), scope);
+        if (fn === 'NTH_VALUE' && !this.dialect.supports.nthValue) {
+            this.add('error', 'dialect', `${this.dialect.shortLabel} doesn't support NTH_VALUE.`, joinPath(path, 'func'), scope);
         }
 
         col.partitionBy.forEach((p, i) => this.fragment(p.expr, joinPath(path, 'partitionBy', i, 'expr'), scope, { label: 'a column to partition by' }));
@@ -333,11 +345,16 @@ class Validator {
             }
         });
 
-        const strict = this.dialect.id === 'sqlserver';
+        const { restrictions } = this.dialect;
         const ordered = col.orderBy.length > 0;
         if (spec.ordered && !ordered) {
-            this.add(strict ? 'error' : 'warning', 'builder',
-                `${fn} needs ORDER BY inside OVER (…) to give a meaningful result${strict ? ` in ${this.dialect.label}` : ''}.`,
+            const strict = restrictions.rankingNeedsOrderBy;
+            this.add(strict ? 'error' : 'warning', strict ? 'dialect' : 'builder',
+                `${fn} needs ORDER BY inside OVER (…) to give a meaningful result${strict ? ` in ${this.dialect.shortLabel}` : ''}.`,
+                joinPath(path, 'orderBy'), scope);
+        } else if (spec.valueFunction && !ordered && restrictions.valueFunctionsNeedOrderBy) {
+            this.add('error', 'dialect',
+                `${this.dialect.shortLabel} requires ORDER BY inside OVER (…) for ${fn}. Add the column that decides which row is first or last.`,
                 joinPath(path, 'orderBy'), scope);
         }
 
@@ -351,7 +368,8 @@ class Validator {
                     this.add('error', 'builder', 'Enter how many preceding rows the moving window covers (1 or more).', joinPath(path, 'frameSize'), scope);
                 }
                 if (!ordered) {
-                    this.add(strict ? 'error' : 'warning', 'builder', 'A window frame needs ORDER BY inside OVER (…) to define the row order.', joinPath(path, 'orderBy'), scope);
+                    const strict = restrictions.frameNeedsOrderBy;
+                    this.add(strict ? 'error' : 'warning', strict ? 'dialect' : 'builder', 'A window frame needs ORDER BY inside OVER (…) to define the row order.', joinPath(path, 'orderBy'), scope);
                 }
             }
         }
@@ -430,8 +448,8 @@ class Validator {
             const jPath = joinPath(path, 'joins', i);
             if (!JOIN_TYPES.includes(join.type)) {
                 this.add('error', 'builder', `Unknown join type ${quote(join.type)}.`, joinPath(jPath, 'type'), scope);
-            } else if (join.type === 'FULL JOIN' && !this.dialect.supportsFullJoin) {
-                this.add('error', 'builder', `${this.dialect.label} doesn't support FULL JOIN. Use a LEFT JOIN combined with a RIGHT JOIN via UNION instead.`, joinPath(jPath, 'type'), scope);
+            } else if (join.type === 'FULL JOIN' && !this.dialect.supports.fullJoin) {
+                this.add('error', 'dialect', `${this.dialect.shortLabel} doesn't support FULL JOIN. Use a LEFT JOIN combined with a RIGHT JOIN via UNION instead.`, joinPath(jPath, 'type'), scope);
             }
             this.source(join.source, joinPath(jPath, 'source'), scope, ctx, 'join');
             register(join.source, joinPath(jPath, 'source'));
@@ -488,9 +506,9 @@ class Validator {
                 scope: `Subquery in ${clause}`, depth: ctx.depth + 1, branch: false, top: false
             });
             const limited = !blank(c.subquery.limit) || !blank(c.subquery.offset);
-            if ((c.op === 'IN' || c.op === 'NOT IN') && limited && !this.dialect.limitInInSubquery) {
-                this.add('error', 'builder',
-                    `${this.dialect.label} doesn't support LIMIT inside an ${c.op} (…) subquery. Put the limited query in a FROM subquery instead: ${c.op} (SELECT id FROM (SELECT … LIMIT n) AS t).`,
+            if ((c.op === 'IN' || c.op === 'NOT IN') && limited && !this.dialect.supports.limitInInSubquery) {
+                this.add('error', 'dialect',
+                    `${this.dialect.shortLabel} doesn't support LIMIT inside an ${c.op} (…) subquery. Put the limited query in a FROM subquery instead: ${c.op} (SELECT id FROM (SELECT … LIMIT n) AS t).`,
                     joinPath(path, 'subquery', 'limit'), scope);
             }
             if (!spec.subqueryOnly && outputColumnCount(c.subquery) > 1) {
@@ -566,7 +584,7 @@ class Validator {
             });
         }
 
-        if (countActive(q.having) > 0 && !this.dialect.havingAcceptsAlias) this.havingAliases(q, path, scope, groupKeys);
+        if (countActive(q.having) > 0 && !this.dialect.supports.havingAlias) this.havingAliases(q, path, scope, groupKeys);
 
         if (countActive(q.having) > 0 && groupKeys.size === 0 && !aggregated) {
             this.add('warning', 'builder', 'HAVING filters groups, but there is no GROUP BY or aggregate. Did you mean WHERE?', joinPath(path, 'having'), scope);
@@ -597,8 +615,8 @@ class Validator {
             for (const [key, text] of texts) {
                 const expression = aliases.get(normalizeExpr(String(text ?? '').trim()));
                 if (expression) {
-                    this.add('warning', 'builder',
-                        `${quote(text)} is a SELECT alias; ${this.dialect.label} doesn't allow aliases in HAVING. Repeat the expression instead: ${expression}.`,
+                    this.add('warning', 'dialect',
+                        `${quote(text)} is a SELECT alias; ${this.dialect.shortLabel} doesn't allow aliases in HAVING. Repeat the expression instead: ${expression}.`,
                         joinPath(iPath, key), scope);
                     return;
                 }
@@ -619,11 +637,16 @@ class Validator {
             this.add('error', 'builder', 'OFFSET must be a whole number (0 or more).', joinPath(path, 'offset'), scope);
         }
         if ((limit !== '' || offset !== '') && q.orderBy.length === 0) {
-            const usesFetch = this.dialect.id === 'sqlserver' && (offset !== '' || q.setOps.length > 0);
-            this.add('info', 'builder', usesFetch
-                ? 'SQL Server needs ORDER BY for OFFSET/FETCH, so ORDER BY (SELECT NULL) was added. Add a real sort for predictable pages.'
-                : 'Without ORDER BY, which rows LIMIT/OFFSET return is not guaranteed.',
-            joinPath(path, 'orderBy'), scope);
+            // Describe the pagination the way this dialect writes it
+            const written = this.dialect.paginate({ limit, offset, hasOrderBy: false, hasSetOps: q.setOps.length > 0 });
+            if (written.needsOrderBy) {
+                this.add('info', 'dialect', `${this.dialect.shortLabel} needs ORDER BY for OFFSET/FETCH, so ORDER BY (SELECT NULL) was added. Add a real sort for predictable pages.`,
+                    joinPath(path, 'orderBy'), scope);
+            } else {
+                const what = written.top ? 'TOP returns' : limit === '' ? 'OFFSET skips' : offset === '' ? 'LIMIT returns' : 'LIMIT/OFFSET return';
+                this.add('info', 'builder', `Without ORDER BY, which rows ${what} is not guaranteed.`,
+                    joinPath(path, 'orderBy'), scope);
+            }
         }
     }
 
@@ -638,11 +661,11 @@ class Validator {
             const sPath = joinPath(path, 'setOps', i);
             if (!SET_OPERATORS.includes(setOp.op)) {
                 this.add('error', 'builder', `Unknown set operator ${quote(setOp.op)}.`, joinPath(sPath, 'op'), ctx.scope);
-            } else if (!this.dialect.setOperators.includes(setOp.op)) {
-                this.add('error', 'builder', `${this.dialect.label} doesn't support ${setOp.op}.`, joinPath(sPath, 'op'), ctx.scope);
+            } else if (!this.dialect.supports.setOperators.includes(setOp.op)) {
+                this.add('error', 'dialect', `${this.dialect.shortLabel} doesn't support ${setOp.op}.`, joinPath(sPath, 'op'), ctx.scope);
             } else {
-                const minVersion = this.dialect.setOperatorMinVersion?.[setOp.op.split(' ')[0]];
-                if (minVersion) this.add('info', 'builder', `${setOp.op} needs ${this.dialect.label} ${minVersion} or later.`, joinPath(sPath, 'op'), ctx.scope);
+                const minVersion = this.dialect.minVersions[setOp.op.split(' ')[0]];
+                if (minVersion) this.add('info', 'dialect', `${setOp.op} needs ${this.dialect.shortLabel} ${minVersion} or later.`, joinPath(sPath, 'op'), ctx.scope);
             }
             const label = `${setOp.op} query ${i + 1}`;
             this.select(setOp.query, joinPath(sPath, 'query'), {
@@ -762,22 +785,23 @@ class Validator {
             this.add('error', 'builder', `Unknown conflict handling ${quote(u.mode)}.`, joinPath(path, 'mode'));
             return;
         }
-        if (!d.upsert) {
-            this.add('error', 'builder', `Conflict handling (upsert) isn't available for ${d.label} yet. Choose PostgreSQL or MySQL in Settings, or set “On conflict” to “Fail (default)”.`, joinPath(path, 'mode'));
+        const variant = d.supports.upsert;
+        if (!variant) {
+            this.add('error', 'dialect', `Conflict handling (upsert) isn't available for ${d.shortLabel} yet. Choose PostgreSQL or MySQL in Settings, or set “On conflict” to “Fail (default)”.`, joinPath(path, 'mode'));
             return;
         }
         const target = splitTopLevel(String(u.conflict)).filter(c => c !== '');
         target.forEach(col => {
             if (!isColumnReference(col) || col.endsWith('*')) this.add('error', 'builder', `${quote(col)} isn't a valid column name.`, joinPath(path, 'conflict'));
         });
-        if (d.upsert === 'on-duplicate-key') {
+        if (variant === 'on-duplicate-key') {
             if (u.mode === 'nothing') {
-                this.add('error', 'builder', 'MySQL has no “do nothing” on conflict. Choose “Update the existing row” (for example set a column to its current value).', joinPath(path, 'mode'));
+                this.add('error', 'dialect', 'MySQL has no “do nothing” on conflict. Choose “Update the existing row” (for example set a column to its current value).', joinPath(path, 'mode'));
                 return;
             }
-            if (target.length) this.add('info', 'builder', 'MySQL checks every unique key, so the conflict columns aren\'t part of the SQL.', joinPath(path, 'conflict'));
+            if (target.length) this.add('info', 'dialect', 'MySQL checks every unique key, so the conflict columns aren\'t part of the SQL.', joinPath(path, 'conflict'));
         } else if (u.mode === 'update' && target.length === 0) {
-            this.add('error', 'builder', 'PostgreSQL needs the conflict columns (the unique key, e.g. email) to update on conflict.', joinPath(path, 'conflict'));
+            this.add('error', 'dialect', 'PostgreSQL needs the conflict columns (the unique key, e.g. email) to update on conflict.', joinPath(path, 'conflict'));
         }
         if (u.mode !== 'update') return;
         if (u.set.length === 0) this.add('error', 'builder', 'Add at least one column to update on conflict.', joinPath(path, 'set'));
@@ -795,8 +819,8 @@ class Validator {
             seen.add(col.toLowerCase());
             this.assignmentValue(a, aPath);
         });
-        if (d.upsert === 'on-duplicate-key' && u.set.some(a => a.valueType === 'inserted')) {
-            this.add('info', 'builder', 'VALUES(column) works in all MySQL 8 versions but is deprecated from 8.0.20; newer code can use a row alias instead.', joinPath(path, 'set'));
+        if (variant === 'on-duplicate-key' && u.set.some(a => a.valueType === 'inserted')) {
+            this.add('info', 'dialect', 'VALUES(column) works in all MySQL 8 versions but is deprecated from 8.0.20; newer code can use a row alias instead.', joinPath(path, 'set'));
         }
     }
 
