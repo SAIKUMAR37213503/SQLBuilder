@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=5e49407a68af">
+    <link rel="stylesheet" href="style.css?v=02c6d86a96df">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -68,6 +68,7 @@
                                 <button type="button" class="segment" data-output-mode="formatted" aria-pressed="true">Formatted</button>
                                 <button type="button" class="segment" data-output-mode="compact" aria-pressed="false">One line</button>
                             </div>
+                            <button type="button" class="btn btn-ghost" id="wrap-btn" aria-pressed="false" title="Wrap long lines (display only; copied SQL is unchanged)">Wrap</button>
                             <button type="button" class="btn btn-ghost" id="select-all-btn">Select all</button>
                             <button type="button" class="btn btn-ghost" id="download-btn">Download</button>
                             <button type="button" class="btn btn-ghost" id="share-btn" hidden>Share</button>
@@ -214,6 +215,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=1e7509f68049" defer></script>
+    <script src="dist/sqlbuilder.js?v=4507ca0aa514" defer></script>
 </body>
 </html>

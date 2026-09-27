@@ -768,6 +768,23 @@ describe('settings, theme, persistence', () => {
     });
 });
 
+describe('output wrapping', () => {
+    test('Wrap is display only, remembered, and copying still gives the plain SQL', async () => {
+        await fillSimpleSelect();
+        const copied = [];
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { copied.push(t); } }, configurable: true });
+        $('#wrap-btn').click();
+        await settle();
+        expect($('#sql-output').classList.contains('wrap')).toBe(true);
+        expect($('#wrap-btn').getAttribute('aria-pressed')).toBe('true');
+        $('#copy-btn').click();
+        await settle();
+        expect(copied).toEqual(['SELECT name\nFROM users;']);
+        boot(backend);
+        expect($('#sql-output').classList.contains('wrap')).toBe(true);
+    });
+});
+
 describe('checks panel', () => {
     test('errors are listed before warnings and tips, and the bar shows the count', async () => {
         const upd = $('input[name="query-type"][value="update"]');

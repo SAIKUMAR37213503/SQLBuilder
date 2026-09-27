@@ -12,7 +12,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     saveHistory: true,
     restoreSession: true,
     theme: 'system',
-    outputMode: 'formatted'
+    outputMode: 'formatted',
+    wrapOutput: false
 });
 
 const SETTINGS_KEY = 'settings';
@@ -29,7 +30,8 @@ export function sanitizeSettings(input) {
         saveHistory: bool('saveHistory'),
         restoreSession: bool('restoreSession'),
         theme: oneOf('theme', THEMES),
-        outputMode: oneOf('outputMode', OUTPUT_MODES)
+        outputMode: oneOf('outputMode', OUTPUT_MODES),
+        wrapOutput: bool('wrapOutput')
     };
 }
 

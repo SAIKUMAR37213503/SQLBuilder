@@ -20,7 +20,8 @@ const TOKEN_RE = new RegExp([
     // parameter placeholders: ?, $1, @name, :name (not the :: cast)
     '(?<param>\\?|\\$\\d+|(?<![\\w@])@[A-Za-z_]\\w*|(?<![\\w:]):[A-Za-z_]\\w*)',
     `(?<keyword>\\b(?:${KEYWORDS.join('|')})\\b)`,
-    '(?<func>\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\())',
+    // a name before "(" is a function call, except the table in INSERT INTO t (cols)
+    '(?<func>(?<!\\bINTO\\s+)\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\())',
     '(?<number>\\b\\d+(?:\\.\\d+)?\\b)',
     '(?<operator><>|!=|>=|<=|=|<|>|\\+|-|\\*|/|%)',
     '(?<punct>[(),.;])'

@@ -79,6 +79,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         download: $('download-btn'),
         selectAll: $('select-all-btn'),
         modeButtons: $$('[data-output-mode]'),
+        wrap: $('wrap-btn'),
         dialectBadge: $('dialect-badge'),
         complexity: $('complexity'),
         issuesSummary: $('issues-summary'),
@@ -865,7 +866,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         }
         if (patch.saveHistory !== undefined) renderHistory();
         if (patch.restoreSession === false) storage.remove(DRAFT_KEY);
-        if (patch.outputMode !== undefined) renderModeButtons();
+        if (patch.outputMode !== undefined || patch.wrapOutput !== undefined) renderModeButtons();
         if (patch.dialect !== undefined && patch.dialect !== before.dialect) renderDialectNotes();
         if (state.generated && (patch.dialect !== undefined || patch.quoteIdentifiers !== undefined || patch.outputMode !== undefined)) {
             // Keep a manually generated query in sync with output preferences
@@ -902,6 +903,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
     function renderModeButtons() {
         el.modeButtons.forEach(btn => btn.setAttribute('aria-pressed', String(btn.dataset.outputMode === state.settings.outputMode)));
+        // Wrapping is display only: copy, download and history use the SQL text
+        el.wrap.setAttribute('aria-pressed', String(state.settings.wrapOutput));
+        el.output.classList.toggle('wrap', state.settings.wrapOutput);
     }
 
     function renderDialectNotes() {
@@ -993,6 +997,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         selectContents(el.code);
     });
     el.modeButtons.forEach(btn => btn.addEventListener('click', () => updateSettings({ outputMode: btn.dataset.outputMode })));
+    el.wrap.addEventListener('click', () => updateSettings({ wrapOutput: !state.settings.wrapOutput }));
 
     el.issuesList.addEventListener('click', (event) => {
         const btn = event.target.closest('button[data-goto]');

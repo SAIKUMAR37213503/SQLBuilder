@@ -125,3 +125,18 @@ describe('hasTopLevelLogic / hasLeadingZero', () => {
         expect(['0', '0.5', '10', 'abc', '0x1'].map(hasLeadingZero)).toEqual([false, false, false, false, false]);
     });
 });
+
+describe('tokenize: new syntax', () => {
+    test('parameters, upsert keywords and INSERT INTO table (…)', async () => {
+        const { tokenize } = await import('../src/tokenizer.js');
+        const types = (sql) => tokenize(sql).filter(t => t.type !== 'text').map(t => `${t.type}:${t.text}`);
+        expect(types('a = $1 AND b = ? AND c = @p AND d = :n AND e::int = 1')).toEqual([
+            'operator:=', 'param:$1', 'keyword:AND', 'operator:=', 'param:?', 'keyword:AND', 'operator:=', 'param:@p',
+            'keyword:AND', 'operator:=', 'param::n', 'keyword:AND', 'operator:=', 'number:1'
+        ]);
+        expect(types('ON CONFLICT (id) DO NOTHING')).toEqual(['keyword:ON CONFLICT', 'punct:(', 'punct:)', 'keyword:DO NOTHING']);
+        expect(types('INSERT INTO t (a) VALUES (LOWER(x))')).toEqual([
+            'keyword:INSERT INTO', 'punct:(', 'punct:)', 'keyword:VALUES', 'punct:(', 'func:LOWER', 'punct:(', 'punct:)', 'punct:)'
+        ]);
+    });
+});
