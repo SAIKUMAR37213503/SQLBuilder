@@ -54,4 +54,4 @@ If this policy changes, the updated version is published at the same location wi
 
 ## Contact
 
-Questions about this policy: **[developer contact email — fill in before publishing]**
+Questions about this policy: [pappalapandit@gmail.com](mailto:pappalapandit@gmail.com)
