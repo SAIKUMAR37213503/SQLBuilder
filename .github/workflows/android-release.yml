@@ -1,0 +1,84 @@
+name: Android release (Play upload AAB)
+
+# Builds the release .aab signed with YOUR upload key, for uploading to Google
+# Play Console by hand. It never publishes anything to Google Play.
+#
+# One-time setup: Settings → Secrets and variables → Actions → New repository secret
+#   ANDROID_KEYSTORE_BASE64    base64 of the upload keystore (.jks)
+#   ANDROID_KEYSTORE_PASSWORD  keystore password
+#   ANDROID_KEY_ALIAS          key alias (e.g. upload)
+#   ANDROID_KEY_PASSWORD       key password
+# Then: Actions → "Android release (Play upload AAB)" → Run workflow.
+# See ANDROID.md → Release signing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: "versionCode override (leave empty to derive it from package.json)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    name: Signed release AAB
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      VERSION_CODE: ${{ inputs.version_code }}
+    steps:
+      - name: Check signing secrets
+        run: |
+          missing=0
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "::error::Repository secret $name is not set (see ANDROID.md → Release signing)"; missing=1; fi
+          done
+          exit $missing
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Android SDK packages (API 36)
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+
+      - run: npm ci
+      - name: Checks, web build + Capacitor sync
+        run: |
+          npm run check
+          npm run cap:sync
+
+      - name: Signed release AAB
+        working-directory: android
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/upload.jks" ./gradlew --no-daemon bundleRelease
+          rm -f "$RUNNER_TEMP/upload.jks"
+
+      - name: Verify signature
+        run: |
+          AAB=android/app/build/outputs/bundle/release/app-release.aab
+          jarsigner -verify "$AAB" | grep -F "jar verified."
+          # Certificate owner + SHA-256: compare with Play Console → App integrity → Upload key certificate
+          keytool -printcert -jarfile "$AAB" | grep -E "Owner:|SHA256:"
+          ls -la "$AAB"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-release-aab-for-play
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 7

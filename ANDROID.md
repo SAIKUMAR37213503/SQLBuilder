@@ -80,6 +80,19 @@ Google Play needs the AAB signed with your **upload key**. The key and passwords
 
 Without signing details, Gradle prints a notice and builds an **unsigned** release, which Play will not accept.
 
+### Building the Play AAB on GitHub (no local Android SDK needed)
+
+`.github/workflows/android-release.yml` builds the signed AAB in GitHub Actions. It only builds; it never publishes to Google Play.
+1. Add four repository secrets under **Settings → Secrets and variables → Actions**:
+   - `ANDROID_KEYSTORE_BASE64`: the keystore, base64-encoded (`base64 -w0 upload.jks`, or on macOS `base64 -i upload.jks`)
+   - `ANDROID_KEYSTORE_PASSWORD`
+   - `ANDROID_KEY_ALIAS`
+   - `ANDROID_KEY_PASSWORD`
+2. Go to **Actions → "Android release (Play upload AAB)" → Run workflow**. You can override the versionCode there if needed.
+3. The run checks, builds and verifies the signature, and prints the certificate's SHA-256 fingerprint. Download the `app-release-aab-for-play` artifact, unzip it and upload `app-release.aab` in Play Console.
+
+The keystore is decoded only inside the job and deleted after signing. Artifacts of a public repository can be downloaded by any signed-in GitHub user for 7 days, which is fine: the AAB contains no secrets.
+
 Use **Play App Signing**, which Play Console offers by default: Google holds the app signing key, and you upload with your upload key. If the upload key is lost, it can be reset through Play Console support.
 
 **Every Play upload needs a higher versionCode:** bump `version` in `package.json` (for example 1.0.1 → 10001), or pass `-PversionCode=<n>`.

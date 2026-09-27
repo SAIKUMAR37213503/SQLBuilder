@@ -28,7 +28,7 @@ Nothing here is submitted automatically; every Play Console step is manual. Goog
 
 ## 2. Build the release
 
-- [ ] `npm run android:bundle`
+- [ ] `npm run android:bundle`, or run the **Android release (Play upload AAB)** workflow on GitHub (see ANDROID.md) and download `app-release-aab-for-play`
 - [ ] `jarsigner -verify android/app/build/outputs/bundle/release/app-release.aab` reports "jar verified"
 - [ ] Install a release build on a real device and smoke-test it. One way: `bundletool build-apks --connected-device --bundle=… --output=app.apks --ks=…` then `bundletool install-apks --apks=app.apks`.
   - [ ] launches, with the splash screen then the app
