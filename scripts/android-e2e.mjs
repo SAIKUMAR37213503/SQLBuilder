@@ -355,8 +355,20 @@ async function main() {
         return { ok: Boolean(left), detail: foregroundPackage().split('\n')[0] };
     });
 
+    await check('Capacitor SystemBars injected the safe-area CSS variables', async () => {
+        const vars = await page.eval(`['top', 'right', 'bottom', 'left'].map(n => document.documentElement.style.getPropertyValue('--safe-area-inset-' + n))`);
+        return { ok: vars.every(v => /^\d+px$/.test(v)), detail: JSON.stringify(vars) };
+    });
+
     await check('no page errors or CSP violations in the WebView console', () => {
-        return { ok: page.console.length === 0, detail: page.console.join(' | ') || 'none' };
+        // Capacitor's SystemBars plugin can run its inset script before <html>
+        // exists during a navigation; it catches the error, logs it and re-injects
+        // once the page is visible (verified by the previous check). The app's CSS
+        // falls back to env(safe-area-inset-*), so it is not an app error.
+        const upstream = /^Error injecting safe area CSS: TypeError: Cannot read properties of null \(reading 'style'\)/;
+        const errors = page.console.filter(line => !upstream.test(line));
+        const ignored = page.console.length - errors.length;
+        return { ok: errors.length === 0, detail: `${errors.join(' | ') || 'none'}${ignored ? ` (ignored ${ignored} known Capacitor SystemBars startup message(s))` : ''}` };
     });
 
     const logcat = shell('logcat -d');
