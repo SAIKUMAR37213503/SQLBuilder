@@ -127,7 +127,7 @@ jobs:
           # Each line runs in its own shell. Instrumented-test failures are recorded
           # so the E2E checks still run, then fail the job at the end.
           script: |
-            cd android && ./gradlew --no-daemon connectedDebugAndroidTest || touch ../instrumented-tests-failed
+            cd android && ./gradlew --no-daemon :app:connectedDebugAndroidTest || touch ../instrumented-tests-failed
             node scripts/android-e2e.mjs apk/app-debug.apk
             test ! -f instrumented-tests-failed
       - uses: actions/upload-artifact@v4

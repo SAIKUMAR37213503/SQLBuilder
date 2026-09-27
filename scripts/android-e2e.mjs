@@ -183,9 +183,12 @@ async function main() {
     let page = await launch();
     screenshot('01-start');
 
-    await check('starts offline and loads the packaged app from https://localhost', async () => {
-        const info = await page.eval(`({ online: navigator.onLine, href: location.href, title: document.title })`);
-        return { ok: info.href.startsWith('https://localhost/') && !info.href.includes('vercel'), detail: JSON.stringify(info) };
+    await check('starts in airplane mode and loads the packaged app from https://localhost', async () => {
+        // navigator.onLine is not meaningful here: without ACCESS_NETWORK_STATE the
+        // WebView cannot observe connectivity, so the device setting is checked instead
+        const airplane = shell('settings get global airplane_mode_on').trim();
+        const info = await page.eval(`({ href: location.href, title: document.title })`);
+        return { ok: airplane === '1' && info.href.startsWith('https://localhost/') && !info.href.includes('vercel'), detail: JSON.stringify({ airplane, ...info }) };
     });
 
     await check('native platform is active (Share button visible, storage note)', async () => {
@@ -285,16 +288,33 @@ async function main() {
 
     await check('content clears the status bar and gesture area (safe areas), no horizontal scroll', async () => {
         const m = await page.eval(`(() => {
-            const cs = getComputedStyle(document.documentElement);
-            const inset = (n) => parseFloat(cs.getPropertyValue('--safe-area-inset-' + n)) || 0;
+            // Resolve --safe-top/--safe-bottom (max of env() and the injected variables)
+            const probe = document.createElement('div');
+            probe.style.position = 'fixed';
+            probe.style.paddingTop = 'var(--safe-top)';
+            probe.style.paddingBottom = 'var(--safe-bottom)';
+            document.body.append(probe);
+            const safeTop = parseFloat(getComputedStyle(probe).paddingTop);
+            const safeBottom = parseFloat(getComputedStyle(probe).paddingBottom);
+            probe.remove();
             const header = document.querySelector('.app-header').getBoundingClientRect();
             const bar = getComputedStyle(document.querySelector('.mobile-bar'));
-            return { insetTop: inset('top'), insetBottom: inset('bottom'), headerTop: header.top,
-                     barPaddingBottom: parseFloat(bar.paddingBottom), barDisplay: bar.display,
-                     overflow: document.documentElement.scrollWidth > innerWidth, width: innerWidth };
+            return { safeTop, safeBottom, headerTop: header.top, barPaddingBottom: parseFloat(bar.paddingBottom),
+                     barDisplay: bar.display, overflow: document.documentElement.scrollWidth > innerWidth,
+                     width: innerWidth, height: innerHeight, dpr: devicePixelRatio };
         })()`);
-        const ok = m.headerTop >= m.insetTop && (m.barDisplay === 'none' || m.barPaddingBottom >= m.insetBottom) && !m.overflow;
-        return { ok, detail: JSON.stringify(m) };
+        // If the WebView spans the whole screen (edge-to-edge), the status bar area
+        // must be reported as a safe-area inset and the header must sit below it.
+        // Otherwise the native layout already keeps the WebView clear of the bars.
+        // `wm size` prints the physical size and, if set, an override (the one in effect)
+        const sizes = [...shell('wm size').matchAll(/(\d+)x(\d+)/g)];
+        const size = sizes.at(-1);
+        const screenHeight = size ? Math.max(Number(size[1]), Number(size[2])) : 0;
+        const fullScreen = Math.round(m.height * m.dpr) >= screenHeight - 2;
+        const insetsOk = fullScreen
+            ? m.safeTop > 0 && m.headerTop >= m.safeTop && (m.barDisplay === 'none' || m.barPaddingBottom >= m.safeBottom)
+            : true;
+        return { ok: insetsOk && !m.overflow, detail: JSON.stringify({ ...m, screenHeight, webViewMode: fullScreen ? 'edge-to-edge' : 'inset by native layout' }) };
     });
 
     await check('landscape orientation: layout still fits', async () => {
