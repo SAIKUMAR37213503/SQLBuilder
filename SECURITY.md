@@ -5,7 +5,7 @@ SQL Query Builder Pro Lite is a **text generator**. It runs entirely in the brow
 ## What the app never does
 
 - Connect to a database or execute SQL
-- Send queries, inputs, history or templates over the network. The app code makes no network requests at all; the only files loaded are its own `index.html`, `style.css` and `dist/sqlbuilder.js`.
+- Send queries, inputs, history or templates over the network. The app code makes no network requests at all. The only files loaded are its own `index.html`, `style.css` and `dist/sqlbuilder.js`, plus, on the website, the PWA manifest, the icons and the same-origin service worker (`sw.js`), which caches only those files.
 - Collect analytics or telemetry
 - Evaluate imported data or generated SQL (there is no `eval`, `new Function` or dynamic `import()` in the app code)
 
@@ -28,6 +28,19 @@ object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 - a restrictive `Permissions-Policy`
 
 `.vercelignore` publishes only the app files.
+
+## Android app
+
+- **Content:** the web files are bundled in the APK/AAB and served from inside the app at `https://localhost`. `capacitor.config.json` sets no `server.url`, so the app never loads the website or any remote page. A test enforces this.
+- **Permissions:** the app requests none, not even `INTERNET`. The merged manifest contains only AndroidX's app-private signature permission `com.saikumar.sqlbuilder.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`; CI and an instrumented test fail on any other permission. Cleartext traffic and mixed content are disabled.
+- **CSP:** the packaged `index.html` carries the same policy as the website, as a `<meta>` tag, with `connect-src 'self'`.
+- **Exports:** files are written to `cache/exports/` and shared through a `FileProvider` limited to that folder (`res/xml/file_paths.xml`). Every new export clears the folder first.
+- **Storage:** WebView localStorage, private to the app. `android:allowBackup="false"` keeps it out of cloud and device backups.
+- **Release builds:** not debuggable. WebView remote debugging is only enabled in debug builds (Capacitor's default).
+- **Dependencies:** only Capacitor's own plugins (core, app, clipboard, filesystem, share, splash-screen); no Firebase, analytics or ads.
+- **Signing:** the release key is never in the repository (see [ANDROID.md](ANDROID.md#release-signing)).
+
+`npm audit` reports moderate advisories in `uuid`, pulled in through the iOS tooling (`xcode`) of the dev-only `@capacitor/cli`. It is not shipped in the app or the website, and the suggested automatic fix downgrades the CLI, so it is not applied.
 
 ## Imported files (queries and templates)
 

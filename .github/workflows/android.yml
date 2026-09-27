@@ -55,15 +55,20 @@ jobs:
           ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/ci-only.jks" ANDROID_KEYSTORE_PASSWORD=ci-only-pass \
           ANDROID_KEY_ALIAS=ci-only ANDROID_KEY_PASSWORD=ci-only-pass \
             ./gradlew --no-daemon bundleRelease
-          jarsigner -verify app/build/outputs/bundle/release/app-release.aab | tail -1
+          jarsigner -verify app/build/outputs/bundle/release/app-release.aab | grep -F "jar verified."
 
       - name: Inspect packaged manifests
         run: |
           AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
           echo "== debug APK =="
           "$AAPT2" dump badging android/app/build/outputs/apk/debug/app-debug.apk | grep -E "^package:|sdkVersion|targetSdkVersion|uses-permission|application-label:" 
-          curl -sSfL -o "$RUNNER_TEMP/bundletool.jar" https://repo1.maven.org/maven2/com/android/tools/build/bundletool/1.18.1/bundletool-1.18.1.jar \
-            || curl -sSfL -o "$RUNNER_TEMP/bundletool.jar" https://dl.google.com/dl/android/maven2/com/android/tools/build/bundletool/1.18.1/bundletool-1.18.1.jar
+          # Only app-private permissions (androidx adds <package>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION)
+          if "$AAPT2" dump badging android/app/build/outputs/apk/debug/app-debug.apk \
+              | grep -E "^uses-permission" | grep -v "name='com.saikumar.sqlbuilder\."; then
+            echo "::error::Unexpected permission in the merged manifest"; exit 1
+          fi
+          # bundletool's runnable jar is published on GitHub releases (Maven hosts only the library)
+          curl -sSfL -o "$RUNNER_TEMP/bundletool.jar" https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar
           echo "== release AAB manifest =="
           java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle android/app/build/outputs/bundle/release/app-release.aab \
             | grep -E "package=|versionCode|versionName|uses-sdk|minSdkVersion|targetSdkVersion|uses-permission|allowBackup|debuggable"
