@@ -6,6 +6,11 @@ It is a static page with no server, no accounts and no analytics. It **never con
 
 **▶ Live app: [sql-builder-ten.vercel.app](https://sql-builder-ten.vercel.app)**. It is redeployed automatically from `main`.
 
+It comes in three forms, all built from the same code:
+- **Website:** any modern browser.
+- **Installable web app (PWA):** "Install app" / "Add to Home screen". After the first visit it works offline.
+- **Android app:** packaged with Capacitor. All files are bundled in the app, so it runs fully offline and requests no permissions. See [ANDROID.md](ANDROID.md).
+
 ---
 
 ## Features
@@ -45,7 +50,7 @@ It is a static page with no server, no accounts and no analytics. It **never con
 - Formatted SQL (one clause per line, 4-space indentation) or a single line
 - Syntax highlighting and line numbers; the line numbers are never copied
 - Live preview while you type (can be switched off)
-- Copy, Select all, Download `.sql`
+- Copy, Select all, Download `.sql`. On Android, Download and Export open the share sheet so you can save to Files or Drive, or send to another app. A Share button shares the SQL text.
 
 **Checks:** the checks panel shows three kinds of message:
 - **Errors** (block generation): missing fields, invalid names or aliases, unbalanced quotes or parentheses, a join without a condition, column-count mismatches between combined queries, INSERT value/column mismatches, wrong window-function arguments, a window result used in WHERE/HAVING, operators or functions the dialect lacks, …
@@ -125,6 +130,14 @@ npm ci            # dev tooling only
 npm run dev       # http://localhost:3000
 ```
 
+**Offline / install (PWA):** the site has a web app manifest and a service worker (`sw.js`).
+- After one online visit, the page, stylesheet and script are cached and the app opens without a connection.
+- Pages are fetched network-first, so a new deployment shows up on the next online visit.
+- The versioned assets are cache-first.
+- The service worker only runs over `https` or on `localhost`; from `file://` the app simply works without it.
+
+**Android:** install an APK built from this repository ([ANDROID.md](ANDROID.md)). Google Play distribution is being prepared ([PLAY_STORE_RELEASE_CHECKLIST.md](PLAY_STORE_RELEASE_CHECKLIST.md)).
+
 ## Development
 
 Requires Node.js 22.22+ (or 24.15+).
@@ -135,6 +148,10 @@ npm run lint        # ESLint
 npm run typecheck   # TypeScript checkJs over src/
 npm run build       # bundle src/ → dist/sqlbuilder.js (esbuild), then version asset URLs in index.html
 npm run check       # all of the above; CI runs the same and fails if dist/ is stale
+
+npm run cap:sync        # Android: build www/ (native bundle) and sync it into android/
+npm run android:debug   # Android debug APK   (needs JDK 21 + Android SDK 36)
+npm run android:bundle  # Android release AAB (signing: ANDROID.md → Release signing)
 ```
 
 Source is plain ES modules in `src/`. The committed `dist/sqlbuilder.js` is what the page loads; **run `npm run build` and commit `dist/` and `index.html` after changing `src/` or `style.css`**. The build appends a content hash to the asset URLs (`style.css?v=…`, `dist/sqlbuilder.js?v=…`, via `scripts/stamp-assets.mjs`), so browsers always fetch changed files instead of reusing an old cached copy.
@@ -153,7 +170,9 @@ src/
 ├── storage.js        Guarded localStorage wrapper
 ├── settings.js / history.js / templates.js / undo.js / examples.js
 ├── app.js            Controller: state, events, rendering pipeline
-├── main.js           Entry point (bundled)
+├── main.js           Website entry point (bundled to dist/; registers the service worker)
+├── main.native.js    Android entry point (bundled to www/ by scripts/build-mobile.mjs)
+├── platform/         web.js / native.js: clipboard, file export, share, back button, system bars
 └── ui/
     ├── builder.js    Renders the editor from the model (recursive for subqueries)
     ├── output.js     SQL view with tokens and line numbers
@@ -167,6 +186,7 @@ Design decisions:
 - **Formatting happens during generation.** The generator emits `[indent, text]` lines and pretty-prints or joins them, so user values are never reformatted.
 - **No framework.** Rendering uses a ~30-line `h()` helper with `textContent`/`setAttribute`; there is no `innerHTML`. Events are delegated: inputs carry `data-path` (their location in the model) and buttons carry `data-action`.
 - **Bundled classic script.** ES modules can't load from `file://`, so esbuild bundles them into one IIFE. The only runtime dependency is the browser.
+- **Platform adapter.** The few things that differ between browser and Android (clipboard, saving files, share, back button, status-bar colour, splash) go through a `platform` object passed to `startApp()`. The SQL core has no platform code, and the website bundle contains no Capacitor code (a test checks this). An iOS target can reuse the same adapter.
 
 ## Accessibility
 
@@ -184,29 +204,38 @@ See [SECURITY.md](SECURITY.md). In short:
 - User input is rendered as text only.
 - Imported JSON is validated and never executed.
 - Storage is limited to this browser, and you can delete it from Settings.
-- The deployment sends a strict Content-Security-Policy.
+- The deployment sends a strict Content-Security-Policy. The Android app embeds an equivalent CSP.
+- The Android app requests no permissions, has no analytics or ads, and never loads remote content. See [PRIVACY.md](PRIVACY.md).
 
 ## Browser support
 
 Current versions of Chrome, Edge, Firefox and Safari. Minimums, set by `structuredClone` and `<dialog>`: Chrome/Edge 98, Firefox 98, Safari 15.4.
 
+Android: 7.0 (API 24) or later with Android System WebView 98+, which updates through Google Play. An older WebView gets a "please update" message instead of a blank screen.
+
 ## Deployment
 
-The site is static: `index.html`, `style.css` and `dist/`. There's no build step on the server.
+The site is static: `index.html`, `style.css`, `dist/`, plus the PWA files `manifest.webmanifest`, `sw.js` and `icons/`. There's no build step on the server.
 - **Vercel:** import the repository, or run `npm run deploy` (`npx vercel --prod`).
   - `vercel.json` sets the security headers and `Cache-Control: max-age=0, must-revalidate`, because file names aren't content-hashed.
   - `.vercelignore` publishes only the app files; `Fabric_Sync/`, sources and tests are not served.
-- **Any static host:** upload `index.html`, `style.css` and `dist/`.
+- **Any static host:** upload `index.html`, `style.css`, `dist/`, `manifest.webmanifest`, `sw.js` and `icons/`.
+- **Android:** see [ANDROID.md](ANDROID.md) (build, signing) and [PLAY_STORE_RELEASE_CHECKLIST.md](PLAY_STORE_RELEASE_CHECKLIST.md).
 
 ## Project structure
 
 ```
 index.html  style.css  dist/sqlbuilder.js(.map)   ← the app
+manifest.webmanifest  sw.js  icons/               ← PWA (install + offline)
+capacitor.config.json  android/                   ← Android app (Capacitor); www/ is generated
+scripts/                                          ← asset stamping, mobile build, icon generator, Android E2E
+store/  resources/                                ← Play Store graphics, master icon
 src/                                              ← sources (see Architecture)
 tests/                                            ← Vitest: unit, UI (jsdom) and bundle tests
 vercel.json  .vercelignore                        ← deployment
 eslint.config.js  jsconfig.json  package.json     ← tooling
 .github/workflows/ci.yml                          ← lint, typecheck, tests, bundle freshness
+.github/workflows/android.yml                     ← APK/AAB build, Android lint, emulator E2E
 Fabric_Sync/                                      ← unrelated Power BI content (not deployed)
 ```
 

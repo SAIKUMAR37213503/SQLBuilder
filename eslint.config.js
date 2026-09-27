@@ -3,7 +3,7 @@ import globals from 'globals';
 
 export default [
     {
-        ignores: ['node_modules/', 'dist/', 'Fabric_Sync/', 'graphify-out/']
+        ignores: ['node_modules/', 'dist/', 'www/', 'android/', 'ios/', 'Fabric_Sync/', 'graphify-out/']
     },
     js.configs.recommended,
     {
@@ -20,6 +20,14 @@ export default [
             ecmaVersion: 2022,
             sourceType: 'module',
             globals: { ...globals.node, ...globals.browser }
+        }
+    },
+    {
+        files: ['sw.js'],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: 'script',
+            globals: { ...globals.serviceworker }
         }
     },
     {

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand blue (the accent colour in style.css). Also used by the splash screen. -->
+    <color name="ic_launcher_background">#1D5FD6</color>
+</resources>

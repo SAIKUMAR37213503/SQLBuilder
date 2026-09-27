@@ -10,7 +10,9 @@
     "allowJs": true,
     "noEmit": true,
     "strict": false,
-    "types": []
+    "types": [],
+    "moduleResolution": "bundler",
+    "module": "ESNext"
   },
   "include": [
     "src/**/*.js"

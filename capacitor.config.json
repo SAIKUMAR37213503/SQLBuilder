@@ -1,0 +1,20 @@
+{
+  "appId": "com.saikumar.sqlbuilder",
+  "appName": "SQL Builder Pro Lite",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": false,
+      "launchFadeOutDuration": 150,
+      "showSpinner": false,
+      "backgroundColor": "#1d5fd6",
+      "androidScaleType": "CENTER"
+    },
+    "SystemBars": {
+      "insetsHandling": "css"
+    }
+  }
+}
