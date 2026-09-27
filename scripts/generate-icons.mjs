@@ -113,9 +113,12 @@ function featureGraphic() {
 `;
 }
 
-async function png(svg, file, size) {
+async function png(svg, file, size, { opaque = false } = {}) {
     mkdirSync(join(file, '..'), { recursive: true });
-    await sharp(Buffer.from(svg), { density: 72 }).resize(size.width ?? size, size.height ?? size).png({ compressionLevel: 9 }).toFile(file);
+    let image = sharp(Buffer.from(svg), { density: 72 }).resize(size.width ?? size, size.height ?? size);
+    // Google Play requires the feature graphic without an alpha channel (24-bit PNG)
+    if (opaque) image = image.flatten({ background: BRAND.background }).removeAlpha();
+    await image.png({ compressionLevel: 9 }).toFile(file);
 }
 
 // ---------------------------------------------------------------------- main
@@ -156,7 +159,7 @@ async function main() {
 
     // Google Play listing
     await png(artwork(512, { shape: 'square', symbolFraction: 0.5 }), join(root, 'store/play-icon-512.png'), 512);
-    await png(featureGraphic(), join(root, 'store/feature-graphic-1024x500.png'), { width: 1024, height: 500 });
+    await png(featureGraphic(), join(root, 'store/feature-graphic-1024x500.png'), { width: 1024, height: 500 }, { opaque: true });
 
     console.log('Icons generated.');
 }
