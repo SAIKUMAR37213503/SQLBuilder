@@ -19,12 +19,12 @@ import { UndoStack } from './undo.js';
 import {
     normalizeWorkspace, parseQueryFile, parseTemplatesFile, createQueryExport, createTemplatesExport, MAX_IMPORT_BYTES
 } from './serialization.js';
-import { EXAMPLES } from './examples.js';
+import { EXAMPLES, examplesFor } from './examples.js';
 import { h, byPath, debounce, cssEscape } from './ui/dom.js';
 import { renderEditor } from './ui/builder.js';
 import { renderSqlCode, selectContents } from './ui/output.js';
 import { renderHistoryList, renderTemplateList, renderExampleList } from './ui/library.js';
-import { promptDialog, confirmDialog, showDialog, closeDialog, enhanceDialog } from './ui/dialogs.js';
+import { promptDialog, templateDialog, confirmDialog, showDialog, closeDialog, enhanceDialog } from './ui/dialogs.js';
 import { applyTheme, nextTheme, effectiveTheme, THEME_LABELS } from './ui/theme.js';
 import { bindShortcuts, SHORTCUTS, modLabel } from './ui/shortcuts.js';
 import { createWebPlatform } from './platform/web.js';
@@ -81,6 +81,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         modeButtons: $$('[data-output-mode]'),
         wrap: $('wrap-btn'),
         dialectBadge: $('dialect-badge'),
+        dialectSelect: $('dialect-select'),
+        templateFilter: $('template-filter'),
+        exampleFilter: $('example-filter'),
         complexity: $('complexity'),
         issuesSummary: $('issues-summary'),
         issuesList: $('issues-list'),
@@ -100,6 +103,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         storageNote: $('storage-note'),
         settingsDialog: $('settings-dialog'),
         promptDialog: $('prompt-dialog'),
+        templateDialog: $('template-dialog'),
         confirmDialog: $('confirm-dialog'),
         shortcutsDialog: $('shortcuts-dialog'),
         clearData: $('clear-data-btn'),
@@ -124,7 +128,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         attempted: false,                // Generate was pressed: show all field errors
         touched: new Set(),              // field paths the user has left
         openSections: new Map(),
-        libraryTab: 'history'
+        libraryTab: 'history',
+        templateFilter: 'all',           // dialect id or 'all'
+        exampleFilter: /** @type {string | null} */ (null) // null: follow the selected dialect
     };
     undoStack.reset(state.workspace);
 
@@ -165,7 +171,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     // --------------------------------------------------------------- rendering
 
     const ui = {
-        isOpen: (key, fallback) => (state.openSections.has(key) ? state.openSections.get(key) : fallback)
+        isOpen: (key, fallback) => (state.openSections.has(key) ? state.openSections.get(key) : fallback),
+        dialect: () => getDialect(state.settings.dialect)
     };
 
     function renderBuilder(focus = null) {
@@ -742,8 +749,42 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     }
 
     function renderTemplates() {
-        renderTemplateList(el.templateList, templates.list());
-        el.templateExport.disabled = templates.list().length === 0;
+        const all = templates.list();
+        const filter = state.templateFilter;
+        // Templates saved without a dialect (older versions) are shown for every dialect
+        const shown = filter === 'all' ? all : all.filter(t => !t.dialect || t.dialect === filter);
+        renderTemplateList(el.templateList, shown, { total: all.length, filterLabel: filter === 'all' ? '' : getDialect(filter).label });
+        el.templateExport.disabled = all.length === 0;
+    }
+
+    // Examples that work in the chosen dialect, with SQL previewed in that dialect
+    function renderExamples() {
+        const filter = state.exampleFilter ?? state.settings.dialect;
+        el.exampleFilter.value = filter;
+        const shown = examplesFor(filter);
+        const dialect = filter === 'all' ? state.settings.dialect : filter;
+        renderExampleList(el.exampleList, shown, (workspace) => {
+            try {
+                return generateSQL(workspace, { dialect, quoteIdentifiers: false, pretty: false });
+            } catch {
+                return '';
+            }
+        });
+    }
+
+    function dialectOptions(withAll) {
+        return [...(withAll ? [h('option', { value: 'all' }, 'All dialects')] : []), ...listDialects().map(d => h('option', { value: d.id }, d.label))];
+    }
+
+    // After the user picks a dialect: say what changed, including parts of the
+    // query the new dialect can't express (they stay in the query, see Checks)
+    function announceDialect() {
+        const dialect = getDialect(state.settings.dialect);
+        const blocked = state.issues.filter(i => i.category === 'dialect' && i.level === 'error').length;
+        toast(blocked === 0
+            ? `Dialect: ${dialect.label}.`
+            : `Dialect: ${dialect.label}. ${blocked === 1 ? '1 part' : `${blocked} parts`} of this query ${blocked === 1 ? 'isn\'t' : 'aren\'t'} supported there; see Checks.`,
+        blocked === 0 ? 'info' : 'error');
     }
 
     /**
@@ -835,10 +876,14 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         const suggestion = state.workspace.type === 'select' && state.workspace.select.from.kind === 'table' && state.workspace.select.from.table
             ? `${state.workspace.select.from.table} query`
             : `${state.workspace.type.toUpperCase()} query`;
-        const name = await promptDialog(el.promptDialog, { title: 'Save as template', label: 'Template name', value: suggestion });
-        if (name === null) return;
+        const details = await templateDialog(el.templateDialog, {
+            name: suggestion,
+            categories: templates.categories(),
+            note: `Saved for ${getDialect(state.settings.dialect).label}; loading it switches back to that dialect.`
+        });
+        if (details === null) return;
         try {
-            const template = templates.create(name, state.workspace, { dialect: state.settings.dialect });
+            const template = templates.create(details.name, state.workspace, { ...details, dialect: state.settings.dialect });
             renderTemplates();
             selectTab('templates');
             toast(`Saved template “${template.name}”.`, 'success');
@@ -867,7 +912,13 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (patch.saveHistory !== undefined) renderHistory();
         if (patch.restoreSession === false) storage.remove(DRAFT_KEY);
         if (patch.outputMode !== undefined || patch.wrapOutput !== undefined) renderModeButtons();
-        if (patch.dialect !== undefined && patch.dialect !== before.dialect) renderDialectNotes();
+        if (patch.dialect !== undefined && patch.dialect !== before.dialect) {
+            renderDialectNotes();
+            el.dialectSelect.value = state.settings.dialect;
+            state.exampleFilter = null;
+            renderBuilder();
+            renderExamples();
+        }
         if (state.generated && (patch.dialect !== undefined || patch.quoteIdentifiers !== undefined || patch.outputMode !== undefined)) {
             // Keep a manually generated query in sync with output preferences
             if (!hasErrors(validateWorkspace(state.workspace, validationOptions()))) {
@@ -939,6 +990,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (!key) return;
         if (input.type === 'radio' && !input.checked) return;
         updateSettings({ [key]: input.type === 'checkbox' ? input.checked : input.value });
+        if (key === 'dialect') announceDialect();
     }
 
     async function clearAllData() {
@@ -1042,12 +1094,24 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         toast('History cleared.');
     });
     el.libraryPanel.addEventListener('click', onLibraryClick);
+    el.dialectSelect.addEventListener('change', () => {
+        updateSettings({ dialect: el.dialectSelect.value });
+        announceDialect();
+    });
+    el.templateFilter.addEventListener('change', () => {
+        state.templateFilter = el.templateFilter.value;
+        renderTemplates();
+    });
+    el.exampleFilter.addEventListener('change', () => {
+        state.exampleFilter = el.exampleFilter.value;
+        renderExamples();
+    });
     el.templateSave.addEventListener('click', saveTemplate);
     el.templateImport.addEventListener('click', () => chooseFile('templates'));
     el.templateExport.addEventListener('click', exportTemplates);
     el.fileInput.addEventListener('change', onFileChosen);
 
-    [el.settingsDialog, el.promptDialog, el.confirmDialog, el.shortcutsDialog].forEach(enhanceDialog);
+    [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog].forEach(enhanceDialog);
 
     bindShortcuts(doc, signal, {
         generate,
@@ -1079,11 +1143,15 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.storageNote.textContent = storage.available
         ? `history, templates and settings are stored only ${where}`
         : 'browser storage is unavailable, so history and templates won\'t be kept';
+    el.dialectSelect.replaceChildren(...dialectOptions(false));
+    el.dialectSelect.value = state.settings.dialect;
+    el.templateFilter.replaceChildren(...dialectOptions(true));
+    el.exampleFilter.replaceChildren(...dialectOptions(true));
     syncTypeTabs();
     renderBuilder();
     renderHistory();
     renderTemplates();
-    renderExampleList(el.exampleList, EXAMPLES);
+    renderExamples();
     selectTab('history');
     refresh();
     platform.onBack(handleBack);

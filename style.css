@@ -583,6 +583,42 @@ kbd {
     }
 }
 
+/* ------------------------------------------------------- dialect picker */
+
+.builder-title { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; }
+.dialect-picker { display: inline-flex; gap: 0.4rem; align-items: center; }
+.dialect-picker-label { color: var(--text-muted); font-size: 0.8rem; font-weight: 600; }
+.dialect-select {
+    min-height: 2rem;
+    padding: 0.2rem 0.5rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--surface-3);
+    color: var(--text);
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+.dialect-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+.dialect-select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+@media (max-width: 719px) {
+    .dialect-select { min-height: 2.5rem; }
+}
+
+.dialect-note { color: var(--text-muted); font-size: 0.85rem; }
+.field-optional { color: var(--text-muted); font-weight: 400; }
+.library-filter { display: inline-flex; gap: 0.4rem; align-items: center; margin-left: auto; color: var(--text-muted); font-size: 0.8rem; font-weight: 600; }
+.select-sm { min-height: 2rem; padding: 0.2rem 0.4rem; font-size: 0.85rem; }
+.library-snippet.example-sql {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.library-chip { padding: 0.05rem 0.45rem; border: 1px solid var(--border); border-radius: 999px; font-size: 0.75rem; }
+
 /* -------------------------------------------------------------- output */
 
 .dialect-badge {

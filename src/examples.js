@@ -1,5 +1,9 @@
-// Built-in starter examples shown in the Templates panel. They are ordinary
-// workspaces built with the model factories, so they also exercise the model.
+// Built-in starter examples shown in the Examples panel. They are ordinary
+// workspaces built with the model factories, so the SQL they show always comes
+// from the generator of the selected dialect and can't drift from it.
+//
+// An example without `dialects` works in every dialect; one with `dialects`
+// is listed only for those (loading it elsewhere switches to the first).
 
 import {
     createWorkspace, createColumn, createCaseColumn, createWindowColumn, createCondition, createGroup, createJoin,
@@ -26,6 +30,18 @@ export const EXAMPLES = [
             q.where = createGroup('AND', [cond('Salary', '>', '50000')]);
             q.orderBy = [{ expr: 'Salary', direction: 'DESC' }];
             q.limit = '10';
+        })
+    },
+    {
+        id: 'page-results',
+        name: 'Page through results',
+        description: 'Rows 41–60 in a stable order: LIMIT and OFFSET, or OFFSET … FETCH on SQL Server.',
+        build: () => workspace('select', (q) => {
+            q.columns = [createColumn('id'), createColumn('name'), createColumn('email')];
+            q.from = createTableSource('customers');
+            q.orderBy = [{ expr: 'name', direction: 'ASC' }, { expr: 'id', direction: 'ASC' }];
+            q.limit = '20';
+            q.offset = '40';
         })
     },
     {
@@ -231,3 +247,8 @@ export const EXAMPLES = [
         })
     }
 ];
+
+/** The examples that work in a dialect ('all' lists every example). */
+export function examplesFor(dialect) {
+    return dialect === 'all' ? EXAMPLES : EXAMPLES.filter(e => !e.dialects || e.dialects.includes(dialect));
+}

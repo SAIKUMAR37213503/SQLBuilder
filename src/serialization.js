@@ -297,11 +297,17 @@ export function createTemplatesExport(templates) {
         kind: 'templates',
         version: MODEL_VERSION,
         exportedAt: new Date().toISOString(),
-        templates: templates.map(({ name, dialect, workspace, createdAt, updatedAt }) => ({ name, ...(dialect ? { dialect } : {}), workspace, createdAt, updatedAt }))
+        templates: templates.map(({ name, dialect, description, category, workspace, createdAt, updatedAt }) => ({
+            name,
+            ...(dialect ? { dialect } : {}),
+            ...(description ? { description } : {}),
+            ...(category ? { category } : {}),
+            workspace, createdAt, updatedAt
+        }))
     };
 }
 
-/** @returns {{ ok: true, templates: { name: string, dialect?: string, workspace: any }[] } | { ok: false, error: string }} */
+/** @returns {{ ok: true, templates: { name: string, dialect?: string, description?: string, category?: string, workspace: any }[] } | { ok: false, error: string }} */
 export function parseTemplatesFile(text) {
     try {
         const data = parseJson(text);
@@ -313,10 +319,10 @@ export function parseTemplatesFile(text) {
             if (!isObject(t)) throw new ImportError(`Template ${i + 1} is not an object.`);
             const name = str(t, 'name', `templates[${i}]`).trim().slice(0, 80);
             if (!name) throw new ImportError(`Template ${i + 1} has no name.`);
-            // Unknown dialects are dropped by the template store
-            const dialect = typeof t.dialect === 'string' ? t.dialect : undefined;
+            // Unknown dialects, and over-long descriptions / categories, are cleaned by the template store
+            const optional = (key) => (typeof t[key] === 'string' && t[key].trim() ? { [key]: t[key] } : {});
             try {
-                return { name, ...(dialect ? { dialect } : {}), workspace: normalizeWorkspace(t.workspace) };
+                return { name, ...optional('dialect'), ...optional('description'), ...optional('category'), workspace: normalizeWorkspace(t.workspace) };
             } catch (error) {
                 throw new ImportError(`Template “${name}”: ${describeError(error)}`);
             }

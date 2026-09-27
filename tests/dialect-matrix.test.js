@@ -3,9 +3,10 @@
 // dialect behavior shows up as a diff here.
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { generateQuery } from '../src/generator.js';
-import { validateQuery, hasErrors } from '../src/validation.js';
+import { validateQuery, validateWorkspace, hasErrors } from '../src/validation.js';
 import { DIALECTS, getDialect, listDialects } from '../src/dialects.js';
+import { examplesFor } from '../src/examples.js';
+import { generateQuery, generateSQL } from '../src/generator.js';
 import {
     createSelect, createColumn, createCaseColumn, createWindowColumn, createCondition, createRawCondition, createGroup,
     createJoin, createTableSource, createSubquerySource, createCte, createSetOp, createOrderItem, createGroupByItem,
@@ -47,7 +48,7 @@ function expectSql(q, expected, extra = {}) {
 
 describe('dialect definitions', () => {
     test('the four dialects are listed with user-facing labels', () => {
-        expect(listDialects().map(d => d.id)).toEqual(['generic', 'postgresql', 'mysql', 'sqlserver']);
+        expect(listDialects().map(d => d.label)).toEqual(['Generic SQL', 'Microsoft SQL Server', 'PostgreSQL', 'MySQL']);
         expect(getDialect('nope').id).toBe('generic');
         expect(getDialect('constructor').id).toBe('generic');
     });
@@ -404,5 +405,35 @@ describe('dialect validation matrix', () => {
         const q = inSubquery('3');
         expect(hasErrors(validateQuery(q, { dialect: 'mysql' }))).toBe(true);
         expect(compact(q, 'mysql')).toContain('LIMIT 3');
+    });
+});
+
+describe('examples per dialect', () => {
+    // What each dialect's example list must demonstrate, checked on the SQL
+    // the generator writes for that dialect
+    const required = {
+        generic: [/^SELECT/m, /\bJOIN\b/, /\bGROUP BY\b/],
+        sqlserver: [/\bTOP \d+/, /\bOFFSET \d+ ROWS\s+FETCH NEXT \d+ ROWS ONLY/, /\bOVER \(/],
+        postgresql: [/\bLIMIT \d+/, /\bOFFSET \d+/, /^WITH /m, /\bOVER \(/],
+        mysql: [/\bLIMIT \d+/, /\bJOIN\b/, /\bGROUP BY\b/, /\bOVER \(/]
+    };
+
+    test.each(ALL)('%s: every listed example is valid there, and together they cover its key syntax', (dialect) => {
+        const sqls = examplesFor(dialect).map(example => {
+            const ws = example.build();
+            expect(hasErrors(validateWorkspace(ws, { dialect })), example.id).toBe(false);
+            return generateSQL(ws, { dialect });
+        });
+        for (const pattern of required[dialect]) {
+            expect(sqls.some(sql => pattern.test(sql)), String(pattern)).toBe(true);
+        }
+        expect(sqls.join('\n')).not.toMatch(dialect === 'sqlserver' ? /\bLIMIT\b/ : /\bTOP \d|FETCH NEXT/);
+    });
+
+    test('dialect-specific examples are listed only where they work', () => {
+        expect(examplesFor('generic').map(e => e.id)).not.toContain('upsert');
+        expect(examplesFor('sqlserver').map(e => e.id)).not.toContain('upsert');
+        expect(examplesFor('postgresql').map(e => e.id)).toContain('upsert');
+        expect(examplesFor('all').length).toBeGreaterThan(examplesFor('generic').length);
     });
 });

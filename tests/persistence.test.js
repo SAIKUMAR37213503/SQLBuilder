@@ -206,6 +206,24 @@ describe('template dialects', () => {
         const [old] = createTemplateStore(storage).list();
         expect(old.name).toBe('Old');
         expect(old.dialect).toBeUndefined();
+        expect(old.description).toBeUndefined();
+        expect(old.category).toBeUndefined();
+    });
+
+    test('description and category are cleaned, kept, duplicated, exported and imported', () => {
+        const storage = memoryStorage();
+        const store = createTemplateStore(storage);
+        const t = store.create('Report', w, { dialect: 'mysql', description: '  Monthly\n  totals  ', category: ` ${'x'.repeat(60)} ` });
+        expect(t).toMatchObject({ description: 'Monthly totals', category: 'x'.repeat(40) });
+        expect(store.create('Plain', w, { description: '   ', category: '' })).not.toHaveProperty('description');
+        expect(store.duplicate(t.id)).toMatchObject({ description: 'Monthly totals', dialect: 'mysql' });
+        expect(store.categories()).toEqual(['x'.repeat(40)]);
+        const reloaded = createTemplateStore(storage).list();
+        const parsed = parseTemplatesFile(JSON.stringify(createTemplatesExport(reloaded)));
+        expect(parsed.ok).toBe(true);
+        const imported = createTemplateStore(memoryStorage()).importMany(parsed.ok ? parsed.templates : []);
+        expect(imported.find(x => x.name === 'Report')).toMatchObject({ dialect: 'mysql', description: 'Monthly totals', category: 'x'.repeat(40) });
+        expect(imported.find(x => x.name === 'Plain')).not.toHaveProperty('category');
     });
 });
 

@@ -51,6 +51,11 @@ function press(key, options = {}, target = document) {
 }
 
 const settle = () => vi.advanceTimersByTimeAsync(1000);
+function pickDialect(id) {
+    const picker = $('#dialect-select');
+    picker.value = id;
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+}
 const sql = () => $$('#sql-code .line').map(line => line.textContent.replace(/\n$/, '')).join('\n');
 const issues = () => $$('#issues-list .issue-message').map(n => n.textContent);
 const toast = () => $('#toast').textContent;
@@ -66,6 +71,17 @@ async function answerPrompt(value) {
     const dialog = $('#prompt-dialog');
     expect(dialog.hasAttribute('open')).toBe(true);
     $('#prompt-input').value = value;
+    dialog.querySelector('[value="confirm"]').click();
+    await settle();
+}
+
+async function answerTemplate(name, { description = '', category = '' } = {}) {
+    await settle();
+    const dialog = $('#template-dialog');
+    expect(dialog.hasAttribute('open')).toBe(true);
+    $('#template-name').value = name;
+    $('#template-description').value = description;
+    $('#template-category').value = category;
     dialog.querySelector('[value="confirm"]').click();
     await settle();
 }
@@ -574,7 +590,7 @@ describe('templates', () => {
     test('save, rename, duplicate, load, delete', async () => {
         await fillSimpleSelect('customers');
         $('#template-save-btn').click();
-        await answerPrompt('My customers');
+        await answerTemplate('My customers');
         expect($('#tab-templates').getAttribute('aria-selected')).toBe('true');
         expect($('#template-list').textContent).toContain('My customers');
 
@@ -600,7 +616,7 @@ describe('templates', () => {
         await fillSimpleSelect('customers');
         app.state.settings.dialect = 'postgresql';
         $('#template-save-btn').click();
-        await answerPrompt('Pg customers');
+        await answerTemplate('Pg customers');
         expect(app.templates.list()[0].dialect).toBe('postgresql');
         expect($('#template-list').textContent).toContain('PostgreSQL');
 
@@ -615,7 +631,7 @@ describe('templates', () => {
         await fillSimpleSelect();
         $('#template-save-btn').click();
         await settle();
-        $('#prompt-dialog [value="cancel"]').click();
+        $('#template-dialog [value="cancel"]').click();
         await settle();
         expect(app.templates.list()).toHaveLength(0);
     });
@@ -623,7 +639,7 @@ describe('templates', () => {
     test('export and import templates; malformed files are rejected', async () => {
         await fillSimpleSelect('customers');
         $('#template-save-btn').click();
-        await answerPrompt('Customers');
+        await answerTemplate('Customers');
 
         let exported = null;
         vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => { exported = blob; return 'blob:x'; });
@@ -686,7 +702,7 @@ describe('settings, theme, persistence', () => {
         quote.dispatchEvent(new Event('change', { bubbles: true }));
         await settle();
         expect(sql()).toBe('SELECT TOP 10 [name]\nFROM [users];');
-        expect($('#dialect-badge').textContent).toBe('SQL Server');
+        expect($('#dialect-badge').textContent).toBe('Microsoft SQL Server');
     });
 
     test('with live preview off, SQL appears only after Generate and goes stale', async () => {
@@ -742,7 +758,7 @@ describe('settings, theme, persistence', () => {
         await fillSimpleSelect();
         $('#generate-btn').click();
         $('#template-save-btn').click();
-        await answerPrompt('T');
+        await answerTemplate('T');
         $('#settings-btn').click();
         $('#clear-data-btn').click();
         await answerConfirm(true);
@@ -844,6 +860,7 @@ describe('keyboard and accessibility', () => {
     });
 
     test('INSERT … SELECT and upsert controls have accessible names', async () => {
+        pickDialect('postgresql');
         const radio = $('input[name="query-type"][value="insert"]');
         radio.checked = true;
         radio.dispatchEvent(new Event('change', { bubbles: true }));
@@ -951,5 +968,138 @@ describe('INTERSECT / EXCEPT and window functions in the UI', () => {
         await settle();
         expect(sql()).toContain('RANK() OVER (PARTITION BY department ORDER BY salary DESC) AS dept_rank');
         expect(sql()).toContain('SUM(salary) OVER (ORDER BY hired_on ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_payroll');
+    });
+});
+
+describe('dialects in the UI', () => {
+    const optionText = (path, value) => field(path).querySelector(`option[value="${value}"]`).textContent;
+
+    test('the builder header picker changes the SQL, badge and settings, and keeps the query', async () => {
+        await fillSimpleSelect();
+        type('select.limit', '5');
+        await settle();
+        const before = JSON.stringify(app.state.workspace);
+        expect($('#dialect-select').value).toBe('generic');
+        expect($$('#dialect-select option').map(o => o.textContent)).toEqual(['Generic SQL', 'Microsoft SQL Server', 'PostgreSQL', 'MySQL']);
+
+        pickDialect('sqlserver');
+        await settle();
+        expect(sql()).toBe('SELECT TOP 5 name\nFROM users;');
+        expect($('#dialect-badge').textContent).toBe('Microsoft SQL Server');
+        expect(app.state.settings.dialect).toBe('sqlserver');
+        expect(JSON.parse(backend.getItem(`${STORAGE_PREFIX}settings`)).dialect).toBe('sqlserver');
+        expect(JSON.stringify(app.state.workspace)).toBe(before);
+        expect(toast()).toBe('Dialect: Microsoft SQL Server.');
+
+        // The Settings select stays in sync
+        $('#settings-btn').click();
+        expect($('[data-setting="dialect"]').value).toBe('sqlserver');
+    });
+
+    test('switching to a dialect that can\'t express part of the query keeps it and says so', async () => {
+        await fillSimpleSelect();
+        add('select.joins', 'join');
+        choose('select.joins.0.type', 'FULL JOIN');
+        type('select.joins.0.source.table', 'teams');
+        type('select.joins.0.on.items.0.left', 'users.team_id');
+        type('select.joins.0.on.items.0.value', 'teams.id');
+        await settle();
+        pickDialect('mysql');
+        await settle();
+        expect(app.state.workspace.select.joins[0].type).toBe('FULL JOIN');
+        expect(toast()).toBe('Dialect: MySQL. 1 part of this query isn\'t supported there; see Checks.');
+        expect(issues().join()).toContain('MySQL doesn\'t support FULL JOIN');
+        expect($('#sql-output').hidden).toBe(true);
+        pickDialect('postgresql');
+        await settle();
+        expect(sql()).toContain('FULL JOIN teams');
+    });
+
+    test('options a dialect can\'t use stay available, labelled', async () => {
+        await fillSimpleSelect();
+        add('select.joins', 'join');
+        add('select.setOps', 'setOp');
+        expect(optionText('select.joins.0.type', 'FULL JOIN')).toBe('FULL JOIN');
+        pickDialect('mysql');
+        expect(optionText('select.joins.0.type', 'FULL JOIN')).toBe('FULL JOIN (not in MySQL)');
+        pickDialect('sqlserver');
+        expect(optionText('select.setOps.0.op', 'INTERSECT ALL')).toBe('INTERSECT ALL — rows in both, keep duplicates (not in SQL Server)');
+        expect(optionText('select.setOps.0.op', 'INTERSECT')).toBe('INTERSECT — rows in both queries');
+        add('select.columns', 'window');
+        expect(optionText('select.columns.1.func', 'NTH_VALUE')).toBe('NTH_VALUE() (not in SQL Server)');
+    });
+
+    test('the row-limit field is called TOP on SQL Server', () => {
+        pickDialect('sqlserver');
+        expect($(`label[for="${field('select.limit').id}"]`).textContent).toBe('TOP');
+        expect($('[data-section="select:sorting"] summary').textContent).toContain('ORDER BY, TOP & OFFSET');
+        pickDialect('postgresql');
+        expect($(`label[for="${field('select.limit').id}"]`).textContent).toBe('LIMIT');
+    });
+
+    test('upsert controls appear only where the dialect supports them, unless already used', async () => {
+        const radio = $('input[name="query-type"][value="insert"]');
+        radio.checked = true;
+        radio.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(field('insert.upsert.mode')).toBeNull();
+        expect($('.dialect-note').textContent).toBe('Conflict handling (upsert) is available for PostgreSQL and MySQL, not Generic SQL.');
+        pickDialect('postgresql');
+        choose('insert.upsert.mode', 'nothing');
+        pickDialect('sqlserver');
+        // Kept visible so the user can see and change what Checks reports
+        expect(field('insert.upsert.mode').value).toBe('nothing');
+        pickDialect('mysql');
+        expect(optionText('insert.upsert.mode', 'nothing')).toBe('Skip the row (DO NOTHING) (not in MySQL)');
+    });
+
+    test('examples follow the dialect and preview its SQL', () => {
+        const names = () => $$('#example-list .library-name').map(n => n.textContent);
+        const preview = (name) => $$('#example-list .library-item').find(li => li.textContent.includes(name)).querySelector('.library-snippet').textContent;
+        expect($('#example-filter').value).toBe('generic');
+        expect(names()).not.toContain('Upsert: insert or update');
+        expect(preview('Filter, sort and limit')).toBe('SELECT Name, Salary FROM Employees WHERE Salary > 50000 ORDER BY Salary DESC LIMIT 10;');
+        pickDialect('sqlserver');
+        expect($('#example-filter').value).toBe('sqlserver');
+        expect(preview('Filter, sort and limit')).toBe('SELECT TOP 10 Name, Salary FROM Employees WHERE Salary > 50000 ORDER BY Salary DESC;');
+        pickDialect('postgresql');
+        expect(names()).toContain('Upsert: insert or update');
+        const filter = $('#example-filter');
+        filter.value = 'all';
+        filter.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(names()).toHaveLength(16);
+    });
+
+    test('templates keep a description and category, and can be filtered by dialect', async () => {
+        await fillSimpleSelect();
+        $('#template-save-btn').click();
+        await answerTemplate('Users', { description: 'All user names', category: 'Reports' });
+        pickDialect('mysql');
+        $('#template-save-btn').click();
+        await settle();
+        expect($('#template-dialect-note').textContent).toBe('Saved for MySQL; loading it switches back to that dialect.');
+        expect($$('#template-categories option').map(o => o.value)).toEqual(['Reports']);
+        $('#template-name').value = 'Users MySQL';
+        $('#template-dialog [value="confirm"]').click();
+        await settle();
+
+        const first = app.templates.list().find(t => t.name === 'Users');
+        expect(first).toMatchObject({ dialect: 'generic', description: 'All user names', category: 'Reports' });
+        const item = $$('#template-list .library-item').find(li => li.textContent.includes('All user names'));
+        expect(item.textContent).toContain('Reports');
+        expect(item.textContent).toContain('Generic SQL');
+
+        const filter = $('#template-filter');
+        filter.value = 'mysql';
+        filter.dispatchEvent(new Event('change', { bubbles: true }));
+        expect($$('#template-list .library-name').map(n => n.textContent)).toEqual(['Users MySQL']);
+        filter.value = 'postgresql';
+        filter.dispatchEvent(new Event('change', { bubbles: true }));
+        expect($('#template-list').textContent).toBe('No templates for PostgreSQL. Choose “All dialects” to see all 2.');
+    });
+
+    test('the dialect picker has an accessible name and description', () => {
+        const picker = $('#dialect-select');
+        expect(picker.closest('label').textContent).toContain('Dialect');
+        expect($(`#${picker.getAttribute('aria-describedby')}`).textContent).toContain('Your query is kept');
     });
 });

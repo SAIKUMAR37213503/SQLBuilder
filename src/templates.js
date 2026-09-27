@@ -4,11 +4,28 @@ import { createId } from './storage.js';
 import { normalizeWorkspace } from './serialization.js';
 import { DIALECTS } from './dialects.js';
 
-// Optional dialect a template was saved with (templates from older versions have none)
-const cleanDialect = (dialect) => (typeof dialect === 'string' && Object.hasOwn(DIALECTS, dialect) ? dialect : undefined);
-
 export const TEMPLATE_LIMIT = 200;
 export const TEMPLATE_NAME_MAX = 80;
+export const TEMPLATE_DESCRIPTION_MAX = 200;
+export const TEMPLATE_CATEGORY_MAX = 40;
+
+const cleanText = (text, max) => (typeof text === 'string' ? text.trim().replace(/\s+/g, ' ').slice(0, max) : '');
+
+/**
+ * Optional details of a template: the dialect it was saved for, a description
+ * and a category. Templates from older versions have none of them; empty or
+ * unknown values are left out.
+ * @param {{ dialect?: any, description?: any, category?: any }} source
+ */
+export function templateDetails({ dialect, description, category } = {}) {
+    const details = {};
+    if (typeof dialect === 'string' && Object.hasOwn(DIALECTS, dialect)) details.dialect = dialect;
+    const text = cleanText(description, TEMPLATE_DESCRIPTION_MAX);
+    if (text) details.description = text;
+    const group = cleanText(category, TEMPLATE_CATEGORY_MAX);
+    if (group) details.category = group;
+    return /** @type {{ dialect?: string, description?: string, category?: string }} */ (details);
+}
 const TEMPLATES_KEY = 'templates';
 
 export class TemplateError extends Error {}
@@ -27,7 +44,7 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
                     name: t.name.slice(0, TEMPLATE_NAME_MAX),
                     createdAt: Number(t.createdAt) || 0,
                     updatedAt: Number(t.updatedAt) || 0,
-                    ...(cleanDialect(t.dialect) ? { dialect: t.dialect } : {}),
+                    ...templateDetails(t),
                     workspace: normalizeWorkspace(t.workspace)
                 }];
             } catch {
@@ -87,9 +104,9 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
         /**
          * @param {string} name
          * @param {any} workspace
-         * @param {{ dialect?: string }} [options]
+         * @param {{ dialect?: string, description?: string, category?: string }} [details]
          */
-        create(name, workspace, { dialect } = {}) {
+        create(name, workspace, details = {}) {
             if (templates.length >= TEMPLATE_LIMIT) throw new TemplateError(`You can keep up to ${TEMPLATE_LIMIT} templates.`);
             const time = now();
             const template = {
@@ -97,12 +114,15 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
                 name: uniqueName(cleanName(name)),
                 createdAt: time,
                 updatedAt: time,
-                ...(cleanDialect(dialect) ? { dialect } : {}),
+                ...templateDetails(details),
                 workspace: structuredClone(workspace)
             };
             withTransaction(() => { templates = [...templates, template]; });
             return template;
         },
+
+        /** Categories in use, for suggestions when saving. */
+        categories: () => [...new Set(templates.map(t => t.category).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
 
         rename(id, name) {
             const existing = find(id);
@@ -115,7 +135,7 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
 
         duplicate(id) {
             const source = find(id);
-            return this.create(`${source.name} copy`, source.workspace, { dialect: source.dialect });
+            return this.create(`${source.name} copy`, source.workspace, source);
         },
 
         remove(id) {
@@ -136,7 +156,7 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
                         name: uniqueName(cleanName(item.name)),
                         createdAt: time,
                         updatedAt: time,
-                        ...(cleanDialect(item.dialect) ? { dialect: item.dialect } : {}),
+                        ...templateDetails(item),
                         workspace: structuredClone(item.workspace)
                     };
                     templates = [...templates, template];

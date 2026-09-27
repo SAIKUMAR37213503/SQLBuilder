@@ -62,6 +62,29 @@ export async function promptDialog(dialog, { title, label, value = '', confirmTe
     return result === 'confirm' ? input.value.trim() : null;
 }
 
+/**
+ * Asks for a template's name, description and category.
+ * @param {any} dialog
+ * @param {{ name: string, categories: string[], note: string }} options
+ * @returns {Promise<{ name: string, description: string, category: string } | null>} null when cancelled
+ */
+export async function templateDialog(dialog, { name, categories, note }) {
+    const nameInput = dialog.querySelector('#template-name');
+    const description = dialog.querySelector('#template-description');
+    const category = dialog.querySelector('#template-category');
+    nameInput.value = name;
+    description.value = '';
+    category.value = '';
+    dialog.querySelector('datalist').replaceChildren(...categories.map(c => Object.assign(document.createElement('option'), { value: c })));
+    dialog.querySelector('#template-dialect-note').textContent = note;
+    const result = await showDialog(dialog, () => {
+        nameInput.focus();
+        nameInput.select();
+    });
+    if (result !== 'confirm') return null;
+    return { name: nameInput.value.trim(), description: description.value.trim(), category: category.value.trim() };
+}
+
 /** @returns {Promise<boolean>} */
 export async function confirmDialog(dialog, { title, message, confirmText = 'Confirm' }) {
     dialog.querySelector('.dialog-title').textContent = title;

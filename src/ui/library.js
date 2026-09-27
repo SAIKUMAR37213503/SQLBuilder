@@ -46,17 +46,26 @@ export function renderHistoryList(list, entries, { enabled, filtered }) {
     }));
 }
 
-export function renderTemplateList(list, templates) {
+/**
+ * @param {any} list
+ * @param {any[]} templates the templates to show (already filtered)
+ * @param {{ total?: number, filterLabel?: string }} [options] total saved, and the dialect filter's label ('' = all)
+ */
+export function renderTemplateList(list, templates, { total = templates.length, filterLabel = '' } = {}) {
     if (templates.length === 0) {
-        list.replaceChildren(h('li', { class: 'empty-state' }, 'No saved templates yet. Build a query, then choose “Save current query”.'));
+        list.replaceChildren(h('li', { class: 'empty-state' }, total > 0 && filterLabel
+            ? `No templates for ${filterLabel}. Choose “All dialects” to see all ${total}.`
+            : 'No saved templates yet. Build a query, then choose “Save current query”.'));
         return;
     }
     list.replaceChildren(...templates.map(t => h('li', { class: 'library-item' },
         h('div', { class: 'library-meta' },
             h('span', { class: `type-badge type-${t.workspace.type}` }, t.workspace.type.toUpperCase()),
             h('strong', { class: 'library-name' }, t.name),
-            t.dialect ? h('span', {}, getDialect(t.dialect).label) : null
+            h('span', {}, t.dialect ? getDialect(t.dialect).label : 'Any dialect'),
+            t.category ? h('span', { class: 'library-chip' }, t.category) : null
         ),
+        t.description ? h('p', { class: 'library-detail' }, t.description) : null,
         h('p', { class: 'library-detail' }, `Updated ${formatTime(t.updatedAt)}`),
         h('div', { class: 'library-actions' },
             action('Load', 'template-load', t.id, { label: `Load template ${t.name}`, variant: 'secondary' }),
@@ -67,15 +76,24 @@ export function renderTemplateList(list, templates) {
     )));
 }
 
-export function renderExampleList(list, examples) {
+/**
+ * @param {any} list
+ * @param {any[]} examples the examples to show (already filtered by dialect)
+ * @param {(workspace: any) => string} preview generated SQL for a workspace in the shown dialect
+ */
+export function renderExampleList(list, examples, preview) {
     list.replaceChildren(...examples.map(example => {
-        const type = example.build().type;
+        const workspace = example.build();
+        const type = workspace.type;
+        const sql = preview(workspace);
         return h('li', { class: 'library-item' },
             h('div', { class: 'library-meta' },
                 h('span', { class: `type-badge type-${type}` }, type.toUpperCase()),
                 h('strong', { class: 'library-name' }, example.name)
             ),
             h('p', { class: 'library-detail' }, example.description),
+            // One-line SQL, clamped to a few lines by CSS
+            sql ? h('pre', { class: 'library-snippet example-sql' }, sql) : null,
             h('div', { class: 'library-actions' },
                 action('Load example', 'example-load', example.id, { label: `Load example: ${example.name}`, variant: 'secondary' }))
         );

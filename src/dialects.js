@@ -50,6 +50,9 @@
 // parameters.ignoredNote     the tip shown once when names are dropped
 //
 // minVersions                features that need a later release, shown as tips
+//
+// ui                         wording for dialect-specific builder fields
+//   limitLabel, limitHint    the row-limit field (LIMIT, or TOP on SQL Server)
 
 const escapeSingleQuotes = (text) => text.replace(/'/g, "''");
 
@@ -98,6 +101,7 @@ function defineDialect(spec) {
         restrictions: Object.freeze({ ...DEFAULT_RESTRICTIONS, ...spec.restrictions }),
         parameters: Object.freeze({ names: 'kept', ignoredNote: '', ...spec.parameters }),
         minVersions: Object.freeze({ ...spec.minVersions }),
+        ui: Object.freeze({ limitLabel: 'LIMIT', limitHint: '', ...spec.ui }),
         notes: Object.freeze([...(spec.notes || [])])
     });
 }
@@ -113,6 +117,43 @@ export const DIALECTS = {
         parameter: (name) => (NAMED_RE.test(name) ? `:${name}` : '?'),
         insertedValue: null,
         notes: ['Parameters are written as ? (or :name when named).', 'Upserts need a specific dialect (PostgreSQL or MySQL).']
+    }),
+    sqlserver: defineDialect({
+        id: 'sqlserver',
+        label: 'Microsoft SQL Server',
+        shortLabel: 'SQL Server',
+        quoteIdentifier: (name) => `[${name.replace(/]/g, ']]')}]`,
+        quoteString: (text) => `'${escapeSingleQuotes(text)}'`,
+        booleanLiteral: (value) => (value ? '1' : '0'),
+        // TOP for a simple limit; OFFSET … FETCH (which needs ORDER BY) otherwise
+        paginate({ limit, offset, hasOrderBy, hasSetOps }) {
+            if (limit === '' && offset === '') return { clauses: [] };
+            if (offset === '' && !hasSetOps) return { top: limit, clauses: [] };
+            const clauses = [`OFFSET ${offset === '' ? '0' : offset} ROWS`];
+            if (limit !== '') clauses.push(`FETCH NEXT ${limit} ROWS ONLY`);
+            return { clauses, needsOrderBy: !hasOrderBy };
+        },
+        parameter: (name, position) => (NAMED_RE.test(name) ? `@${name}` : `@p${position}`),
+        insertedValue: null,
+        supports: {
+            booleanKeywords: false,
+            setOperators: ['UNION', 'UNION ALL', 'INTERSECT', 'EXCEPT'],
+            nthValue: false,
+            top: true,
+            limitOffset: false,
+            offsetFetch: true
+        },
+        ui: {
+            limitLabel: 'TOP',
+            limitHint: 'Written as TOP n, or as OFFSET … FETCH NEXT n ROWS ONLY when there is an OFFSET or a UNION.'
+        },
+        restrictions: {
+            subqueryOrderByNeedsLimit: true,
+            rankingNeedsOrderBy: true,
+            valueFunctionsNeedOrderBy: true,
+            frameNeedsOrderBy: true
+        },
+        notes: ['Booleans are written as 1/0.', 'LIMIT becomes TOP, or OFFSET … FETCH when an offset or set operation is used.', 'No INTERSECT ALL / EXCEPT ALL or NTH_VALUE.', 'Parameters are written as @name (or @p1, @p2, … when unnamed).', 'Upserts (MERGE) are not supported yet.']
     }),
     postgresql: defineDialect({
         id: 'postgresql',
@@ -155,39 +196,6 @@ export const DIALECTS = {
         // INTERSECT / EXCEPT exist since MySQL 8.0.31
         minVersions: { INTERSECT: '8.0.31', EXCEPT: '8.0.31' },
         notes: ['FULL JOIN is not supported by MySQL.', 'Window functions need MySQL 8.0+; INTERSECT / EXCEPT need 8.0.31+.', 'Parameters are written as ?.', 'Upsert: ON DUPLICATE KEY UPDATE.']
-    }),
-    sqlserver: defineDialect({
-        id: 'sqlserver',
-        label: 'SQL Server',
-        shortLabel: 'SQL Server',
-        quoteIdentifier: (name) => `[${name.replace(/]/g, ']]')}]`,
-        quoteString: (text) => `'${escapeSingleQuotes(text)}'`,
-        booleanLiteral: (value) => (value ? '1' : '0'),
-        // TOP for a simple limit; OFFSET … FETCH (which needs ORDER BY) otherwise
-        paginate({ limit, offset, hasOrderBy, hasSetOps }) {
-            if (limit === '' && offset === '') return { clauses: [] };
-            if (offset === '' && !hasSetOps) return { top: limit, clauses: [] };
-            const clauses = [`OFFSET ${offset === '' ? '0' : offset} ROWS`];
-            if (limit !== '') clauses.push(`FETCH NEXT ${limit} ROWS ONLY`);
-            return { clauses, needsOrderBy: !hasOrderBy };
-        },
-        parameter: (name, position) => (NAMED_RE.test(name) ? `@${name}` : `@p${position}`),
-        insertedValue: null,
-        supports: {
-            booleanKeywords: false,
-            setOperators: ['UNION', 'UNION ALL', 'INTERSECT', 'EXCEPT'],
-            nthValue: false,
-            top: true,
-            limitOffset: false,
-            offsetFetch: true
-        },
-        restrictions: {
-            subqueryOrderByNeedsLimit: true,
-            rankingNeedsOrderBy: true,
-            valueFunctionsNeedOrderBy: true,
-            frameNeedsOrderBy: true
-        },
-        notes: ['Booleans are written as 1/0.', 'LIMIT becomes TOP, or OFFSET … FETCH when an offset or set operation is used.', 'No INTERSECT ALL / EXCEPT ALL or NTH_VALUE.', 'Parameters are written as @name (or @p1, @p2, … when unnamed).', 'Upserts (MERGE) are not supported yet.']
     })
 };
 

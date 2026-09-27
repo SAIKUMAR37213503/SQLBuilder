@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=02c6d86a96df">
+    <link rel="stylesheet" href="style.css?v=7d2757ac14c0">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -41,7 +41,14 @@
         <main class="workspace">
             <section class="panel builder-panel" aria-labelledby="builder-heading">
                 <div class="panel-header">
-                    <h2 id="builder-heading">Build</h2>
+                    <div class="builder-title">
+                        <h2 id="builder-heading">Build</h2>
+                        <label class="dialect-picker">
+                            <span class="dialect-picker-label">Dialect</span>
+                            <select id="dialect-select" class="dialect-select" aria-describedby="dialect-picker-note"></select>
+                        </label>
+                        <span class="visually-hidden" id="dialect-picker-note">Changes the SQL that is generated and the checks. Your query is kept.</span>
+                    </div>
                     <div class="type-tabs" role="radiogroup" aria-label="Query type">
                         <label class="type-tab"><input type="radio" name="query-type" value="select" checked><span>SELECT</span></label>
                         <label class="type-tab"><input type="radio" name="query-type" value="insert"><span>INSERT</span></label>
@@ -112,11 +119,21 @@
                             <button type="button" class="btn btn-secondary btn-sm" id="template-save-btn">Save current query…</button>
                             <button type="button" class="btn btn-ghost btn-sm" id="template-import-btn">Import…</button>
                             <button type="button" class="btn btn-ghost btn-sm" id="template-export-btn">Export all</button>
+                            <label class="library-filter">
+                                <span>Dialect</span>
+                                <select id="template-filter" class="select select-sm"></select>
+                            </label>
                         </div>
                         <ul class="library-list" id="template-list"></ul>
                     </div>
 
                     <div role="tabpanel" id="panel-examples" aria-labelledby="tab-examples" class="tab-panel" hidden>
+                        <div class="library-toolbar">
+                            <label class="library-filter">
+                                <span>Examples for</span>
+                                <select id="example-filter" class="select select-sm"></select>
+                            </label>
+                        </div>
                         <ul class="library-list" id="example-list"></ul>
                     </div>
                 </section>
@@ -189,6 +206,30 @@
         </form>
     </dialog>
 
+    <dialog id="template-dialog" class="dialog dialog-sm" aria-labelledby="template-dialog-title">
+        <form method="dialog" class="dialog-body">
+            <h2 id="template-dialog-title" class="dialog-title">Save as template</h2>
+            <div class="field">
+                <label class="field-label" for="template-name">Name</label>
+                <input type="text" id="template-name" class="input" maxlength="80" autocomplete="off" required>
+            </div>
+            <div class="field">
+                <label class="field-label" for="template-description">Description <span class="field-optional">(optional)</span></label>
+                <input type="text" id="template-description" class="input" maxlength="200" autocomplete="off">
+            </div>
+            <div class="field">
+                <label class="field-label" for="template-category">Category <span class="field-optional">(optional)</span></label>
+                <input type="text" id="template-category" class="input" maxlength="40" autocomplete="off" list="template-categories" placeholder="e.g. Reports">
+                <datalist id="template-categories"></datalist>
+            </div>
+            <p class="field-hint" id="template-dialect-note"></p>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary" value="confirm">Save</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="confirm-dialog" class="dialog dialog-sm" aria-labelledby="confirm-title" aria-describedby="confirm-message">
         <form method="dialog" class="dialog-body">
             <h2 id="confirm-title" class="dialog-title">Are you sure?</h2>
@@ -215,6 +256,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=35d9edfeebf7" defer></script>
+    <script src="dist/sqlbuilder.js?v=b9a8b66ec097" defer></script>
 </body>
 </html>
