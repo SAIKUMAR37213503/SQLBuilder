@@ -471,3 +471,105 @@ describe('dialect and correctness checks', () => {
         expect(issues.filter(i => i.message.includes('stored as the number'))).toHaveLength(1);
     });
 });
+
+describe('INSERT … SELECT, upserts and parameters', () => {
+    const baseInsert = (extra = {}) => {
+        const q = createInsert();
+        Object.assign(q, { table: 'customers', columns: 'email, name', rows: [{ values: "'a@x.io', 'Ada'" }] }, extra);
+        return q;
+    };
+
+    test('INSERT … SELECT column count must match the listed columns', () => {
+        const q = baseInsert({ source: 'select' });
+        q.select = select({ columns: [createColumn('a')] });
+        const issue = find(validateQuery(q), 'SELECT returns 1 column but 2 columns are listed');
+        expect(issue.level).toBe('error');
+        expect(issue.path).toBe('select.columns');
+        q.select.columns.push(createColumn('b'));
+        expect(hasErrors(validateQuery(q))).toBe(false);
+    });
+
+    test('INSERT … SELECT validates the query, forbids CTEs and allows ORDER BY on SQL Server', () => {
+        const q = baseInsert({ source: 'select' });
+        q.select = select({ columns: [createColumn('a'), createColumn('b')], orderBy: [createOrderItem('a')] });
+        expect(hasErrors(validateQuery(q, { dialect: 'sqlserver' }))).toBe(false);
+        q.select.ctes = [createCte()];
+        expect(find(validateQuery(q), 'WITH (CTEs) can only be used on the main query')).toBeTruthy();
+        q.select.ctes = [];
+        q.select.from.table = '';
+        expect(find(validateQuery(q), 'table to select from').path).toBe('select.from.table');
+    });
+
+    test('VALUES rows are not checked when the rows come from a query', () => {
+        const q = baseInsert({ source: 'select', rows: [{ values: '' }] });
+        q.select = select({ columns: [createColumn('a'), createColumn('b')] });
+        expect(hasErrors(validateQuery(q))).toBe(false);
+    });
+
+    test('upsert support per dialect', () => {
+        const q = baseInsert({ upsert: { mode: 'nothing', conflict: '', set: [] } });
+        expect(find(validateQuery(q, { dialect: 'generic' }), "isn't available for Generic SQL").level).toBe('error');
+        expect(find(validateQuery(q, { dialect: 'sqlserver' }), "isn't available for SQL Server")).toBeTruthy();
+        expect(hasErrors(validateQuery(q, { dialect: 'postgresql' }))).toBe(false);
+        expect(find(validateQuery(q, { dialect: 'mysql' }), 'MySQL has no “do nothing”').level).toBe('error');
+    });
+
+    test('PostgreSQL DO UPDATE needs conflict columns and assignments', () => {
+        const q = baseInsert({ upsert: { mode: 'update', conflict: '', set: [] } });
+        const issues = validateQuery(q, { dialect: 'postgresql' });
+        expect(find(issues, 'needs the conflict columns').path).toBe('upsert.conflict');
+        expect(find(issues, 'Add at least one column to update').path).toBe('upsert.set');
+        q.upsert.conflict = 'email';
+        q.upsert.set = [{ column: 'name', valueType: 'inserted', value: '' }];
+        expect(hasErrors(validateQuery(q, { dialect: 'postgresql' }))).toBe(false);
+    });
+
+    test('upsert assignments: invalid, duplicate and not-inserted columns', () => {
+        const q = baseInsert({
+            upsert: {
+                mode: 'update', conflict: 'email',
+                set: [
+                    { column: 'name', valueType: 'inserted', value: '' },
+                    { column: 'name', valueType: 'value', value: 'x' },
+                    { column: 'visits', valueType: 'inserted', value: '' },
+                    { column: 'a b', valueType: 'value', value: '1' }
+                ]
+            }
+        });
+        const issues = validateQuery(q, { dialect: 'postgresql' });
+        expect(find(issues, 'is updated twice')).toBeTruthy();
+        expect(find(issues, "isn't one of the inserted columns").level).toBe('warning');
+        expect(find(issues, "“a b” isn't a valid column name")).toBeTruthy();
+    });
+
+    test('MySQL notes the ignored conflict columns and VALUES() deprecation', () => {
+        const q = baseInsert({ upsert: { mode: 'update', conflict: 'email', set: [{ column: 'name', valueType: 'inserted', value: '' }] } });
+        const issues = validateQuery(q, { dialect: 'mysql' });
+        expect(hasErrors(issues)).toBe(false);
+        expect(find(issues, "aren't part of the SQL").level).toBe('info');
+        expect(find(issues, 'deprecated from 8.0.20').level).toBe('info');
+    });
+
+    test('parameter names', () => {
+        const q = select({ where: where(cond('a', '=', 'bad name', { valueType: 'param' })) });
+        expect(find(validateQuery(q), 'can only contain letters').level).toBe('error');
+        const numbered = select({ where: where(cond('a', '=', '2', { valueType: 'param' })) });
+        expect(hasErrors(validateQuery(numbered, { dialect: 'postgresql' }))).toBe(false);
+        expect(find(validateQuery(numbered, { dialect: 'sqlserver' }), 'must start with a letter')).toBeTruthy();
+        const named = select({ where: where(cond('a', '=', 'x', { valueType: 'param' }), cond('b', '=', 'y', { valueType: 'param' })) });
+        const tips = validateQuery(named, { dialect: 'mysql' }).filter(i => i.message.includes('parameter names'));
+        expect(tips).toHaveLength(1);
+        expect(validateQuery(named, { dialect: 'sqlserver' })).toEqual([]);
+    });
+
+    test('parameters are not offered for list operators', () => {
+        const q = select({ where: where(cond('a', 'IN', '', { valueType: 'param' })) });
+        expect(find(validateQuery(q), "can't take a parameter")).toBeTruthy();
+    });
+
+    test('UPDATE SET with a parameter', () => {
+        const q = createUpdate();
+        Object.assign(q, { table: 't', set: [{ column: 'x', valueType: 'param', value: '' }], where: where(cond('id', '=', '1')) });
+        expect(validateQuery(q)).toEqual([]);
+    });
+});

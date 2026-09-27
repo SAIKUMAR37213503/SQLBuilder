@@ -11,6 +11,7 @@ import { generateSQL } from './generator.js';
 import { validateWorkspace, hasErrors, summarize } from './validation.js';
 import { listDialects, getDialect } from './dialects.js';
 import { createStorage } from './storage.js';
+import { splitTopLevel } from './sql-utils.js';
 import { loadSettings, saveSettings, DEFAULT_SETTINGS } from './settings.js';
 import { createHistory } from './history.js';
 import { createTemplateStore, TemplateError } from './templates.js';
@@ -47,7 +48,8 @@ const ITEM_FACTORIES = {
     cte: () => createCte(),
     setOp: () => createSetOp(),
     row: () => ({ values: '' }),
-    assignment: () => createAssignment()
+    assignment: () => createAssignment(),
+    upsertAssignment: () => ({ ...createAssignment(), valueType: 'inserted' })
 };
 
 /**
@@ -385,6 +387,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         const spec = OPERATORS[c.op];
         if (!spec) return;
         if (spec.subqueryOnly) c.valueType = 'subquery';
+        if (c.valueType === 'param' && spec.operands !== 1 && spec.operands !== 2) c.valueType = 'value';
         if (c.valueType === 'subquery' && !spec.subquery) c.valueType = 'value';
         if (c.valueType === 'subquery' && !c.subquery) {
             c.subquery = createSelect({ columns: [createColumn(spec.subqueryOnly ? '1' : '')] });
@@ -426,6 +429,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     const owner = getAt(state.workspace, parentPath(path));
                     if (owner && owner.kind === 'condition') normalizeCondition(owner);
                 }
+                if (path.endsWith('upsert.mode') && value === 'update') {
+                    const upsert = getAt(state.workspace, parentPath(path));
+                    if (upsert.set.length === 0) upsert.set.push(ITEM_FACTORIES.upsertAssignment());
+                }
             }
         };
 
@@ -460,6 +467,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             const index = Number(splitPath(path).pop());
             mutate(() => { getAt(state.workspace, listPath).splice(index, 1); },
                 { action: 'add-item', path: listPath });
+        } else if (action === 'fill-upsert') {
+            mutate(() => fillUpsert(path), { path, action: 'fill-upsert' });
         } else if (action === 'move-up' || action === 'move-down') {
             const listPath = parentPath(path);
             const index = Number(splitPath(path).pop());
@@ -468,6 +477,24 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             if (to < 0 || to >= list.length) return;
             mutate(() => { [list[index], list[to]] = [list[to], list[index]]; },
                 { action, path: `${listPath}.${to}` });
+        }
+    }
+
+    // Upsert: update every inserted column (except the conflict key) with the
+    // value the row tried to insert. Existing assignments for other columns stay.
+    function fillUpsert(upsertPath) {
+        const insert = getAt(state.workspace, parentPath(upsertPath));
+        const upsert = insert.upsert;
+        const key = (text) => String(text).trim().toLowerCase();
+        const conflict = new Set(splitTopLevel(upsert.conflict).filter(Boolean).map(key));
+        const kept = upsert.set.filter(a => key(a.column) !== '');
+        const present = new Set(kept.map(a => key(a.column)));
+        const added = splitTopLevel(insert.columns).filter(Boolean)
+            .filter(c => !conflict.has(key(c)) && !present.has(key(c)))
+            .map(column => ({ column, valueType: 'inserted', value: '' }));
+        upsert.set = [...kept, ...added];
+        if (added.length === 0 && kept.length === 0) {
+            toast('List the INSERT columns first, then fill the update from them.');
         }
     }
 
@@ -788,7 +815,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                 }
                 case 'example-load': {
                     const example = EXAMPLES.find(e => e.id === id);
-                    if (example) replaceWorkspace(example.build(), `Loaded example “${example.name}”.`);
+                    if (!example) return;
+                    // Dialect-specific examples (upserts) switch to a dialect they work in
+                    const switched = example.dialects && !example.dialects.includes(state.settings.dialect)
+                        ? switchDialect(example.dialects[0]) : '';
+                    replaceWorkspace(example.build(), `Loaded example “${example.name}”${switched}.`);
                     break;
                 }
                 default:

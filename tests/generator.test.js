@@ -489,3 +489,88 @@ describe('correctness fixes', () => {
         expect(formatLiteral("n'x'")).toBe("n'x'");
     });
 });
+
+describe('INSERT … SELECT, upserts and parameters', () => {
+    const insertSelect = () => {
+        const q = createInsert();
+        Object.assign(q, { table: 'archive', columns: 'id, total', source: 'select' });
+        q.select = select({ table: 'orders', columns: ['id', 'total'], where: where(cond('total', '>', '100')) });
+        return q;
+    };
+
+    test('INSERT … SELECT', () => {
+        expect(generateQuery(insertSelect())).toBe(
+            'INSERT INTO archive (id, total)\nSELECT\n    id,\n    total\nFROM orders\nWHERE total > 100;'
+        );
+        expect(generateQuery(insertSelect(), { pretty: false })).toBe(
+            'INSERT INTO archive (id, total) SELECT id, total FROM orders WHERE total > 100;'
+        );
+    });
+
+    test('INSERT … SELECT keeps TOP / LIMIT and quoting per dialect', () => {
+        const q = insertSelect();
+        q.select.limit = '5';
+        expect(generateQuery(q, { dialect: 'sqlserver', quoteIdentifiers: true })).toBe(
+            'INSERT INTO [archive] ([id], [total])\nSELECT TOP 5\n    [id],\n    [total]\nFROM [orders]\nWHERE [total] > 100;'
+        );
+    });
+
+    const upsertInsert = (mode, set = []) => {
+        const q = createInsert();
+        Object.assign(q, { table: 'customers', columns: 'email, name', rows: [{ values: "'a@x.io', 'Ada'" }] });
+        q.upsert = { mode, conflict: 'email', set };
+        return q;
+    };
+    const inserted = (column) => ({ column, valueType: 'inserted', value: '' });
+
+    test('PostgreSQL ON CONFLICT DO NOTHING / DO UPDATE', () => {
+        expect(generateQuery(upsertInsert('nothing'), { dialect: 'postgresql' })).toBe(
+            "INSERT INTO customers (email, name)\nVALUES ('a@x.io', 'Ada')\nON CONFLICT (email) DO NOTHING;"
+        );
+        expect(generateQuery(upsertInsert('update', [inserted('name')]), { dialect: 'postgresql' })).toBe(
+            "INSERT INTO customers (email, name)\nVALUES ('a@x.io', 'Ada')\nON CONFLICT (email) DO UPDATE\nSET name = EXCLUDED.name;"
+        );
+        const two = upsertInsert('update', [inserted('name'), { column: 'visits', valueType: 'column', value: 'customers.visits + 1' }]);
+        expect(generateQuery(two, { dialect: 'postgresql', pretty: false })).toBe(
+            "INSERT INTO customers (email, name) VALUES ('a@x.io', 'Ada') ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, visits = customers.visits + 1;"
+        );
+    });
+
+    test('MySQL ON DUPLICATE KEY UPDATE', () => {
+        expect(generateQuery(upsertInsert('update', [inserted('name'), { column: 'n', valueType: 'value', value: '1' }]), { dialect: 'mysql' })).toBe(
+            "INSERT INTO customers (email, name)\nVALUES ('a@x.io', 'Ada')\nON DUPLICATE KEY UPDATE\n    name = VALUES(name),\n    n = 1;"
+        );
+    });
+
+    test('dialects without upsert support emit no conflict clause', () => {
+        expect(generateQuery(upsertInsert('nothing'), { dialect: 'sqlserver' })).not.toContain('CONFLICT');
+    });
+
+    test('parameters are written in each dialect\'s style and numbered in text order', () => {
+        const q = select({
+            where: where(
+                cond('a', '=', '', { valueType: 'param' }),
+                cond('b', 'BETWEEN', 'lo', { valueType: 'param', value2: 'hi' }),
+                cond('c', '=', '7', { valueType: 'param' })
+            )
+        });
+        const w = (dialect) => generateQuery(q, { dialect }).split('\n').slice(2).join('\n');
+        expect(w('generic')).toBe('WHERE a = ?\n    AND b BETWEEN :lo AND :hi\n    AND c = ?;');
+        expect(w('postgresql')).toBe('WHERE a = $1\n    AND b BETWEEN $2 AND $3\n    AND c = $7;');
+        expect(w('mysql')).toBe('WHERE a = ?\n    AND b BETWEEN ? AND ?\n    AND c = ?;');
+        expect(w('sqlserver')).toBe('WHERE a = @p1\n    AND b BETWEEN @lo AND @hi\n    AND c = @p4;');
+    });
+
+    test('parameters in UPDATE SET come before those in WHERE', () => {
+        const q = createUpdate();
+        Object.assign(q, { table: 't', set: [{ column: 'x', valueType: 'param', value: '' }], where: where(cond('id', '=', '', { valueType: 'param' })) });
+        expect(generateQuery(q, { dialect: 'postgresql' })).toBe('UPDATE t\nSET x = $1\nWHERE id = $2;');
+    });
+
+    test('parameters inside a subquery follow text order', () => {
+        const sub = select({ table: 'b', columns: ['id'], where: where(cond('k', '=', '', { valueType: 'param' })) });
+        const q = select({ where: where(cond('id', 'IN', '', { valueType: 'subquery', subquery: sub }), cond('z', '=', '', { valueType: 'param' })) });
+        const text = generateQuery(q, { dialect: 'postgresql', pretty: false });
+        expect(text).toBe('SELECT * FROM Employees WHERE id IN (SELECT id FROM b WHERE k = $1) AND z = $2;');
+    });
+});

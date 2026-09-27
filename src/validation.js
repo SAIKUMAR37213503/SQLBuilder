@@ -13,7 +13,7 @@
 // Only errors block generation; warnings never stop the user.
 
 import {
-    OPERATORS, JOIN_TYPES, SET_OPERATORS, AGGREGATES, LOGIC_OPERATORS, WINDOW_FUNCTIONS, WINDOW_FRAMES, joinPath
+    OPERATORS, JOIN_TYPES, SET_OPERATORS, AGGREGATES, LOGIC_OPERATORS, WINDOW_FUNCTIONS, WINDOW_FRAMES, UPSERT_MODES, joinPath
 } from './model.js';
 import { getDialect } from './dialects.js';
 import {
@@ -64,6 +64,7 @@ export function validateQuery(query, options = {}, basePath = '') {
         case 'delete': v.delete(query, basePath); break;
         default: v.add('error', 'builder', `Unknown query type "${query.kind}".`, basePath);
     }
+    v.finish();
     return v.issues;
 }
 
@@ -84,6 +85,37 @@ class Validator {
         this.dialect = dialect;
         this.quoteIdentifiers = quoteIdentifiers;
         this.issues = [];
+        /** @type {null | { path: string, scope: string }} first parameter whose name the dialect can't use */
+        this.ignoredParam = null;
+    }
+
+    // Statement-wide notes, added once after everything else was checked
+    finish() {
+        if (this.ignoredParam) {
+            const { path, scope } = this.ignoredParam;
+            this.add('info', 'builder', this.dialect.id === 'mysql'
+                ? 'MySQL parameters are written as ?, so parameter names aren\'t part of the SQL. Bind the values in the order the ? appear.'
+                : 'PostgreSQL parameters are numbered ($1, $2, … in order), so parameter names aren\'t part of the SQL. Enter a number instead of a name to choose the position.',
+            path, scope);
+        }
+    }
+
+    // Parameter placeholder: the optional name the user typed
+    param(name, path, scope) {
+        const text = String(name ?? '').trim();
+        if (text === '') return;
+        const numeric = /^\d+$/.test(text);
+        if (!numeric && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text)) {
+            this.add('error', 'builder', `Parameter name ${quote(text)} can only contain letters, numbers and _, and must start with a letter.`, path, scope);
+            return;
+        }
+        const id = this.dialect.id;
+        if (id === 'mysql' || (id === 'postgresql' && !numeric)) {
+            // Reported once per statement by finish()
+            if (!this.ignoredParam) this.ignoredParam = { path, scope };
+        } else if (id !== 'postgresql' && numeric) {
+            this.add('error', 'builder', `Parameter name ${quote(text)} must start with a letter in ${this.dialect.label}.`, path, scope);
+        }
     }
 
     // A bare name (or dotted chain) that is a reserved word fails unless quoted
@@ -168,7 +200,7 @@ class Validator {
                 }
             });
             this.pagination(q, path, scope);
-            if (!ctx.top) this.nestedOrderBy(q, path, scope);
+            if (!ctx.top && !ctx.insertSource) this.nestedOrderBy(q, path, scope);
         }
 
         this.setOps(q, path, ctx);
@@ -471,6 +503,16 @@ class Validator {
             return;
         }
 
+        if (c.valueType === 'param') {
+            if (spec.operands !== 1 && spec.operands !== 2) {
+                this.add('error', 'builder', `${c.op} can't take a parameter here; use a value list or a subquery.`, joinPath(path, 'valueType'), scope);
+                return;
+            }
+            this.param(c.value, joinPath(path, 'value'), scope);
+            if (spec.operands === 2) this.param(c.value2, joinPath(path, 'value2'), scope);
+            return;
+        }
+
         const isColumn = c.valueType === 'column';
         const checkValue = (value, key, label) => {
             if (isColumn) this.fragment(value, joinPath(path, key), scope, { label });
@@ -634,6 +676,21 @@ class Validator {
             this.add('info', 'builder', 'Listing the columns makes the INSERT safer if the table changes later.', joinPath(path, 'columns'));
         }
 
+        this.upsert(q.upsert, joinPath(path, 'upsert'), columns);
+
+        if (q.source === 'select') {
+            this.select(q.select, joinPath(path, 'select'), {
+                scope: 'SELECT for INSERT', depth: 1, branch: false, top: false, insertSource: true
+            });
+            const count = outputColumnCount(q.select);
+            if (columns.length > 0 && count > 0 && count !== columns.length) {
+                this.add('error', 'builder',
+                    `The SELECT returns ${count} column${count === 1 ? '' : 's'} but ${columns.length} column${columns.length === 1 ? ' is' : 's are'} listed for the INSERT.`,
+                    joinPath(path, 'select', 'columns'));
+            }
+            return;
+        }
+
         if (q.rows.length === 0) {
             this.add('error', 'builder', 'Add at least one row of values.', joinPath(path, 'rows'));
         }
@@ -681,13 +738,65 @@ class Validator {
                 this.add('error', 'builder', `Column ${quote(col)} is set twice.`, joinPath(aPath, 'column'));
             }
             seen.add(col.toLowerCase());
-            if (a.valueType === 'column') this.fragment(a.value, joinPath(aPath, 'value'), '', { label: 'the new value' });
-            else if (blank(a.value)) this.add('error', 'builder', "Enter the new value. (Use '' for empty text or NULL.)", joinPath(aPath, 'value'));
+            this.assignmentValue(a, aPath);
         });
         this.group(q.where, joinPath(path, 'where'), '', { depth: 0 }, 'WHERE');
         if (countActive(q.where) === 0) {
             const table = blank(q.table) ? 'the table' : quote(q.table);
             this.add('warning', 'safety', `Warning: This UPDATE query has no WHERE clause and will modify every row in ${table}.`, joinPath(path, 'where'));
+        }
+    }
+
+    assignmentValue(a, aPath) {
+        if (a.valueType === 'column') this.fragment(a.value, joinPath(aPath, 'value'), '', { label: 'the new value' });
+        else if (a.valueType === 'param') this.param(a.value, joinPath(aPath, 'value'), '');
+        else if (a.valueType === 'inserted') return;
+        else if (blank(a.value)) this.add('error', 'builder', "Enter the new value. (Use '' for empty text or NULL.)", joinPath(aPath, 'value'));
+    }
+
+    // ON CONFLICT (PostgreSQL) / ON DUPLICATE KEY UPDATE (MySQL)
+    upsert(u, path, insertColumns) {
+        if (!u || !u.mode) return;
+        const d = this.dialect;
+        if (!UPSERT_MODES.includes(u.mode)) {
+            this.add('error', 'builder', `Unknown conflict handling ${quote(u.mode)}.`, joinPath(path, 'mode'));
+            return;
+        }
+        if (!d.upsert) {
+            this.add('error', 'builder', `Conflict handling (upsert) isn't available for ${d.label} yet. Choose PostgreSQL or MySQL in Settings, or set “On conflict” to “Fail (default)”.`, joinPath(path, 'mode'));
+            return;
+        }
+        const target = splitTopLevel(String(u.conflict)).filter(c => c !== '');
+        target.forEach(col => {
+            if (!isColumnReference(col) || col.endsWith('*')) this.add('error', 'builder', `${quote(col)} isn't a valid column name.`, joinPath(path, 'conflict'));
+        });
+        if (d.upsert === 'on-duplicate-key') {
+            if (u.mode === 'nothing') {
+                this.add('error', 'builder', 'MySQL has no “do nothing” on conflict. Choose “Update the existing row” (for example set a column to its current value).', joinPath(path, 'mode'));
+                return;
+            }
+            if (target.length) this.add('info', 'builder', 'MySQL checks every unique key, so the conflict columns aren\'t part of the SQL.', joinPath(path, 'conflict'));
+        } else if (u.mode === 'update' && target.length === 0) {
+            this.add('error', 'builder', 'PostgreSQL needs the conflict columns (the unique key, e.g. email) to update on conflict.', joinPath(path, 'conflict'));
+        }
+        if (u.mode !== 'update') return;
+        if (u.set.length === 0) this.add('error', 'builder', 'Add at least one column to update on conflict.', joinPath(path, 'set'));
+        const known = new Set(insertColumns.map(c => c.toLowerCase()));
+        const seen = new Set();
+        u.set.forEach((a, i) => {
+            const aPath = joinPath(path, 'set', i);
+            const col = String(a.column).trim();
+            if (!col) this.add('error', 'builder', 'Enter the column to update.', joinPath(aPath, 'column'));
+            else if (!isColumnReference(col) || col.endsWith('*')) this.add('error', 'builder', `${quote(col)} isn't a valid column name.`, joinPath(aPath, 'column'));
+            else if (seen.has(col.toLowerCase())) this.add('error', 'builder', `Column ${quote(col)} is updated twice.`, joinPath(aPath, 'column'));
+            else if (a.valueType === 'inserted' && known.size > 0 && !known.has(col.toLowerCase())) {
+                this.add('warning', 'builder', `${quote(col)} isn't one of the inserted columns, so its “inserted value” is the column default.`, joinPath(aPath, 'column'));
+            }
+            seen.add(col.toLowerCase());
+            this.assignmentValue(a, aPath);
+        });
+        if (d.upsert === 'on-duplicate-key' && u.set.some(a => a.valueType === 'inserted')) {
+            this.add('info', 'builder', 'VALUES(column) works in all MySQL 8 versions but is deprecated from 8.0.20; newer code can use a row alias instead.', joinPath(path, 'set'));
         }
     }
 

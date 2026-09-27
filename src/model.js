@@ -77,7 +77,22 @@ export const OPERATORS = {
 //   value    – a literal; quoted/escaped for the dialect (John -> 'John')
 //   column   – raw SQL: a column or expression, inserted as typed
 //   subquery – a nested SELECT
-export const VALUE_TYPES = ['value', 'column', 'subquery'];
+//   param    – a parameter placeholder written in the dialect's style
+//              (?, $1, @name); the value holds an optional name / number
+export const VALUE_TYPES = ['value', 'column', 'subquery', 'param'];
+
+// Value types of a SET assignment (UPDATE, and the upsert's update part).
+// inserted – the value this row tried to insert (EXCLUDED.col / VALUES(col))
+export const ASSIGNMENT_VALUE_TYPES = ['value', 'column', 'param'];
+export const UPSERT_VALUE_TYPES = ['value', 'column', 'param', 'inserted'];
+
+// INSERT: where the rows come from
+export const INSERT_SOURCES = ['values', 'select'];
+
+// INSERT: what to do when a row conflicts with a unique key ('' = nothing special)
+//   nothing – skip the row (PostgreSQL ON CONFLICT DO NOTHING)
+//   update  – update the existing row (ON CONFLICT DO UPDATE / ON DUPLICATE KEY UPDATE)
+export const UPSERT_MODES = ['', 'nothing', 'update'];
 
 // ---------------------------------------------------------------------------
 // Factories
@@ -177,7 +192,19 @@ export function createGroupByItem(expr = '') {
 }
 
 export function createInsert() {
-    return { kind: 'insert', table: '', columns: '', rows: [{ values: '' }] };
+    return {
+        kind: 'insert',
+        table: '',
+        columns: '',
+        source: 'values',
+        rows: [{ values: '' }],
+        select: createSelect(),
+        upsert: createUpsert()
+    };
+}
+
+export function createUpsert() {
+    return { mode: '', conflict: '', set: [] };
 }
 
 export function createUpdate() {

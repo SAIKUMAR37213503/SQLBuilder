@@ -315,6 +315,52 @@ describe('INSERT / UPDATE / DELETE', () => {
         expect(sql()).toBe('DELETE FROM logs\nWHERE id = 7;');
     });
 
+    test('INSERT … SELECT builds the query with the SELECT editor', async () => {
+        selectType('insert');
+        type('insert.table', 'archive');
+        type('insert.columns', 'id');
+        choose('insert.source', 'select');
+        await settle();
+        expect(field('insert.rows.0.values')).toBeNull();
+        type('insert.select.from.table', 'orders');
+        type('insert.select.columns.0.expr', 'id');
+        await settle();
+        expect(sql()).toBe('INSERT INTO archive (id)\nSELECT id\nFROM orders;');
+    });
+
+    test('upsert: choosing Update adds a row, and the fill button uses the inserted columns', async () => {
+        app.state.settings.dialect = 'postgresql';
+        selectType('insert');
+        type('insert.table', 'customers');
+        type('insert.columns', 'email, name, city');
+        type('insert.rows.0.values', "'a@x.io', 'Ada', 'Oslo'");
+        choose('insert.upsert.mode', 'update');
+        await settle();
+        expect(field('insert.upsert.set.0.column')).toBeTruthy();
+        type('insert.upsert.conflict', 'email');
+        $('[data-action="fill-upsert"]').click();
+        await settle();
+        expect(app.state.workspace.insert.upsert.set.map(a => a.column)).toEqual(['name', 'city']);
+        expect(sql()).toBe(
+            "INSERT INTO customers (email, name, city)\nVALUES ('a@x.io', 'Ada', 'Oslo')\nON CONFLICT (email) DO UPDATE\nSET\n    name = EXCLUDED.name,\n    city = EXCLUDED.city;"
+        );
+        expect(document.activeElement.dataset.action).toBe('fill-upsert');
+    });
+
+    test('a condition can use a parameter; list operators fall back to a value', async () => {
+        await fillSimpleSelect();
+        add('select.where.items', 'condition');
+        type('select.where.items.0.left', 'id');
+        choose('select.where.items.0.valueType', 'param');
+        await settle();
+        expect(sql()).toBe('SELECT name\nFROM users\nWHERE id = ?;');
+        expect(field('select.where.items.0.value').placeholder).toContain('parameter name');
+        choose('select.where.items.0.op', 'IN');
+        await settle();
+        expect(app.state.workspace.select.where.items[0].valueType).toBe('value');
+        expect($$('[data-path="select.where.items.0.valueType"] option').map(o => o.value)).not.toContain('param');
+    });
+
     test('switching type keeps each query', async () => {
         await fillSimpleSelect();
         selectType('delete');
@@ -771,6 +817,24 @@ describe('keyboard and accessibility', () => {
         choose(`${windowPath}.frame`, 'moving');
         await settle();
         expect(field(`${windowPath}.frameSize`)).toBeTruthy();
+        const unnamed = $$('#builder input, #builder select, #builder button').filter(control => {
+            if (control.getAttribute('aria-label')) return false;
+            if (control.id && document.querySelector(`label[for="${control.id}"]`)) return false;
+            if (control.closest('label')) return false;
+            return control.tagName !== 'BUTTON' || control.textContent.trim() === '';
+        });
+        expect(unnamed.map(c => c.outerHTML)).toEqual([]);
+    });
+
+    test('INSERT … SELECT and upsert controls have accessible names', async () => {
+        const radio = $('input[name="query-type"][value="insert"]');
+        radio.checked = true;
+        radio.dispatchEvent(new Event('change', { bubbles: true }));
+        choose('insert.source', 'select');
+        choose('insert.upsert.mode', 'update');
+        add('insert.upsert.set', 'upsertAssignment');
+        choose('insert.upsert.set.1.valueType', 'param');
+        await settle();
         const unnamed = $$('#builder input, #builder select, #builder button').filter(control => {
             if (control.getAttribute('aria-label')) return false;
             if (control.id && document.querySelector(`label[for="${control.id}"]`)) return false;

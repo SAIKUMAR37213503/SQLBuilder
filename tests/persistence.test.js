@@ -304,9 +304,9 @@ describe('import / export', () => {
 });
 
 describe('examples', () => {
-    test.each(EXAMPLES.map(e => [e.name, e]))('%s generates valid SQL for every dialect', (_name, example) => {
+    test.each(EXAMPLES.map(e => [e.name, e]))('%s generates valid SQL for every dialect it supports', (_name, example) => {
         const ws = example.build();
-        for (const dialect of ['generic', 'postgresql', 'mysql', 'sqlserver']) {
+        for (const dialect of example.dialects ?? ['generic', 'postgresql', 'mysql', 'sqlserver']) {
             const issues = validateWorkspace(ws, { dialect });
             expect(hasErrors(issues), JSON.stringify(issues)).toBe(false);
             expect(generateSQL(ws, { dialect })).toMatch(/;$/);
@@ -352,5 +352,25 @@ describe('import of window functions and set operators', () => {
         expect(bad({ frame: 'RANGE 1 PRECEDING' }).error).toMatch(/frame has an unsupported value/);
         expect(bad({ partitionBy: 'dept' }).error).toMatch(/must be a list/);
         expect(parseQueryFile('{"type":"select","select":{"setOps":[{"op":"MINUS","query":{}}]}}').error).toMatch(/unsupported value/);
+    });
+});
+
+describe('import of INSERT … SELECT, upserts and parameters', () => {
+    test('INSERT saved by an earlier version gets the new defaults', () => {
+        const ws = normalizeWorkspace({ kind: 'insert', table: 't', columns: 'a', rows: [{ values: '1' }] });
+        expect(ws.insert.source).toBe('values');
+        expect(ws.insert.upsert).toEqual({ mode: '', conflict: '', set: [] });
+        expect(ws.insert.select.kind).toBe('select');
+    });
+
+    test('new fields round-trip and bad values are rejected', () => {
+        const ws = createWorkspace('insert');
+        Object.assign(ws.insert, { table: 't', source: 'select', upsert: { mode: 'update', conflict: 'id', set: [{ column: 'a', valueType: 'inserted', value: '' }] } });
+        ws.update.set = [{ column: 'x', valueType: 'param', value: 'p' }];
+        ws.select.where = createGroup('AND', [createCondition({ left: 'a', valueType: 'param', value: 'n' })]);
+        expect(normalizeWorkspace(JSON.parse(JSON.stringify(ws)))).toEqual(ws);
+        expect(() => normalizeWorkspace({ kind: 'insert', source: 'sql' })).toThrow(ImportError);
+        expect(() => normalizeWorkspace({ kind: 'insert', upsert: { mode: 'replace' } })).toThrow(ImportError);
+        expect(() => normalizeWorkspace({ kind: 'update', set: [{ column: 'a', valueType: 'inserted' }] })).toThrow(ImportError);
     });
 });

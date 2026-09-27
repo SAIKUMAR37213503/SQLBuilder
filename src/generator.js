@@ -34,7 +34,8 @@ export function generateSQL(workspace, options = {}) {
 export function generateQuery(query, options = {}) {
     const ctx = {
         dialect: getDialect(options.dialect || DEFAULT_DIALECT),
-        quote: Boolean(options.quoteIdentifiers)
+        quote: Boolean(options.quoteIdentifiers),
+        params: 0 // parameter placeholders emitted so far (for $1, @p1 numbering)
     };
     const lines = renderStatement(query, ctx);
     if (lines.length === 0) return '';
@@ -127,8 +128,18 @@ function literal(raw, ctx) {
     return ctx.dialect.quoteString(text);
 }
 
-function rhs(value, valueType, ctx) {
-    return valueType === 'column' ? expr(value, ctx) : literal(value, ctx);
+function rhs(value, valueType, ctx, column = '') {
+    if (valueType === 'column') return expr(value, ctx);
+    if (valueType === 'param') return parameter(value, ctx);
+    if (valueType === 'inserted') return ctx.dialect.insertedValue ? ctx.dialect.insertedValue(expr(column, ctx)) : expr(column, ctx);
+    return literal(value, ctx);
+}
+
+// Placeholders are numbered in the order they appear in the SQL text, which
+// is the order lines are rendered in.
+function parameter(name, ctx) {
+    ctx.params++;
+    return ctx.dialect.parameter(String(name ?? '').trim(), ctx.params);
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +367,9 @@ function renderList(value, valueType, ctx) {
 function renderInsert(q, ctx) {
     const columns = splitTopLevel(q.columns).filter(Boolean).map(c => expr(c, ctx));
     const target = quoteName(q.table.trim(), ctx) + (columns.length ? ` (${columns.join(', ')})` : '');
+    if (q.source === 'select') {
+        return [[0, `INSERT INTO ${target}`], ...renderSelect(q.select, ctx), ...renderUpsert(q.upsert, ctx)];
+    }
     const rows = q.rows.map(row => {
         const values = String(row.values).trim();
         return values.startsWith('(') && values.endsWith(')') && splitTopLevel(values).length === 1
@@ -369,18 +383,32 @@ function renderInsert(q, ctx) {
         lines.push([0, 'VALUES']);
         rows.forEach((row, i) => lines.push([1, row + (i < rows.length - 1 ? ',' : '')]));
     }
+    lines.push(...renderUpsert(q.upsert, ctx));
     return lines;
+}
+
+// SET list: "SET a = 1" on one line, or one assignment per indented line
+function renderAssignments(opening, assignments) {
+    if (assignments.length === 1) return [[0, `${opening} ${assignments[0]}`]];
+    return [[0, opening], ...assignments.map((a, i) => [1, a + (i < assignments.length - 1 ? ',' : '')])];
+}
+
+// ON CONFLICT … (PostgreSQL) / ON DUPLICATE KEY UPDATE … (MySQL)
+function renderUpsert(upsert, ctx) {
+    if (!upsert || !upsert.mode || !ctx.dialect.upsert) return [];
+    const assignments = upsert.set.map(a => `${expr(a.column, ctx)} = ${rhs(a.value, a.valueType, ctx, a.column)}`);
+    if (ctx.dialect.upsert === 'on-duplicate-key') {
+        return renderAssignments('ON DUPLICATE KEY UPDATE', assignments);
+    }
+    const target = splitTopLevel(String(upsert.conflict)).filter(Boolean).map(c => expr(c, ctx));
+    const head = `ON CONFLICT${target.length ? ` (${target.join(', ')})` : ''}`;
+    if (upsert.mode === 'nothing') return [[0, `${head} DO NOTHING`]];
+    return [[0, `${head} DO UPDATE`], ...renderAssignments('SET', assignments)];
 }
 
 function renderUpdate(q, ctx) {
     const assignments = q.set.map(a => `${expr(a.column, ctx)} = ${rhs(a.value, a.valueType, ctx)}`);
-    const lines = [[0, `UPDATE ${quoteName(q.table.trim(), ctx)}`]];
-    if (assignments.length === 1) {
-        lines.push([0, `SET ${assignments[0]}`]);
-    } else {
-        lines.push([0, 'SET']);
-        assignments.forEach((a, i) => lines.push([1, a + (i < assignments.length - 1 ? ',' : '')]));
-    }
+    const lines = [[0, `UPDATE ${quoteName(q.table.trim(), ctx)}`], ...renderAssignments('SET', assignments)];
     lines.push(...renderClause('WHERE', q.where, ctx));
     return lines;
 }

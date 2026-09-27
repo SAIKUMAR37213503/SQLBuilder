@@ -652,6 +652,7 @@ kbd {
 .tok-func { color: var(--tok-func); }
 .tok-identifier { color: var(--tok-identifier); }
 .tok-comment { color: var(--tok-comment); font-style: italic; }
+.tok-param { color: var(--tok-number); font-weight: 650; }
 
 .output-state:empty { display: none; }
 .output-state { margin-bottom: 0.5rem; }

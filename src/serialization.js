@@ -7,7 +7,8 @@
 
 import {
     MODEL_VERSION, QUERY_TYPES, JOIN_TYPES, SET_OPERATORS, AGGREGATES, SORT_DIRECTIONS,
-    LOGIC_OPERATORS, OPERATORS, VALUE_TYPES, WINDOW_FUNCTIONS, WINDOW_FRAMES, createWorkspace
+    LOGIC_OPERATORS, OPERATORS, VALUE_TYPES, WINDOW_FUNCTIONS, WINDOW_FRAMES, ASSIGNMENT_VALUE_TYPES,
+    UPSERT_VALUE_TYPES, INSERT_SOURCES, UPSERT_MODES, createWorkspace, createSelect, createUpsert
 } from './model.js';
 import { MAX_NESTING_DEPTH } from './validation.js';
 
@@ -182,12 +183,33 @@ function readSelect(data, where, depth = 0) {
     };
 }
 
+function readAssignment(data, where, valueTypes) {
+    return {
+        column: str(data, 'column', where),
+        valueType: oneOf(data, 'valueType', valueTypes, where, 'value'),
+        value: str(data, 'value', where)
+    };
+}
+
+// Fields added after version 1 shipped (source, select, upsert) are optional:
+// files and saved queries from earlier versions get the defaults.
 function readInsert(data, where) {
     return {
         kind: 'insert',
         table: str(data, 'table', where),
         columns: str(data, 'columns', where),
-        rows: list(data, 'rows', where, (r, w) => ({ values: str(r, 'values', w) }))
+        source: oneOf(data, 'source', INSERT_SOURCES, where, 'values'),
+        rows: list(data, 'rows', where, (r, w) => ({ values: str(r, 'values', w) })),
+        select: data.select === undefined ? createSelect() : readSelect(obj(data, 'select', where), `${where}.select`, 1),
+        upsert: data.upsert === undefined ? createUpsert() : readUpsert(obj(data, 'upsert', where), `${where}.upsert`)
+    };
+}
+
+function readUpsert(data, where) {
+    return {
+        mode: oneOf(data, 'mode', UPSERT_MODES, where, ''),
+        conflict: str(data, 'conflict', where),
+        set: list(data, 'set', where, (a, w) => readAssignment(a, w, UPSERT_VALUE_TYPES))
     };
 }
 
@@ -195,11 +217,7 @@ function readUpdate(data, where) {
     return {
         kind: 'update',
         table: str(data, 'table', where),
-        set: list(data, 'set', where, (a, w) => ({
-            column: str(a, 'column', w),
-            valueType: oneOf(a, 'valueType', ['value', 'column'], w, 'value'),
-            value: str(a, 'value', w)
-        })),
+        set: list(data, 'set', where, (a, w) => readAssignment(a, w, ASSIGNMENT_VALUE_TYPES)),
         where: data.where === undefined ? { kind: 'group', logic: 'AND', negate: false, items: [] } : readGroup(obj(data, 'where', where), `${where}.where`, 0)
     };
 }

@@ -2,6 +2,7 @@
 // is done by the UI with DOM text nodes, so no HTML is ever built from SQL.
 
 const KEYWORDS = [
+    'ON\\s+CONFLICT', 'ON\\s+DUPLICATE\\s+KEY\\s+UPDATE', 'DO\\s+NOTHING', 'DO\\s+UPDATE',
     'ORDER\\s+BY', 'GROUP\\s+BY', 'PARTITION\\s+BY', 'INSERT\\s+INTO', 'DELETE\\s+FROM',
     '(?:UNION|INTERSECT|EXCEPT)(?:\\s+ALL)?', 'CURRENT\\s+ROW', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING', 'OVER',
     '(?:INNER|LEFT|RIGHT|FULL|CROSS)\\s+JOIN', 'IS\\s+NOT\\s+NULL', 'IS\\s+NULL',
@@ -16,6 +17,8 @@ const TOKEN_RE = new RegExp([
     "(?<string>[Nn]?'(?:[^']|'')*'?)",
     '(?<identifier>"(?:[^"]|"")*"|`[^`]*`|\\[[^\\]]*\\])',
     '(?<comment>--[^\\n]*)',
+    // parameter placeholders: ?, $1, @name, :name (not the :: cast)
+    '(?<param>\\?|\\$\\d+|(?<![\\w@])@[A-Za-z_]\\w*|(?<![\\w:]):[A-Za-z_]\\w*)',
     `(?<keyword>\\b(?:${KEYWORDS.join('|')})\\b)`,
     '(?<func>\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\())',
     '(?<number>\\b\\d+(?:\\.\\d+)?\\b)',
