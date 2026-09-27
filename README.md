@@ -6,9 +6,10 @@ It is a static page with no server, no accounts and no analytics. It **never con
 
 **▶ Live app: [sql-builder-saikumar.vercel.app](https://sql-builder-saikumar.vercel.app)**. It is redeployed automatically from `main`.
 
-It comes in three forms, all built from the same code:
+It comes in four forms, all built from the same code:
 - **Website:** any modern browser.
 - **Installable web app (PWA):** "Install app" / "Add to Home screen". After the first visit it works offline.
+- **Windows app (Microsoft Store):** the PWA packaged with PWABuilder and submitted to the Microsoft Store as "SQL Builder Pro Lite". It updates automatically whenever the website is redeployed. See [MICROSOFT_STORE.md](MICROSOFT_STORE.md).
 - **Android app:** packaged with Capacitor. All files are bundled in the app, so it runs fully offline and requests no permissions. See [ANDROID.md](ANDROID.md).
 
 ---
@@ -136,9 +137,9 @@ npm run dev       # http://localhost:3000
 - The versioned assets are cache-first.
 - The service worker only runs over `https` or on `localhost`; from `file://` the app simply works without it.
 
-**Windows:** the PWA is packaged for the Microsoft Store with PWABuilder ([MICROSOFT_STORE.md](MICROSOFT_STORE.md)).
+**Windows:** install it from the Microsoft Store once it's published, or install the PWA from Edge or Chrome (address bar → *Install*). It is packaged with PWABuilder; see [MICROSOFT_STORE.md](MICROSOFT_STORE.md).
 
-**Android:** install an APK built from this repository ([ANDROID.md](ANDROID.md)). Google Play distribution is being prepared ([PLAY_STORE_RELEASE_CHECKLIST.md](PLAY_STORE_RELEASE_CHECKLIST.md)).
+**Android:** install an APK built from this repository ([ANDROID.md](ANDROID.md)). It is not published on Google Play; the signing setup and [PLAY_STORE_RELEASE_CHECKLIST.md](PLAY_STORE_RELEASE_CHECKLIST.md) are kept in case that changes.
 
 ## Development
 
@@ -208,6 +209,7 @@ See [SECURITY.md](SECURITY.md). In short:
 - Storage is limited to this browser, and you can delete it from Settings.
 - The deployment sends a strict Content-Security-Policy. The Android app embeds an equivalent CSP.
 - The Android app requests no permissions, has no analytics or ads, and never loads remote content. See [PRIVACY.md](PRIVACY.md).
+- The Windows (Microsoft Store) app is the same PWA, so it gets the same headers and CSP as the website.
 
 ## Browser support
 
@@ -222,6 +224,7 @@ The site is static: `index.html`, `style.css`, `dist/`, plus the PWA files `mani
   - `vercel.json` sets the security headers and `Cache-Control: max-age=0, must-revalidate`, because file names aren't content-hashed.
   - `.vercelignore` publishes only the app files; `Fabric_Sync/`, sources and tests are not served.
 - **Any static host:** upload `index.html`, `style.css`, `dist/`, `manifest.webmanifest`, `sw.js` and `icons/`.
+- **Microsoft Store (Windows):** package the live URL with PWABuilder and submit it in Partner Center, following [MICROSOFT_STORE.md](MICROSOFT_STORE.md). Website deployments reach the installed app automatically; re-package only when the name, icons or manifest scope change.
 - **Android:** see [ANDROID.md](ANDROID.md) (build, signing) and [PLAY_STORE_RELEASE_CHECKLIST.md](PLAY_STORE_RELEASE_CHECKLIST.md).
 
 ## Project structure
@@ -231,6 +234,7 @@ index.html  style.css  dist/sqlbuilder.js(.map)   ← the app
 manifest.webmanifest  sw.js  icons/               ← PWA (install + offline)
 capacitor.config.json  android/                   ← Android app (Capacitor); www/ is generated
 scripts/                                          ← asset stamping, mobile build, icon generator, Android E2E
+store/windows/                                    ← Microsoft Store screenshots, poster art and box art
 store/  resources/                                ← Play Store graphics, master icon
 src/                                              ← sources (see Architecture)
 tests/                                            ← Vitest: unit, UI (jsdom) and bundle tests
@@ -238,6 +242,7 @@ vercel.json  .vercelignore                        ← deployment
 eslint.config.js  jsconfig.json  package.json     ← tooling
 .github/workflows/ci.yml                          ← lint, typecheck, tests, bundle freshness
 .github/workflows/android.yml                     ← APK/AAB build, Android lint, emulator E2E
+.github/workflows/android-release.yml             ← manual: Play-upload AAB signed with the upload key
 Fabric_Sync/                                      ← unrelated Power BI content (not deployed)
 ```
 
