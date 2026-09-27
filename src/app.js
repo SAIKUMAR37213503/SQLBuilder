@@ -23,9 +23,10 @@ import { h, byPath, debounce, cssEscape } from './ui/dom.js';
 import { renderEditor } from './ui/builder.js';
 import { renderSqlCode, selectContents } from './ui/output.js';
 import { renderHistoryList, renderTemplateList, renderExampleList } from './ui/library.js';
-import { promptDialog, confirmDialog, showDialog, enhanceDialog } from './ui/dialogs.js';
+import { promptDialog, confirmDialog, showDialog, closeDialog, enhanceDialog } from './ui/dialogs.js';
 import { applyTheme, nextTheme, effectiveTheme, THEME_LABELS } from './ui/theme.js';
 import { bindShortcuts, SHORTCUTS, modLabel } from './ui/shortcuts.js';
+import { createWebPlatform } from './platform/web.js';
 
 const DRAFT_KEY = 'draft';
 
@@ -50,9 +51,10 @@ const ITEM_FACTORIES = {
 };
 
 /**
- * @param {{ doc?: Document, storage?: ReturnType<typeof createStorage> }} [options]
+ * @param {{ doc?: Document, storage?: ReturnType<typeof createStorage>, platform?: import('./platform/types.js').Platform }} [options]
+ *   platform: browser behaviour by default; the Android/iOS app passes the Capacitor adapter
  */
-export function startApp({ doc = document, storage = createStorage() } = {}) {
+export function startApp({ doc = document, storage = createStorage(), platform = createWebPlatform(doc) } = {}) {
     const $ = (id) => /** @type {any} */ (doc.getElementById(id));
     const $$ = (selector) => /** @type {NodeListOf<any>} */ (doc.querySelectorAll(selector));
     const el = {
@@ -71,6 +73,7 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
         output: $('sql-output'),
         code: $('sql-code'),
         copy: $('copy-btn'),
+        share: $('share-btn'),
         download: $('download-btn'),
         selectAll: $('select-all-btn'),
         modeButtons: $$('[data-output-mode]'),
@@ -494,24 +497,7 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
         if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
 
-    async function copyText(text) {
-        try {
-            await navigator.clipboard.writeText(text);
-            return true;
-        } catch {
-            const area = h('textarea', { class: 'visually-hidden', readonly: true });
-            area.value = text;
-            doc.body.appendChild(area);
-            area.select();
-            try {
-                return doc.execCommand('copy');
-            } catch {
-                return false;
-            } finally {
-                area.remove();
-            }
-        }
-    }
+    const copyText = (text) => platform.copyText(text);
 
     async function copySql() {
         commitSoon.flush();
@@ -530,32 +516,50 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
         }
     }
 
-    function downloadFile(filename, text, type) {
-        const blob = new Blob([text], { type });
-        const url = URL.createObjectURL(blob);
-        const a = h('a', { href: url, download: filename, class: 'visually-hidden' });
-        doc.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 0);
+    /**
+     * Saves a file through the platform (browser download, or the Android share
+     * sheet) and reports the outcome. `done` is the success message.
+     */
+    async function downloadFile(filename, text, mimeType, done) {
+        const result = await platform.saveFile({ filename, text, mimeType });
+        if (result.status === 'saved' || result.status === 'shared') {
+            toast(result.status === 'shared' ? `Exported ${filename}.` : done, 'success');
+            return true;
+        }
+        if (result.status === 'cancelled') {
+            toast('Export cancelled.');
+        } else {
+            toast(`Export failed${result.message ? `: ${result.message}` : '.'}`, 'error');
+        }
+        return false;
     }
 
-    function downloadSql() {
+    async function downloadSql() {
         commitSoon.flush();
         scheduleRefresh.flush();
         if (!state.sql) {
             toast('Nothing to download yet — create a valid query first.', 'error');
             return;
         }
-        downloadFile(`${state.workspace.type}-query.sql`, `${state.sql}\n`, 'application/sql');
-        toast('SQL file downloaded.', 'success');
+        await downloadFile(`${state.workspace.type}-query.sql`, `${state.sql}\n`, 'application/sql', 'SQL file downloaded.');
     }
 
-    function exportQuery() {
+    async function shareSql() {
+        commitSoon.flush();
+        scheduleRefresh.flush();
+        if (!state.sql) {
+            toast('Nothing to share yet — create a valid query first.', 'error');
+            return;
+        }
+        const result = await platform.shareText({ title: 'SQL query', text: state.sql });
+        if (result.status === 'failed') toast(`Sharing failed${result.message ? `: ${result.message}` : '.'}`, 'error');
+        else if (result.status === 'cancelled') toast('Sharing cancelled.');
+    }
+
+    async function exportQuery() {
         commitSoon.flush();
         const payload = createQueryExport(state.workspace, { dialect: state.settings.dialect });
-        downloadFile(`${state.workspace.type}-query.json`, JSON.stringify(payload, null, 2), 'application/json');
-        toast('Query exported as JSON.', 'success');
+        await downloadFile(`${state.workspace.type}-query.json`, JSON.stringify(payload, null, 2), 'application/json', 'Query exported as JSON.');
     }
 
     function chooseFile(mode) {
@@ -771,11 +775,11 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
         }
     }
 
-    function exportTemplates() {
+    async function exportTemplates() {
         const list = templates.list();
         if (list.length === 0) return;
-        downloadFile('sql-templates.json', JSON.stringify(createTemplatesExport(list), null, 2), 'application/json');
-        toast(`Exported ${list.length} ${list.length === 1 ? 'template' : 'templates'}.`, 'success');
+        await downloadFile('sql-templates.json', JSON.stringify(createTemplatesExport(list), null, 2), 'application/json',
+            `Exported ${list.length} ${list.length === 1 ? 'template' : 'templates'}.`);
     }
 
     // --------------------------------------------------------------- settings
@@ -806,6 +810,23 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
         const label = theme === 'system' ? `System (${effectiveTheme(theme)})` : THEME_LABELS[theme];
         el.themeBtn.textContent = `Theme: ${label}`;
         el.themeBtn.setAttribute('aria-label', `Theme: ${label}. Activate to switch to ${THEME_LABELS[nextTheme(theme)]}.`);
+        platform.setAppearance(effectiveTheme(theme));
+    }
+
+    // Android back button: close the top-most overlay. Returns false when there
+    // is nothing to close, so the platform can apply its default behaviour.
+    function handleBack() {
+        const dialogs = [el.confirmDialog, el.promptDialog, el.shortcutsDialog, el.settingsDialog];
+        const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
+        if (open) {
+            closeDialog(open, 'cancel');
+            return true;
+        }
+        if (el.fileMenu.open) {
+            el.fileMenu.open = false;
+            return true;
+        }
+        return false;
     }
 
     function renderModeButtons() {
@@ -883,6 +904,8 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
     el.undo.addEventListener('click', undo);
     el.redo.addEventListener('click', redo);
     el.copy.addEventListener('click', copySql);
+    el.share.hidden = !platform.canShare;
+    el.share.addEventListener('click', shareSql);
     el.download.addEventListener('click', downloadSql);
     el.selectAll.addEventListener('click', () => {
         if (el.output.hidden) return;
@@ -967,8 +990,9 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
     renderThemeButton();
     renderModeButtons();
     renderShortcuts();
+    const where = platform.isNative ? 'on this device' : 'in this browser';
     el.storageNote.textContent = storage.available
-        ? 'history, templates and settings are stored only in this browser'
+        ? `history, templates and settings are stored only ${where}`
         : 'browser storage is unavailable, so history and templates won\'t be kept';
     syncTypeTabs();
     renderBuilder();
@@ -977,6 +1001,7 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
     renderExampleList(el.exampleList, EXAMPLES);
     selectTab('history');
     refresh();
+    platform.onBack(handleBack);
 
     return {
         destroy: () => lifetime.abort(),
@@ -985,6 +1010,7 @@ export function startApp({ doc = document, storage = createStorage() } = {}) {
         templates,
         generate,
         undo,
-        redo
+        redo,
+        handleBack
     };
 }
