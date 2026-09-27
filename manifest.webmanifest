@@ -1,5 +1,7 @@
 {
+  "id": "./",
   "name": "SQL Builder Pro Lite",
+  "lang": "en",
   "short_name": "SQL Builder",
   "description": "Build SQL visually. Runs entirely in your browser; nothing is sent anywhere.",
   "start_url": "./",
