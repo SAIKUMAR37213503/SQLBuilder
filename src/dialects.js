@@ -1,6 +1,12 @@
 // SQL dialect definitions. Each dialect only describes the differences the
 // generator actually handles; anything not listed here is emitted the same way
 // for every dialect. Add a dialect by adding an entry to DIALECTS.
+//
+// Capability flags read by validation:
+//   subqueryOrderByNeedsLimit  ORDER BY inside a subquery / CTE is rejected
+//                              unless TOP or OFFSET is also used
+//   limitInInSubquery          LIMIT is allowed inside an IN (subquery)
+//   havingAcceptsAlias         HAVING may refer to a SELECT alias
 
 const escapeSingleQuotes = (text) => text.replace(/'/g, "''");
 
@@ -25,6 +31,9 @@ export const DIALECTS = {
         setOperators: ALL_SET_OPERATORS,
         supportsNthValue: true,
         paginate: limitOffsetPagination,
+        subqueryOrderByNeedsLimit: false,
+        limitInInSubquery: true,
+        havingAcceptsAlias: false,
         notes: []
     },
     postgresql: {
@@ -37,6 +46,9 @@ export const DIALECTS = {
         setOperators: ALL_SET_OPERATORS,
         supportsNthValue: true,
         paginate: limitOffsetPagination,
+        subqueryOrderByNeedsLimit: false,
+        limitInInSubquery: true,
+        havingAcceptsAlias: false,
         notes: []
     },
     mysql: {
@@ -58,6 +70,9 @@ export const DIALECTS = {
             }
             return limitOffsetPagination({ limit, offset });
         },
+        subqueryOrderByNeedsLimit: false,
+        limitInInSubquery: false,
+        havingAcceptsAlias: true,
         notes: ['FULL JOIN is not supported by MySQL.', 'Window functions need MySQL 8.0+; INTERSECT / EXCEPT need 8.0.31+.']
     },
     sqlserver: {
@@ -77,6 +92,9 @@ export const DIALECTS = {
             if (limit !== '') clauses.push(`FETCH NEXT ${limit} ROWS ONLY`);
             return { clauses, needsOrderBy: !hasOrderBy };
         },
+        subqueryOrderByNeedsLimit: true,
+        limitInInSubquery: true,
+        havingAcceptsAlias: false,
         notes: ['Booleans are written as 1/0.', 'LIMIT becomes TOP, or OFFSET … FETCH when an offset or set operation is used.', 'No INTERSECT ALL / EXCEPT ALL or NTH_VALUE.']
     }
 };

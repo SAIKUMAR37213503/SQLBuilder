@@ -18,10 +18,19 @@ import {
 import { getDialect } from './dialects.js';
 import {
     findSyntaxProblem, isQualifiedName, isIdentifier, isColumnReference, splitTopLevel,
-    containsAggregateCall, normalizeExpr, isNumberLiteral, isQuotedString, isBareIdentifier, stripStrings
+    containsAggregateCall, normalizeExpr, isNumberLiteral, isQuotedString, isBareIdentifier, stripStrings, hasLeadingZero
 } from './sql-utils.js';
 
 export const MAX_NESTING_DEPTH = 4;
+
+// Words reserved in all supported dialects: used unquoted as a name they make
+// the statement fail. Deliberately short; not a full keyword list.
+export const RESERVED_WORDS = new Set([
+    'ALL', 'AND', 'AS', 'ASC', 'BETWEEN', 'BY', 'CASE', 'CHECK', 'COLUMN', 'CONSTRAINT', 'CREATE', 'DEFAULT',
+    'DELETE', 'DESC', 'DISTINCT', 'DROP', 'ELSE', 'END', 'FOREIGN', 'FROM', 'GRANT', 'GROUP', 'HAVING', 'IN',
+    'INSERT', 'INTO', 'IS', 'JOIN', 'LIKE', 'NOT', 'NULL', 'ON', 'OR', 'ORDER', 'PRIMARY', 'REFERENCES', 'SELECT',
+    'SET', 'TABLE', 'THEN', 'TO', 'UNION', 'UPDATE', 'VALUES', 'WHEN', 'WHERE', 'WITH'
+]);
 
 const SQL_VALUE_KEYWORDS = new Set([
     'NULL', 'DEFAULT', 'TRUE', 'FALSE', 'CURRENT_DATE', 'CURRENT_TIME', 'CURRENT_TIMESTAMP',
@@ -29,8 +38,13 @@ const SQL_VALUE_KEYWORDS = new Set([
 ]);
 
 /**
+ * @typedef {{ dialect?: string, quoteIdentifiers?: boolean }} ValidateOptions
+ *   quoteIdentifiers: names will be quoted, so reserved words are safe
+ */
+
+/**
  * @param {any} workspace
- * @param {{ dialect?: string }} [options]
+ * @param {ValidateOptions} [options]
  */
 export function validateWorkspace(workspace, options = {}) {
     return validateQuery(workspace[workspace.type], options, workspace.type);
@@ -38,11 +52,11 @@ export function validateWorkspace(workspace, options = {}) {
 
 /**
  * @param {any} query
- * @param {{ dialect?: string }} [options]
+ * @param {ValidateOptions} [options]
  * @param {string} [basePath]
  */
 export function validateQuery(query, options = {}, basePath = '') {
-    const v = new Validator(getDialect(options.dialect));
+    const v = new Validator(getDialect(options.dialect), Boolean(options.quoteIdentifiers));
     switch (query.kind) {
         case 'select': v.select(query, basePath, { scope: '', depth: 0, branch: false, top: true }); break;
         case 'insert': v.insert(query, basePath); break;
@@ -66,9 +80,21 @@ const blank = (value) => String(value ?? '').trim() === '';
 const quote = (text) => `“${String(text).trim()}”`;
 
 class Validator {
-    constructor(dialect) {
+    constructor(dialect, quoteIdentifiers = false) {
         this.dialect = dialect;
+        this.quoteIdentifiers = quoteIdentifiers;
         this.issues = [];
+    }
+
+    // A bare name (or dotted chain) that is a reserved word fails unless quoted
+    reserved(name, path, scope) {
+        if (this.quoteIdentifiers) return;
+        const word = String(name ?? '').trim().split('.').find(part => isBareIdentifier(part) && RESERVED_WORDS.has(part.toUpperCase()));
+        if (word) {
+            this.add('warning', 'syntax',
+                `${quote(word)} is a reserved SQL word, so the query fails unless it's quoted. Turn on “Quote table and column names” in Settings, or write it in quotes.`,
+                path, scope);
+        }
     }
 
     add(level, category, message, path, scope = '') {
@@ -96,6 +122,8 @@ class Validator {
             this.add('error', 'builder',
                 `${quote(name)} isn't a valid table name. Use letters, numbers and _ (optionally schema.table), or wrap the name in quotes.`,
                 path, scope);
+        } else {
+            this.reserved(name, path, scope);
         }
     }
 
@@ -104,6 +132,8 @@ class Validator {
             this.add('error', 'builder',
                 `Alias ${quote(name)} can only contain letters, numbers and _ and can't start with a number (or wrap it in quotes).`,
                 path, scope);
+        } else if (!blank(name)) {
+            this.reserved(name, path, scope);
         }
     }
 
@@ -138,9 +168,24 @@ class Validator {
                 }
             });
             this.pagination(q, path, scope);
+            if (!ctx.top) this.nestedOrderBy(q, path, scope);
         }
 
         this.setOps(q, path, ctx);
+    }
+
+    // ORDER BY inside a subquery or CTE only matters together with LIMIT/OFFSET
+    nestedOrderBy(q, path, scope) {
+        if (q.orderBy.length === 0 || !blank(q.limit) || !blank(q.offset)) return;
+        if (this.dialect.subqueryOrderByNeedsLimit) {
+            this.add('error', 'builder',
+                `${this.dialect.label} doesn't allow ORDER BY inside a subquery or CTE without LIMIT or OFFSET. Remove the sort here and sort the main query, or add a LIMIT.`,
+                joinPath(path, 'orderBy'), scope);
+        } else {
+            this.add('info', 'builder',
+                'ORDER BY inside a subquery or CTE doesn\'t decide the order of the final result; sort the main query instead.',
+                joinPath(path, 'orderBy'), scope);
+        }
     }
 
     ctes(q, path, ctx) {
@@ -159,6 +204,8 @@ class Validator {
                 this.add('error', 'builder', `CTE name ${quote(name)} can only contain letters, numbers and _.`, joinPath(cPath, 'name'));
             } else if (seen.has(name.toLowerCase())) {
                 this.add('error', 'builder', `Two CTEs are named ${quote(name)}.`, joinPath(cPath, 'name'));
+            } else {
+                this.reserved(name, joinPath(cPath, 'name'), '');
             }
             seen.add(name.toLowerCase());
             this.select(cte.query, joinPath(cPath, 'query'), {
@@ -188,7 +235,10 @@ class Validator {
             } else {
                 if (!AGGREGATES.includes(col.aggregate)) this.add('error', 'builder', `Unknown aggregate ${quote(col.aggregate)}.`, joinPath(cPath, 'aggregate'), scope);
                 const countStar = col.aggregate === 'COUNT' && blank(col.expr);
-                if (!countStar) this.fragment(col.expr, joinPath(cPath, 'expr'), scope, { label: 'a column or expression' });
+                if (!countStar && this.fragment(col.expr, joinPath(cPath, 'expr'), scope, { label: 'a column or expression' })
+                    && isColumnReference(String(col.expr).trim())) {
+                    this.reserved(col.expr, joinPath(cPath, 'expr'), scope);
+                }
                 if (col.aggregate && col.aggregate !== 'COUNT' && String(col.expr).trim() === '*') {
                     this.add('error', 'builder', `${col.aggregate}(*) isn't valid; choose a column.`, joinPath(cPath, 'expr'), scope);
                 }
@@ -405,6 +455,12 @@ class Validator {
             this.select(c.subquery, joinPath(path, 'subquery'), {
                 scope: `Subquery in ${clause}`, depth: ctx.depth + 1, branch: false, top: false
             });
+            const limited = !blank(c.subquery.limit) || !blank(c.subquery.offset);
+            if ((c.op === 'IN' || c.op === 'NOT IN') && limited && !this.dialect.limitInInSubquery) {
+                this.add('error', 'builder',
+                    `${this.dialect.label} doesn't support LIMIT inside an ${c.op} (…) subquery. Put the limited query in a FROM subquery instead: ${c.op} (SELECT id FROM (SELECT … LIMIT n) AS t).`,
+                    joinPath(path, 'subquery', 'limit'), scope);
+            }
             if (!spec.subqueryOnly && outputColumnCount(c.subquery) > 1) {
                 this.add('error', 'builder', `A subquery used with ${c.op} must return exactly one column.`, joinPath(path, 'subquery', 'columns'), scope);
             }
@@ -468,9 +524,45 @@ class Validator {
             });
         }
 
+        if (countActive(q.having) > 0 && !this.dialect.havingAcceptsAlias) this.havingAliases(q, path, scope, groupKeys);
+
         if (countActive(q.having) > 0 && groupKeys.size === 0 && !aggregated) {
             this.add('warning', 'builder', 'HAVING filters groups, but there is no GROUP BY or aggregate. Did you mean WHERE?', joinPath(path, 'having'), scope);
         }
+    }
+
+    // HAVING runs before SELECT, so most databases can't see SELECT aliases there
+    havingAliases(q, path, scope, groupKeys) {
+        const aliases = new Map();
+        for (const col of q.columns) {
+            if (col.kind === 'window' || blank(col.alias)) continue;
+            const key = normalizeExpr(String(col.alias).trim());
+            if (col.kind === 'column' && (normalizeExpr(String(col.expr).trim()).split('.').pop() === key || groupKeys.has(key))) continue;
+            let expression = 'the CASE expression';
+            if (col.kind === 'column') {
+                const e = String(col.expr).trim();
+                expression = col.aggregate === 'COUNT DISTINCT' ? `COUNT(DISTINCT ${e})`
+                    : col.aggregate ? `${col.aggregate}(${e || '*'})` : e;
+            }
+            aliases.set(key, expression);
+        }
+        if (aliases.size === 0) return;
+        const check = (group, gPath) => group.items.forEach((item, i) => {
+            const iPath = joinPath(gPath, 'items', i);
+            if (item.kind === 'group') return check(item, iPath);
+            if (item.kind !== 'condition') return;
+            const texts = [['left', item.left], ...(item.valueType === 'column' ? [['value', item.value], ['value2', item.value2]] : [])];
+            for (const [key, text] of texts) {
+                const expression = aliases.get(normalizeExpr(String(text ?? '').trim()));
+                if (expression) {
+                    this.add('warning', 'builder',
+                        `${quote(text)} is a SELECT alias; ${this.dialect.label} doesn't allow aliases in HAVING. Repeat the expression instead: ${expression}.`,
+                        joinPath(iPath, key), scope);
+                    return;
+                }
+            }
+        });
+        check(q.having, joinPath(path, 'having'));
     }
 
     pagination(q, path, scope) {
@@ -565,6 +657,8 @@ class Validator {
             parts.forEach(part => {
                 if (isBareIdentifier(part) && !SQL_VALUE_KEYWORDS.has(part.toUpperCase())) {
                     this.add('warning', 'builder', `${label}: ${part} will be read as a column name. If it's text, write '${part}'.`, rPath);
+                } else if (hasLeadingZero(part)) {
+                    this.add('warning', 'builder', `${label}: ${part} will be stored as the number ${Number(part)}. If it's a code (zip, phone, ID), write '${part}'.`, rPath);
                 }
             });
         });

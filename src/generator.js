@@ -7,7 +7,7 @@
 
 import { OPERATORS, WINDOW_FUNCTIONS } from './model.js';
 import { getDialect, DEFAULT_DIALECT } from './dialects.js';
-import { splitTopLevel, isNumberLiteral, isQuotedString } from './sql-utils.js';
+import { splitTopLevel, isNumberLiteral, isQuotedString, hasLeadingZero, hasTopLevelLogic } from './sql-utils.js';
 
 const INDENT = '    ';
 
@@ -108,9 +108,10 @@ function alias(name, ctx) {
 
 /**
  * Formats a user-entered value as a SQL literal:
- *   numbers stay numbers, true/false become the dialect's booleans,
- *   null becomes NULL, text already in single quotes is kept as typed,
- *   anything else is quoted and escaped as a string.
+ *   numbers stay numbers (except ones with a leading zero, like a zip code
+ *   01234, which are text), true/false become the dialect's booleans,
+ *   null becomes NULL, text already in single quotes (or N'…') is kept as
+ *   typed, anything else is quoted and escaped as a string.
  */
 export function formatLiteral(raw, dialectId = DEFAULT_DIALECT) {
     return literal(raw, { dialect: getDialect(dialectId), quote: false });
@@ -119,7 +120,7 @@ export function formatLiteral(raw, dialectId = DEFAULT_DIALECT) {
 function literal(raw, ctx) {
     const text = String(raw).trim();
     if (text === '') return "''";
-    if (isNumberLiteral(text)) return text;
+    if (isNumberLiteral(text) && !hasLeadingZero(text)) return text;
     if (/^null$/i.test(text)) return 'NULL';
     if (/^(true|false)$/i.test(text)) return ctx.dialect.booleanLiteral(text.toLowerCase() === 'true');
     if (isQuotedString(text)) return text;
@@ -278,8 +279,9 @@ function renderClause(keyword, group, ctx, continuationIndent = 1) {
 // indented by `continuationIndent` levels.
 function renderItemList(items, logic, ctx, firstPrefix = '', continuationIndent = 0) {
     const lines = [];
+    const siblings = items.length > 1;
     items.forEach((item, i) => {
-        const predicate = renderPredicate(item, ctx);
+        const predicate = renderPredicate(item, ctx, siblings);
         if (i === 0) {
             lines.push(...prefixFirst(firstPrefix, predicate));
         } else {
@@ -298,15 +300,22 @@ function containsSubquery(item) {
     return item.kind === 'condition' && item.valueType === 'subquery';
 }
 
-function renderPredicate(item, ctx) {
+// `siblings`: other conditions share the group, so custom SQL containing a
+// top-level AND / OR is wrapped in parentheses to keep its meaning
+// (a = 1 AND (b = 2 OR c = 3), not a = 1 AND b = 2 OR c = 3).
+function renderPredicate(item, ctx, siblings = false) {
     if (item.kind === 'raw') {
-        return String(item.sql).trim().split('\n').map(line => [0, line.trim()]);
+        const sql = String(item.sql).trim();
+        const lines = sql.split('\n').map(line => [0, line.trim()]);
+        if (!siblings || !hasTopLevelLogic(sql)) return lines;
+        if (lines.length === 1) return [[0, `(${lines[0][1]})`]];
+        return wrapBlock('(', lines);
     }
     if (item.kind === 'group') {
         const items = activeItems(item);
         const not = item.negate ? 'NOT ' : '';
         if (!items.some(containsSubquery)) {
-            const inline = items.map(i => joinCompact(renderPredicate(i, ctx))).join(` ${item.logic} `);
+            const inline = items.map(i => joinCompact(renderPredicate(i, ctx, items.length > 1))).join(` ${item.logic} `);
             return [[0, `${not}(${inline})`]];
         }
         return wrapBlock(`${not}(`, renderItemList(items, item.logic, ctx));

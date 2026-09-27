@@ -400,3 +400,74 @@ describe('window function validation', () => {
         expect(validateQuery(q)).toEqual([]);
     });
 });
+
+describe('dialect and correctness checks', () => {
+    const derived = (inner) => {
+        const q = select();
+        q.from = createSubquerySource();
+        q.from.alias = 'x';
+        Object.assign(q.from.query, { columns: [createColumn('id')], from: createTableSource('t') }, inner);
+        return q;
+    };
+
+    test('SQL Server rejects ORDER BY in a subquery without LIMIT / OFFSET', () => {
+        const q = derived({ orderBy: [createOrderItem('id')] });
+        const issue = find(validateQuery(q, { dialect: 'sqlserver' }), "doesn't allow ORDER BY inside a subquery");
+        expect(issue.level).toBe('error');
+        expect(issue.path).toBe('from.query.orderBy');
+        expect(find(validateQuery(derived({ orderBy: [createOrderItem('id')], limit: '5' }), { dialect: 'sqlserver' }), 'ORDER BY inside')).toBeUndefined();
+        expect(find(validateQuery(q, { dialect: 'postgresql' }), 'ORDER BY inside a subquery').level).toBe('info');
+    });
+
+    test('SQL Server rejects ORDER BY inside a CTE', () => {
+        const q = select({ ctes: [createCte()] });
+        Object.assign(q.ctes[0], { name: 'c' });
+        Object.assign(q.ctes[0].query, { columns: [createColumn('id')], from: createTableSource('t'), orderBy: [createOrderItem('id')] });
+        expect(hasErrors(validateQuery(q, { dialect: 'sqlserver' }))).toBe(true);
+        expect(hasErrors(validateQuery(q, { dialect: 'generic' }))).toBe(false);
+    });
+
+    test('MySQL rejects LIMIT inside IN (subquery)', () => {
+        const sub = createSelect({ columns: [createColumn('id')], from: createTableSource('b'), limit: '5' });
+        const q = select({ where: where(cond('id', 'IN', '', { valueType: 'subquery', subquery: sub })) });
+        const issue = find(validateQuery(q, { dialect: 'mysql' }), 'LIMIT inside an IN');
+        expect(issue.level).toBe('error');
+        expect(find(validateQuery(q, { dialect: 'postgresql' }), 'LIMIT inside')).toBeUndefined();
+        const scalar = select({ where: where(cond('id', '=', '', { valueType: 'subquery', subquery: sub })) });
+        expect(find(validateQuery(scalar, { dialect: 'mysql' }), 'LIMIT inside')).toBeUndefined();
+    });
+
+    test('HAVING on a SELECT alias warns except on MySQL', () => {
+        const q = select({
+            columns: [createColumn('dept'), createColumn('salary', { aggregate: 'SUM', alias: 'total' })],
+            groupBy: [createGroupByItem('dept')],
+            having: where(cond('total', '>', '100'))
+        });
+        const issue = find(validateQuery(q, { dialect: 'postgresql' }), 'is a SELECT alias');
+        expect(issue.level).toBe('warning');
+        expect(issue.message).toContain('SUM(salary)');
+        expect(issue.path).toBe('having.items.0.left');
+        expect(find(validateQuery(q, { dialect: 'mysql' }), 'SELECT alias')).toBeUndefined();
+        q.having = where(cond('SUM(salary)', '>', '100'));
+        expect(find(validateQuery(q, { dialect: 'postgresql' }), 'SELECT alias')).toBeUndefined();
+    });
+
+    test('reserved words as names warn unless identifiers are quoted', () => {
+        const q = select({ columns: [createColumn('o.id', { alias: 'order' })], from: createTableSource('orders', 'o') });
+        const issue = find(validateQuery(q), 'reserved SQL word');
+        expect(issue.level).toBe('warning');
+        expect(issue.path).toBe('columns.0.alias');
+        expect(find(validateQuery(q, { quoteIdentifiers: true }), 'reserved')).toBeUndefined();
+        expect(find(validateQuery(select({ from: createTableSource('group') })), 'reserved SQL word').path).toBe('from.table');
+        expect(find(validateQuery(select({ columns: [createColumn('t.select')] })), 'reserved SQL word')).toBeTruthy();
+        expect(find(validateQuery(select({ columns: [createColumn('COUNT(order_id)')] })), 'reserved')).toBeUndefined();
+    });
+
+    test('INSERT warns about leading-zero numbers', () => {
+        const q = createInsert();
+        Object.assign(q, { table: 't', columns: 'zip, n', rows: [{ values: '01234, 0' }] });
+        const issues = validateQuery(q);
+        expect(find(issues, "write '01234'").level).toBe('warning');
+        expect(issues.filter(i => i.message.includes('stored as the number'))).toHaveLength(1);
+    });
+});

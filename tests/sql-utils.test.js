@@ -105,3 +105,23 @@ describe('tokenize: window functions and set operators', () => {
         expect(kinds).toEqual(['OVER', 'PARTITION BY', 'ROWS', 'BETWEEN', 'PRECEDING', 'AND', 'CURRENT ROW', 'INTERSECT ALL', 'EXCEPT']);
     });
 });
+
+describe('hasTopLevelLogic / hasLeadingZero', () => {
+    test('finds AND / OR only outside quotes and parentheses', async () => {
+        const { hasTopLevelLogic } = await import('../src/sql-utils.js');
+        expect(hasTopLevelLogic('a = 1 OR b = 2')).toBe(true);
+        expect(hasTopLevelLogic('a = 1 and b = 2')).toBe(true);
+        expect(hasTopLevelLogic('(a = 1 OR b = 2)')).toBe(false);
+        expect(hasTopLevelLogic("x = 'A OR B'")).toBe(false);
+        expect(hasTopLevelLogic('"order" = 1')).toBe(false);
+        expect(hasTopLevelLogic('[and] = 1')).toBe(false);
+        expect(hasTopLevelLogic('orders.id = brand_id')).toBe(false);
+        expect(hasTopLevelLogic('x BETWEEN 1 AND 5')).toBe(true);
+    });
+
+    test('leading zeros', async () => {
+        const { hasLeadingZero } = await import('../src/sql-utils.js');
+        expect(['01', '007', '-01', '00.5'].map(hasLeadingZero)).toEqual([true, true, true, true]);
+        expect(['0', '0.5', '10', 'abc', '0x1'].map(hasLeadingZero)).toEqual([false, false, false, false, false]);
+    });
+});

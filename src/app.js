@@ -135,6 +135,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         }
     }
 
+    const validationOptions = () => ({
+        dialect: state.settings.dialect,
+        quoteIdentifiers: state.settings.quoteIdentifiers
+    });
+
     const generationOptions = (pretty = state.settings.outputMode === 'formatted') => ({
         dialect: state.settings.dialect,
         quoteIdentifiers: state.settings.quoteIdentifiers,
@@ -194,7 +199,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     const pristine = () => isPristine(state.workspace);
 
     function refresh() {
-        state.issues = validateWorkspace(state.workspace, { dialect: state.settings.dialect });
+        state.issues = validateWorkspace(state.workspace, validationOptions());
         const valid = !hasErrors(state.issues);
         const live = state.settings.livePreview;
 
@@ -459,7 +464,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     function generate() {
         commitSoon.flush();
         scheduleRefresh.cancel();
-        state.issues = validateWorkspace(state.workspace, { dialect: state.settings.dialect });
+        state.issues = validateWorkspace(state.workspace, validationOptions());
         if (hasErrors(state.issues)) {
             state.attempted = true;
             refresh();
@@ -638,6 +643,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     }
 
     function redo() {
+        // Typing since the last undo is a new change: record it (which clears
+        // the redo list) instead of silently replacing it with the redo state
+        commitSoon.flush();
         const next = undoStack.redo();
         if (!next) return;
         state.workspace = next;
@@ -798,7 +806,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (patch.dialect !== undefined && patch.dialect !== before.dialect) renderDialectNotes();
         if (state.generated && (patch.dialect !== undefined || patch.quoteIdentifiers !== undefined || patch.outputMode !== undefined)) {
             // Keep a manually generated query in sync with output preferences
-            if (!hasErrors(validateWorkspace(state.workspace, { dialect: state.settings.dialect }))) {
+            if (!hasErrors(validateWorkspace(state.workspace, validationOptions()))) {
                 state.generated = { snapshot: state.generated.snapshot, sql: generateSQL(JSON.parse(state.generated.snapshot), generationOptions()) };
             }
         }

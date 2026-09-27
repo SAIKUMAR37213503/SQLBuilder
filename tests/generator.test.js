@@ -439,3 +439,53 @@ describe('window functions', () => {
         expect(generateQuery(q)).toBe('SELECT\n    name,\n    RANK() OVER (ORDER BY salary DESC) AS pay_rank\nFROM Employees;');
     });
 });
+
+describe('correctness fixes', () => {
+    const gen = (group, dialect) => generateQuery(select({ where: group }), { dialect }).split('\n').slice(2).join('\n');
+
+    test('custom SQL with a top-level OR is parenthesised next to other conditions', () => {
+        expect(gen(where(cond('a', '=', '1'), createRawCondition('b = 2 OR c = 3')))).toBe(
+            'WHERE a = 1\n    AND (b = 2 OR c = 3);'
+        );
+    });
+
+    test('custom SQL keeps its text when it stands alone or has no top-level AND / OR', () => {
+        expect(gen(where(createRawCondition('b = 2 OR c = 3')))).toBe('WHERE b = 2 OR c = 3;');
+        expect(gen(where(cond('a', '=', '1'), createRawCondition("LOWER(x) IN ('a or b')")))).toBe(
+            "WHERE a = 1\n    AND LOWER(x) IN ('a or b');"
+        );
+        expect(gen(where(cond('a', '=', '1'), createRawCondition('(b = 2 OR c = 3)')))).toBe(
+            'WHERE a = 1\n    AND (b = 2 OR c = 3);'
+        );
+    });
+
+    test('custom SQL inside a nested group and in compact output', () => {
+        const inner = createGroup('OR', [cond('x', '=', '1'), createRawCondition('y = 2 AND z = 3')]);
+        expect(gen(where(cond('a', '=', '1'), inner))).toBe('WHERE a = 1\n    AND (x = 1 OR (y = 2 AND z = 3));');
+        const q = select({ where: where(cond('a', '=', '1'), createRawCondition('b = 2 OR c = 3')) });
+        expect(generateQuery(q, { pretty: false })).toBe('SELECT * FROM Employees WHERE a = 1 AND (b = 2 OR c = 3);');
+    });
+
+    test('multi-line custom SQL is wrapped as a block', () => {
+        expect(gen(where(cond('a', '=', '1'), createRawCondition('b = 2\nOR c = 3')))).toBe(
+            'WHERE a = 1\n    AND (\n        b = 2\n        OR c = 3\n    );'
+        );
+    });
+
+    test('values with a leading zero stay text', () => {
+        expect(formatLiteral('01234')).toBe("'01234'");
+        expect(formatLiteral('007')).toBe("'007'");
+        expect(formatLiteral('-012')).toBe("'-012'");
+        expect(formatLiteral('0')).toBe('0');
+        expect(formatLiteral('0.5')).toBe('0.5');
+        expect(formatLiteral('-0.5')).toBe('-0.5');
+        expect(formatLiteral('10')).toBe('10');
+        expect(gen(where(cond('zip', 'IN', '01234, 2000')))).toBe("WHERE zip IN ('01234', 2000);");
+        expect(gen(where(cond('code', 'BETWEEN', '001', { value2: '099' })))).toBe("WHERE code BETWEEN '001' AND '099';");
+    });
+
+    test("N'…' literals are kept as typed", () => {
+        expect(gen(where(cond('name', '=', "N'Zoë'")), 'sqlserver')).toBe("WHERE name = N'Zoë';");
+        expect(formatLiteral("n'x'")).toBe("n'x'");
+    });
+});

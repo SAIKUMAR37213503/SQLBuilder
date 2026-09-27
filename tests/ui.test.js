@@ -444,6 +444,19 @@ describe('undo / redo', () => {
         expect(field('select.columns.1.expr')).toBeTruthy();
     });
 
+    test('typing after Undo is kept when Redo is pressed right away', async () => {
+        await fillSimpleSelect();
+        add('select.columns', 'column');
+        await settle();
+        $('#undo-btn').click();
+        await settle();
+        type('select.from.table', 'accounts');
+        $('#redo-btn').click();
+        await settle();
+        expect(field('select.from.table').value).toBe('accounts');
+        expect($$('[data-path^="select.columns."][data-path$=".expr"]')).toHaveLength(1);
+    });
+
     test('Clear and Reset all are undoable', async () => {
         await fillSimpleSelect();
         $('#clear-btn').click();
