@@ -279,11 +279,11 @@ export function createTemplatesExport(templates) {
         kind: 'templates',
         version: MODEL_VERSION,
         exportedAt: new Date().toISOString(),
-        templates: templates.map(({ name, workspace, createdAt, updatedAt }) => ({ name, workspace, createdAt, updatedAt }))
+        templates: templates.map(({ name, dialect, workspace, createdAt, updatedAt }) => ({ name, ...(dialect ? { dialect } : {}), workspace, createdAt, updatedAt }))
     };
 }
 
-/** @returns {{ ok: true, templates: { name: string, workspace: any }[] } | { ok: false, error: string }} */
+/** @returns {{ ok: true, templates: { name: string, dialect?: string, workspace: any }[] } | { ok: false, error: string }} */
 export function parseTemplatesFile(text) {
     try {
         const data = parseJson(text);
@@ -295,8 +295,10 @@ export function parseTemplatesFile(text) {
             if (!isObject(t)) throw new ImportError(`Template ${i + 1} is not an object.`);
             const name = str(t, 'name', `templates[${i}]`).trim().slice(0, 80);
             if (!name) throw new ImportError(`Template ${i + 1} has no name.`);
+            // Unknown dialects are dropped by the template store
+            const dialect = typeof t.dialect === 'string' ? t.dialect : undefined;
             try {
-                return { name, workspace: normalizeWorkspace(t.workspace) };
+                return { name, ...(dialect ? { dialect } : {}), workspace: normalizeWorkspace(t.workspace) };
             } catch (error) {
                 throw new ImportError(`Template “${name}”: ${describeError(error)}`);
             }

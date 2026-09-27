@@ -2,6 +2,10 @@
 
 import { createId } from './storage.js';
 import { normalizeWorkspace } from './serialization.js';
+import { DIALECTS } from './dialects.js';
+
+// Optional dialect a template was saved with (templates from older versions have none)
+const cleanDialect = (dialect) => (typeof dialect === 'string' && Object.hasOwn(DIALECTS, dialect) ? dialect : undefined);
 
 export const TEMPLATE_LIMIT = 200;
 export const TEMPLATE_NAME_MAX = 80;
@@ -23,6 +27,7 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
                     name: t.name.slice(0, TEMPLATE_NAME_MAX),
                     createdAt: Number(t.createdAt) || 0,
                     updatedAt: Number(t.updatedAt) || 0,
+                    ...(cleanDialect(t.dialect) ? { dialect: t.dialect } : {}),
                     workspace: normalizeWorkspace(t.workspace)
                 }];
             } catch {
@@ -79,7 +84,12 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
 
         get: (id) => templates.find(t => t.id === id) || null,
 
-        create(name, workspace) {
+        /**
+         * @param {string} name
+         * @param {any} workspace
+         * @param {{ dialect?: string }} [options]
+         */
+        create(name, workspace, { dialect } = {}) {
             if (templates.length >= TEMPLATE_LIMIT) throw new TemplateError(`You can keep up to ${TEMPLATE_LIMIT} templates.`);
             const time = now();
             const template = {
@@ -87,6 +97,7 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
                 name: uniqueName(cleanName(name)),
                 createdAt: time,
                 updatedAt: time,
+                ...(cleanDialect(dialect) ? { dialect } : {}),
                 workspace: structuredClone(workspace)
             };
             withTransaction(() => { templates = [...templates, template]; });
@@ -104,7 +115,7 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
 
         duplicate(id) {
             const source = find(id);
-            return this.create(`${source.name} copy`, source.workspace);
+            return this.create(`${source.name} copy`, source.workspace, { dialect: source.dialect });
         },
 
         remove(id) {
@@ -125,6 +136,7 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
                         name: uniqueName(cleanName(item.name)),
                         createdAt: time,
                         updatedAt: time,
+                        ...(cleanDialect(item.dialect) ? { dialect: item.dialect } : {}),
                         workspace: structuredClone(item.workspace)
                     };
                     templates = [...templates, template];

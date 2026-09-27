@@ -550,6 +550,21 @@ describe('templates', () => {
         expect(app.templates.list()).toHaveLength(1);
     });
 
+    test('a template remembers its dialect', async () => {
+        await fillSimpleSelect('customers');
+        app.state.settings.dialect = 'postgresql';
+        $('#template-save-btn').click();
+        await answerPrompt('Pg customers');
+        expect(app.templates.list()[0].dialect).toBe('postgresql');
+        expect($('#template-list').textContent).toContain('PostgreSQL');
+
+        app.state.settings.dialect = 'generic';
+        $('#template-list [data-action="template-load"]').click();
+        await settle();
+        expect(app.state.settings.dialect).toBe('postgresql');
+        expect(toast()).toContain('dialect switched to PostgreSQL');
+    });
+
     test('cancelling the name prompt saves nothing', async () => {
         await fillSimpleSelect();
         $('#template-save-btn').click();
@@ -687,6 +702,54 @@ describe('settings, theme, persistence', () => {
         await answerConfirm(true);
         expect(app.history.list()).toHaveLength(0);
         expect(app.templates.list()).toHaveLength(0);
+    });
+
+    test('delete all saved data also clears the builder and resets settings', async () => {
+        await fillSimpleSelect('secret_table');
+        $('#settings-btn').click();
+        choose('select.distinct', true);
+        const dialect = $('[data-setting="dialect"]');
+        dialect.value = 'mysql';
+        dialect.dispatchEvent(new Event('change', { bubbles: true }));
+        $('#clear-data-btn').click();
+        await answerConfirm(true);
+        await settle();
+        expect(field('select.from.table').value).toBe('');
+        expect($('[data-setting="dialect"]').value).toBe('generic');
+        expect(app.state.settings.dialect).toBe('generic');
+        expect(backend.getItem(`${STORAGE_PREFIX}draft`)).toBeNull();
+        expect(backend.getItem(`${STORAGE_PREFIX}settings`)).toBeNull();
+    });
+});
+
+describe('checks panel', () => {
+    test('errors are listed before warnings and tips, and the bar shows the count', async () => {
+        const upd = $('input[name="query-type"][value="update"]');
+        upd.checked = true;
+        upd.dispatchEvent(new Event('change', { bubbles: true }));
+        type('update.table', 't');
+        await settle();
+        // no WHERE (warning) and an empty SET column (error)
+        const levels = $$('#issues-list .issue-level').map(n => n.textContent);
+        expect(levels[0]).toBe('Error');
+        expect(levels.indexOf('Warning')).toBeGreaterThan(levels.lastIndexOf('Error'));
+        expect($('#status-badge').hidden).toBe(false);
+        expect($('#status-badge').dataset.level).toBe('error');
+        expect($('#view-sql-btn').getAttribute('aria-label')).toMatch(/\d errors?\)/);
+
+        type('update.set.0.column', 'a');
+        type('update.set.0.value', '1');
+        await settle();
+        expect($('#status-badge').dataset.level).toBe('warning');
+    });
+
+    test('field descriptions still point at the right message after sorting', async () => {
+        type('select.columns.0.expr', 'x');
+        $('#generate-btn').click();
+        await settle();
+        const input = field('select.from.table');
+        const id = input.getAttribute('aria-describedby').split(' ').pop();
+        expect(document.getElementById(id).textContent).toContain('table to select from');
     });
 });
 

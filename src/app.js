@@ -11,7 +11,7 @@ import { generateSQL } from './generator.js';
 import { validateWorkspace, hasErrors, summarize } from './validation.js';
 import { listDialects, getDialect } from './dialects.js';
 import { createStorage } from './storage.js';
-import { loadSettings, saveSettings } from './settings.js';
+import { loadSettings, saveSettings, DEFAULT_SETTINGS } from './settings.js';
 import { createHistory } from './history.js';
 import { createTemplateStore, TemplateError } from './templates.js';
 import { UndoStack } from './undo.js';
@@ -99,7 +99,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         promptDialog: $('prompt-dialog'),
         confirmDialog: $('confirm-dialog'),
         shortcutsDialog: $('shortcuts-dialog'),
-        clearData: $('clear-data-btn')
+        clearData: $('clear-data-btn'),
+        viewSql: $('view-sql-btn'),
+        statusBadge: $('status-badge')
     };
 
     // Listeners on document/window are tied to this signal so destroy() removes them
@@ -258,6 +260,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (pristine()) {
             el.issuesSummary.textContent = '';
             el.issuesList.replaceChildren();
+            renderStatusBadge(0, 0);
             return;
         }
         const { errors, warnings, infos } = summarize(state.issues);
@@ -266,9 +269,14 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (warnings) parts.push(`${warnings} ${warnings === 1 ? 'warning' : 'warnings'}`);
         if (infos) parts.push(`${infos} ${infos === 1 ? 'tip' : 'tips'}`);
         el.issuesSummary.textContent = parts.length ? `— ${parts.join(', ')}` : '— all good';
+        renderStatusBadge(errors, warnings);
 
         const labels = { error: 'Error', warning: 'Warning', info: 'Tip' };
-        el.issuesList.replaceChildren(...state.issues.map((issue, i) => h('li', {
+        const rank = { error: 0, warning: 1, info: 2 };
+        // Errors first, then warnings, then tips; ids keep the validation index
+        // because fields point at them with aria-describedby
+        const ordered = state.issues.map((issue, i) => [issue, i]).sort((a, b) => rank[a[0].level] - rank[b[0].level] || a[1] - b[1]);
+        el.issuesList.replaceChildren(...ordered.map(([issue, i]) => h('li', {
             class: `issue issue-${issue.level}${issue.category === 'safety' ? ' issue-safety' : ''}`,
             id: `issue-${i}`
         },
@@ -278,6 +286,18 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             ? h('button', { type: 'button', class: 'btn btn-link btn-sm', dataset: { goto: issue.path }, 'aria-label': `Go to field: ${issue.message}` }, 'Go to field')
             : null
         )));
+    }
+
+    // Error / warning count on the small-screen "View SQL" button
+    function renderStatusBadge(errors, warnings) {
+        const badge = el.statusBadge;
+        if (!badge) return;
+        const count = errors || warnings;
+        badge.hidden = count === 0;
+        badge.textContent = String(count);
+        badge.dataset.level = errors ? 'error' : 'warning';
+        const label = errors ? `${errors} ${errors === 1 ? 'error' : 'errors'}` : `${warnings} ${warnings === 1 ? 'warning' : 'warnings'}`;
+        el.viewSql.setAttribute('aria-label', count ? `View SQL and checks (${label})` : 'View SQL and checks');
     }
 
     function shouldMark(path) {
@@ -698,6 +718,16 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         el.templateExport.disabled = templates.list().length === 0;
     }
 
+    /**
+     * Switches to the dialect a saved query was made for. Returns a note for
+     * the toast (" (dialect: MySQL)") or '' when nothing changed.
+     */
+    function switchDialect(dialect) {
+        if (!dialect || dialect === state.settings.dialect || !listDialects().some(d => d.id === dialect)) return '';
+        updateSettings({ dialect });
+        return ` (dialect switched to ${getDialect(dialect).label})`;
+    }
+
     async function onLibraryClick(event) {
         const btn = event.target.closest('button[data-action]');
         if (!btn) return;
@@ -707,8 +737,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                 case 'history-restore': {
                     const entry = history.get(id);
                     if (!entry) return;
-                    if (entry.dialect !== state.settings.dialect) updateSettings({ dialect: entry.dialect });
-                    replaceWorkspace(structuredClone(entry.workspace), 'Query restored from history.');
+                    const switched = switchDialect(entry.dialect);
+                    replaceWorkspace(structuredClone(entry.workspace), `Query restored from history${switched}.`);
                     break;
                 }
                 case 'history-copy': {
@@ -724,7 +754,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     break;
                 case 'template-load': {
                     const template = templates.get(id);
-                    if (template) replaceWorkspace(structuredClone(template.workspace), `Loaded “${template.name}”. Undo restores your previous query.`);
+                    if (!template) return;
+                    const switched = switchDialect(template.dialect);
+                    replaceWorkspace(structuredClone(template.workspace), `Loaded “${template.name}”${switched}. Undo restores your previous query.`);
                     break;
                 }
                 case 'template-rename': {
@@ -774,7 +806,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         const name = await promptDialog(el.promptDialog, { title: 'Save as template', label: 'Template name', value: suggestion });
         if (name === null) return;
         try {
-            const template = templates.create(name, state.workspace);
+            const template = templates.create(name, state.workspace, { dialect: state.settings.dialect });
             renderTemplates();
             selectTab('templates');
             toast(`Saved template “${template.name}”.`, 'success');
@@ -846,19 +878,23 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         doc.getElementById('dialect-notes').textContent = notes.join(' ');
     }
 
-    function openSettings() {
-        const dialog = el.settingsDialog;
-        const dialectSelect = dialog.querySelector('[data-setting="dialect"]');
-        if (dialectSelect.options.length === 0) {
-            dialectSelect.append(...listDialects().map(d => h('option', { value: d.id }, d.label)));
-        }
-        for (const input of dialog.querySelectorAll('[data-setting]')) {
+    function syncSettingsForm() {
+        for (const input of el.settingsDialog.querySelectorAll('[data-setting]')) {
             const key = input.dataset.setting;
             if (input.type === 'checkbox') input.checked = state.settings[key];
             else if (input.type === 'radio') input.checked = input.value === state.settings[key];
             else input.value = state.settings[key];
         }
         renderDialectNotes();
+    }
+
+    function openSettings() {
+        const dialog = el.settingsDialog;
+        const dialectSelect = dialog.querySelector('[data-setting="dialect"]');
+        if (dialectSelect.options.length === 0) {
+            dialectSelect.append(...listDialects().map(d => h('option', { value: d.id }, d.label)));
+        }
+        syncSettingsForm();
         showDialog(dialog, () => dialectSelect.focus());
     }
 
@@ -873,14 +909,19 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     async function clearAllData() {
         const ok = await confirmDialog(el.confirmDialog, {
             title: 'Delete all saved data?',
-            message: 'This removes your history, templates, saved settings and unsaved work from this browser. It cannot be undone.',
+            message: 'This removes your history, templates and settings from this browser and clears the builder. It cannot be undone.',
             confirmText: 'Delete everything'
         });
         if (!ok) return;
         history.clear();
         for (const t of templates.list()) templates.remove(t.id);
-        storage.remove(DRAFT_KEY);
+        updateSettings({ ...DEFAULT_SETTINGS });
         storage.remove('settings');
+        replaceWorkspace(createWorkspace());
+        commitSoon.cancel();
+        saveDraft.cancel();
+        storage.remove(DRAFT_KEY);
+        syncSettingsForm();
         renderHistory();
         renderTemplates();
         toast('All saved data was deleted from this browser.', 'success');

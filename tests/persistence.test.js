@@ -182,6 +182,33 @@ describe('templates', () => {
     });
 });
 
+describe('template dialects', () => {
+    const w = createWorkspace();
+
+    test('the dialect is stored, duplicated, reloaded and exported; unknown ones are dropped', () => {
+        const storage = memoryStorage();
+        const store = createTemplateStore(storage);
+        const a = store.create('Pg', w, { dialect: 'postgresql' });
+        expect(a.dialect).toBe('postgresql');
+        expect(store.duplicate(a.id).dialect).toBe('postgresql');
+        expect(store.create('Bad', w, { dialect: 'oracle' }).dialect).toBeUndefined();
+        const reloaded = createTemplateStore(storage).list();
+        expect(reloaded.find(t => t.name === 'Pg').dialect).toBe('postgresql');
+        const exported = createTemplatesExport(reloaded);
+        expect(exported.templates.find(t => t.name === 'Pg').dialect).toBe('postgresql');
+        const parsed = parseTemplatesFile(JSON.stringify(exported));
+        expect(parsed.ok && parsed.templates.find(t => t.name === 'Pg').dialect).toBe('postgresql');
+    });
+
+    test('templates saved by earlier versions (no dialect) still load', () => {
+        const storage = memoryStorage();
+        storage.set('templates', [{ id: 'x', name: 'Old', createdAt: 1, updatedAt: 1, workspace: w }]);
+        const [old] = createTemplateStore(storage).list();
+        expect(old.name).toBe('Old');
+        expect(old.dialect).toBeUndefined();
+    });
+});
+
 describe('undo stack', () => {
     test('undo / redo / branch', () => {
         const stack = new UndoStack();
