@@ -41,7 +41,7 @@ cpSync(join(root, 'style.css'), join(out, 'style.css'));
 
 let html = readFileSync(join(root, 'index.html'), 'utf8');
 // Website-only features (PWA manifest / service worker) are not used in the app
-html = html.replace(/\s*<link rel="manifest"[^>]*>/, '').replace(/\s*<meta name="theme-color"[^>]*>/g, '');
+html = html.replace(/\s*<link rel="manifest"[^>]*>/, '').replace(/\s*<meta name="theme-color"[^>]*>/g, '').replace(/\s*<link rel="apple-touch-icon"[^>]*>/, '');
 html = html.replace('<meta charset="UTF-8">', `<meta charset="UTF-8">\n    <meta http-equiv="Content-Security-Policy" content="${NATIVE_CSP}">`);
 writeFileSync(join(out, 'index.html'), stamp(html, out));
 

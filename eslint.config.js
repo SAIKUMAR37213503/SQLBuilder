@@ -23,6 +23,14 @@ export default [
         }
     },
     {
+        files: ['sw.js'],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: 'script',
+            globals: { ...globals.serviceworker }
+        }
+    },
+    {
         rules: {
             'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
             eqeqeq: ['error', 'always', { null: 'ignore' }],
