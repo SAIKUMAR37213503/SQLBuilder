@@ -136,6 +136,8 @@ npm run dev       # http://localhost:3000
 - The versioned assets are cache-first.
 - The service worker only runs over `https` or on `localhost`; from `file://` the app simply works without it.
 
+**Windows:** the PWA is packaged for the Microsoft Store with PWABuilder ([MICROSOFT_STORE.md](MICROSOFT_STORE.md)).
+
 **Android:** install an APK built from this repository ([ANDROID.md](ANDROID.md)). Google Play distribution is being prepared ([PLAY_STORE_RELEASE_CHECKLIST.md](PLAY_STORE_RELEASE_CHECKLIST.md)).
 
 ## Development

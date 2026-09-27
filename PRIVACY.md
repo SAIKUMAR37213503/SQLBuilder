@@ -44,6 +44,8 @@ The website version (hosted on Vercel) works the same way:
 
 Like any web host, Vercel receives standard request information, such as your IP address and browser type, when your browser downloads the page. That is outside the app's code and is covered by [Vercel's privacy policy](https://vercel.com/legal/privacy-policy). The Android app does not contact Vercel or any other server.
 
+The Windows app from the Microsoft Store is this website installed as an app (a progressive web app packaged with PWABuilder). It loads its files from the website and then works offline, stores data only on your PC, and sends nothing you type anywhere.
+
 ## Children
 
 The app is a general-purpose developer tool and is not directed at children. It collects no data from anyone.
