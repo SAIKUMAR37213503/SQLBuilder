@@ -789,8 +789,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (state.settings.saveHistory) {
             const restored = history.restore(backup.history, { replace });
             parts.push(`${count(restored.added, 'history entry', 'history entries')} added${restored.skipped ? ` (${restored.skipped} already here)` : ''}${restored.dropped ? `, keeping the newest ${history.list().length}` : ''}`);
-        } else if (backup.history.length) {
-            parts.push('history not restored because saving history is turned off');
+        } else {
+            // Replace promised to remove the current history, even when the backup's is not restored
+            if (replace) history.clear();
+            if (backup.history.length) parts.push('history not restored because saving history is turned off');
         }
         if (state.sourceId && !templates.get(state.sourceId)) {
             state.sourceId = null;
@@ -1400,7 +1402,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     bindShortcuts(doc, signal, {
         generate,
         copy: copySql,
-        save: saveQuery,
+        // Not over another dialog: saving can open the template dialog
+        save: () => { if (!doc.querySelector('dialog[open]')) saveQuery(); },
         palette: showPalette,
         undo,
         redo,

@@ -224,6 +224,10 @@ describe('template dialects', () => {
         expect(store.setPinned(a.id, true).pinned).toBe(true);
         expect(createTemplateStore(storage).get(a.id).pinned).toBe(true);
         expect(store.duplicate(a.id).pinned).toBeUndefined();
+        // Saving over and renaming keep the pin
+        expect(store.update(a.id, w, { dialect: 'mysql' }).pinned).toBe(true);
+        expect(store.rename(a.id, 'A2').pinned).toBe(true);
+        store.rename(a.id, 'A');
         const parsed = parseTemplatesFile(JSON.stringify(createTemplatesExport(store.list())));
         expect(parsed.ok && parsed.templates.map(t => Boolean(t.pinned))).toEqual([true, false]);
         expect(store.importMany(parsed.ok ? parsed.templates : [])[0].pinned).toBe(true);

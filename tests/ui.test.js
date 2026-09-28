@@ -740,6 +740,46 @@ describe('full backup', () => {
         expect($('#query-name').textContent).toBe('Unsaved query');
     });
 
+    test('integrity: merging into the same browser adds nothing, and replace then back up gives the same data', async () => {
+        // A query built through the editor, not from a factory
+        await fillSimpleSelect('orders', 'id');
+        add('select.where.items', 'condition');
+        type('select.where.items.0.left', 'status');
+        type('select.where.items.0.value', 'paid');
+        await settle();
+        $('#generate-btn').click();
+        $('#template-save-btn').click();
+        await answerTemplate('Paid orders', { description: 'Only paid', category: 'Sales' });
+        $('[aria-label="Pin template Paid orders to the top"]').click();
+        type('select.from.table', 'refunds');
+        await settle();
+        $('#generate-btn').click();
+        await settle();
+        const first = JSON.parse(await exportBackup());
+        expect(first.templates).toHaveLength(1);
+        expect(first.history).toHaveLength(2);
+
+        await restore(JSON.stringify(first), 'merge');
+        expect(toast()).toBe('Backup restored: 0 templates added (1 already here), 0 history entries added (2 already here). Your settings were kept.');
+
+        await restore(JSON.stringify(first), 'replace');
+        await answerConfirm(true);
+        const second = JSON.parse(await exportBackup());
+        const strip = (b) => ({ ...b, exportedAt: '' });
+        expect(strip(second)).toEqual(strip(first));
+    });
+
+    test('replace removes the current history even when the backup has history turned off', async () => {
+        await seed();
+        const text = await exportBackup();
+        const data = JSON.parse(text);
+        data.settings.saveHistory = false;
+        await restore(JSON.stringify(data), 'replace');
+        await answerConfirm(true);
+        expect(app.history.list()).toEqual([]);
+        expect(toast()).toContain('history not restored because saving history is turned off');
+    });
+
     test('cancelling or a bad file changes nothing; history stays off when turned off', async () => {
         await seed();
         const text = await exportBackup();
@@ -1237,6 +1277,20 @@ describe('command palette', () => {
         $('#palette-list [role="option"]').click();
         await settle();
         expect($('[data-output-mode="compact"]').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    test('Ctrl/⌘+S and Ctrl/⌘+K do nothing while another dialog is open', async () => {
+        await fillSimpleSelect();
+        $('#settings-btn').click();
+        await settle();
+        const save = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true });
+        document.dispatchEvent(save);
+        await settle();
+        expect(save.defaultPrevented).toBe(true);
+        expect($('#template-dialog').hasAttribute('open')).toBe(false);
+        press('k', { ctrlKey: true });
+        await settle();
+        expect($$('dialog[open]').map(d => d.id)).toEqual(['settings-dialog']);
     });
 
     test('it does not open over another dialog', async () => {

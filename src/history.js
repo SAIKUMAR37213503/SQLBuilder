@@ -89,12 +89,11 @@ export function createHistory(storage, { limit = HISTORY_LIMIT, now = () => Date
                 fresh.push({ id: createId(), timestamp: item.timestamp, type: item.type, dialect: item.dialect, sql: item.sql, workspace: structuredClone(item.workspace) });
             }
             const combined = [...base, ...fresh].sort((a, b) => b.timestamp - a.timestamp);
-            const kept = combined.slice(0, limit);
-            const keptIds = new Set(kept.map(e => e.id));
-            entries = kept;
-            if (entries.length) persist();
+            entries = combined.slice(0, limit);
+            if (entries.length) persist(); // may keep fewer when storage is nearly full
             else storage.remove(HISTORY_KEY);
-            return { added: fresh.filter(e => keptIds.has(e.id)).length, skipped, dropped: combined.length - kept.length };
+            const keptIds = new Set(entries.map(e => e.id));
+            return { added: fresh.filter(e => keptIds.has(e.id)).length, skipped, dropped: combined.length - entries.length };
         },
 
         remove(id) {
