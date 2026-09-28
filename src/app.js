@@ -11,7 +11,8 @@ import { generateSQL } from './generator.js';
 import { validateWorkspace, hasErrors, summarize } from './validation.js';
 import { listDialects, getDialect } from './dialects.js';
 import { createStorage } from './storage.js';
-import { loadSettings, saveSettings } from './settings.js';
+import { splitTopLevel } from './sql-utils.js';
+import { loadSettings, saveSettings, DEFAULT_SETTINGS } from './settings.js';
 import { createHistory } from './history.js';
 import { createTemplateStore, TemplateError } from './templates.js';
 import { UndoStack } from './undo.js';
@@ -47,7 +48,8 @@ const ITEM_FACTORIES = {
     cte: () => createCte(),
     setOp: () => createSetOp(),
     row: () => ({ values: '' }),
-    assignment: () => createAssignment()
+    assignment: () => createAssignment(),
+    upsertAssignment: () => ({ ...createAssignment(), valueType: 'inserted' })
 };
 
 /**
@@ -77,6 +79,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         download: $('download-btn'),
         selectAll: $('select-all-btn'),
         modeButtons: $$('[data-output-mode]'),
+        wrap: $('wrap-btn'),
         dialectBadge: $('dialect-badge'),
         complexity: $('complexity'),
         issuesSummary: $('issues-summary'),
@@ -99,7 +102,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         promptDialog: $('prompt-dialog'),
         confirmDialog: $('confirm-dialog'),
         shortcutsDialog: $('shortcuts-dialog'),
-        clearData: $('clear-data-btn')
+        clearData: $('clear-data-btn'),
+        viewSql: $('view-sql-btn'),
+        statusBadge: $('status-badge')
     };
 
     // Listeners on document/window are tied to this signal so destroy() removes them
@@ -134,6 +139,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             return createWorkspace();
         }
     }
+
+    const validationOptions = () => ({
+        dialect: state.settings.dialect,
+        quoteIdentifiers: state.settings.quoteIdentifiers
+    });
 
     const generationOptions = (pretty = state.settings.outputMode === 'formatted') => ({
         dialect: state.settings.dialect,
@@ -194,7 +204,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     const pristine = () => isPristine(state.workspace);
 
     function refresh() {
-        state.issues = validateWorkspace(state.workspace, { dialect: state.settings.dialect });
+        state.issues = validateWorkspace(state.workspace, validationOptions());
         const valid = !hasErrors(state.issues);
         const live = state.settings.livePreview;
 
@@ -253,6 +263,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (pristine()) {
             el.issuesSummary.textContent = '';
             el.issuesList.replaceChildren();
+            renderStatusBadge(0, 0);
             return;
         }
         const { errors, warnings, infos } = summarize(state.issues);
@@ -261,9 +272,14 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (warnings) parts.push(`${warnings} ${warnings === 1 ? 'warning' : 'warnings'}`);
         if (infos) parts.push(`${infos} ${infos === 1 ? 'tip' : 'tips'}`);
         el.issuesSummary.textContent = parts.length ? `— ${parts.join(', ')}` : '— all good';
+        renderStatusBadge(errors, warnings);
 
         const labels = { error: 'Error', warning: 'Warning', info: 'Tip' };
-        el.issuesList.replaceChildren(...state.issues.map((issue, i) => h('li', {
+        const rank = { error: 0, warning: 1, info: 2 };
+        // Errors first, then warnings, then tips; ids keep the validation index
+        // because fields point at them with aria-describedby
+        const ordered = state.issues.map((issue, i) => [issue, i]).sort((a, b) => rank[a[0].level] - rank[b[0].level] || a[1] - b[1]);
+        el.issuesList.replaceChildren(...ordered.map(([issue, i]) => h('li', {
             class: `issue issue-${issue.level}${issue.category === 'safety' ? ' issue-safety' : ''}`,
             id: `issue-${i}`
         },
@@ -273,6 +289,18 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             ? h('button', { type: 'button', class: 'btn btn-link btn-sm', dataset: { goto: issue.path }, 'aria-label': `Go to field: ${issue.message}` }, 'Go to field')
             : null
         )));
+    }
+
+    // Error / warning count on the small-screen "View SQL" button
+    function renderStatusBadge(errors, warnings) {
+        const badge = el.statusBadge;
+        if (!badge) return;
+        const count = errors || warnings;
+        badge.hidden = count === 0;
+        badge.textContent = String(count);
+        badge.dataset.level = errors ? 'error' : 'warning';
+        const label = errors ? `${errors} ${errors === 1 ? 'error' : 'errors'}` : `${warnings} ${warnings === 1 ? 'warning' : 'warnings'}`;
+        el.viewSql.setAttribute('aria-label', count ? `View SQL and checks (${label})` : 'View SQL and checks');
     }
 
     function shouldMark(path) {
@@ -360,6 +388,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         const spec = OPERATORS[c.op];
         if (!spec) return;
         if (spec.subqueryOnly) c.valueType = 'subquery';
+        if (c.valueType === 'param' && spec.operands !== 1 && spec.operands !== 2) c.valueType = 'value';
         if (c.valueType === 'subquery' && !spec.subquery) c.valueType = 'value';
         if (c.valueType === 'subquery' && !c.subquery) {
             c.subquery = createSelect({ columns: [createColumn(spec.subqueryOnly ? '1' : '')] });
@@ -401,6 +430,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     const owner = getAt(state.workspace, parentPath(path));
                     if (owner && owner.kind === 'condition') normalizeCondition(owner);
                 }
+                if (path.endsWith('upsert.mode') && value === 'update') {
+                    const upsert = getAt(state.workspace, parentPath(path));
+                    if (upsert.set.length === 0) upsert.set.push(ITEM_FACTORIES.upsertAssignment());
+                }
             }
         };
 
@@ -435,6 +468,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             const index = Number(splitPath(path).pop());
             mutate(() => { getAt(state.workspace, listPath).splice(index, 1); },
                 { action: 'add-item', path: listPath });
+        } else if (action === 'fill-upsert') {
+            mutate(() => fillUpsert(path), { path, action: 'fill-upsert' });
         } else if (action === 'move-up' || action === 'move-down') {
             const listPath = parentPath(path);
             const index = Number(splitPath(path).pop());
@@ -443,6 +478,24 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             if (to < 0 || to >= list.length) return;
             mutate(() => { [list[index], list[to]] = [list[to], list[index]]; },
                 { action, path: `${listPath}.${to}` });
+        }
+    }
+
+    // Upsert: update every inserted column (except the conflict key) with the
+    // value the row tried to insert. Existing assignments for other columns stay.
+    function fillUpsert(upsertPath) {
+        const insert = getAt(state.workspace, parentPath(upsertPath));
+        const upsert = insert.upsert;
+        const key = (text) => String(text).trim().toLowerCase();
+        const conflict = new Set(splitTopLevel(upsert.conflict).filter(Boolean).map(key));
+        const kept = upsert.set.filter(a => key(a.column) !== '');
+        const present = new Set(kept.map(a => key(a.column)));
+        const added = splitTopLevel(insert.columns).filter(Boolean)
+            .filter(c => !conflict.has(key(c)) && !present.has(key(c)))
+            .map(column => ({ column, valueType: 'inserted', value: '' }));
+        upsert.set = [...kept, ...added];
+        if (added.length === 0 && kept.length === 0) {
+            toast('List the INSERT columns first, then fill the update from them.');
         }
     }
 
@@ -459,7 +512,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     function generate() {
         commitSoon.flush();
         scheduleRefresh.cancel();
-        state.issues = validateWorkspace(state.workspace, { dialect: state.settings.dialect });
+        state.issues = validateWorkspace(state.workspace, validationOptions());
         if (hasErrors(state.issues)) {
             state.attempted = true;
             refresh();
@@ -638,6 +691,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     }
 
     function redo() {
+        // Typing since the last undo is a new change: record it (which clears
+        // the redo list) instead of silently replacing it with the redo state
+        commitSoon.flush();
         const next = undoStack.redo();
         if (!next) return;
         state.workspace = next;
@@ -690,6 +746,16 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         el.templateExport.disabled = templates.list().length === 0;
     }
 
+    /**
+     * Switches to the dialect a saved query was made for. Returns a note for
+     * the toast (" (dialect: MySQL)") or '' when nothing changed.
+     */
+    function switchDialect(dialect) {
+        if (!dialect || dialect === state.settings.dialect || !listDialects().some(d => d.id === dialect)) return '';
+        updateSettings({ dialect });
+        return ` (dialect switched to ${getDialect(dialect).label})`;
+    }
+
     async function onLibraryClick(event) {
         const btn = event.target.closest('button[data-action]');
         if (!btn) return;
@@ -699,8 +765,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                 case 'history-restore': {
                     const entry = history.get(id);
                     if (!entry) return;
-                    if (entry.dialect !== state.settings.dialect) updateSettings({ dialect: entry.dialect });
-                    replaceWorkspace(structuredClone(entry.workspace), 'Query restored from history.');
+                    const switched = switchDialect(entry.dialect);
+                    replaceWorkspace(structuredClone(entry.workspace), `Query restored from history${switched}.`);
                     break;
                 }
                 case 'history-copy': {
@@ -716,7 +782,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     break;
                 case 'template-load': {
                     const template = templates.get(id);
-                    if (template) replaceWorkspace(structuredClone(template.workspace), `Loaded “${template.name}”. Undo restores your previous query.`);
+                    if (!template) return;
+                    const switched = switchDialect(template.dialect);
+                    replaceWorkspace(structuredClone(template.workspace), `Loaded “${template.name}”${switched}. Undo restores your previous query.`);
                     break;
                 }
                 case 'template-rename': {
@@ -748,7 +816,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                 }
                 case 'example-load': {
                     const example = EXAMPLES.find(e => e.id === id);
-                    if (example) replaceWorkspace(example.build(), `Loaded example “${example.name}”.`);
+                    if (!example) return;
+                    // Dialect-specific examples (upserts) switch to a dialect they work in
+                    const switched = example.dialects && !example.dialects.includes(state.settings.dialect)
+                        ? switchDialect(example.dialects[0]) : '';
+                    replaceWorkspace(example.build(), `Loaded example “${example.name}”${switched}.`);
                     break;
                 }
                 default:
@@ -766,7 +838,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         const name = await promptDialog(el.promptDialog, { title: 'Save as template', label: 'Template name', value: suggestion });
         if (name === null) return;
         try {
-            const template = templates.create(name, state.workspace);
+            const template = templates.create(name, state.workspace, { dialect: state.settings.dialect });
             renderTemplates();
             selectTab('templates');
             toast(`Saved template “${template.name}”.`, 'success');
@@ -794,11 +866,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         }
         if (patch.saveHistory !== undefined) renderHistory();
         if (patch.restoreSession === false) storage.remove(DRAFT_KEY);
-        if (patch.outputMode !== undefined) renderModeButtons();
+        if (patch.outputMode !== undefined || patch.wrapOutput !== undefined) renderModeButtons();
         if (patch.dialect !== undefined && patch.dialect !== before.dialect) renderDialectNotes();
         if (state.generated && (patch.dialect !== undefined || patch.quoteIdentifiers !== undefined || patch.outputMode !== undefined)) {
             // Keep a manually generated query in sync with output preferences
-            if (!hasErrors(validateWorkspace(state.workspace, { dialect: state.settings.dialect }))) {
+            if (!hasErrors(validateWorkspace(state.workspace, validationOptions()))) {
                 state.generated = { snapshot: state.generated.snapshot, sql: generateSQL(JSON.parse(state.generated.snapshot), generationOptions()) };
             }
         }
@@ -831,11 +903,24 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
     function renderModeButtons() {
         el.modeButtons.forEach(btn => btn.setAttribute('aria-pressed', String(btn.dataset.outputMode === state.settings.outputMode)));
+        // Wrapping is display only: copy, download and history use the SQL text
+        el.wrap.setAttribute('aria-pressed', String(state.settings.wrapOutput));
+        el.output.classList.toggle('wrap', state.settings.wrapOutput);
     }
 
     function renderDialectNotes() {
         const notes = getDialect(state.settings.dialect).notes;
         doc.getElementById('dialect-notes').textContent = notes.join(' ');
+    }
+
+    function syncSettingsForm() {
+        for (const input of el.settingsDialog.querySelectorAll('[data-setting]')) {
+            const key = input.dataset.setting;
+            if (input.type === 'checkbox') input.checked = state.settings[key];
+            else if (input.type === 'radio') input.checked = input.value === state.settings[key];
+            else input.value = state.settings[key];
+        }
+        renderDialectNotes();
     }
 
     function openSettings() {
@@ -844,13 +929,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (dialectSelect.options.length === 0) {
             dialectSelect.append(...listDialects().map(d => h('option', { value: d.id }, d.label)));
         }
-        for (const input of dialog.querySelectorAll('[data-setting]')) {
-            const key = input.dataset.setting;
-            if (input.type === 'checkbox') input.checked = state.settings[key];
-            else if (input.type === 'radio') input.checked = input.value === state.settings[key];
-            else input.value = state.settings[key];
-        }
-        renderDialectNotes();
+        syncSettingsForm();
         showDialog(dialog, () => dialectSelect.focus());
     }
 
@@ -865,14 +944,19 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     async function clearAllData() {
         const ok = await confirmDialog(el.confirmDialog, {
             title: 'Delete all saved data?',
-            message: 'This removes your history, templates, saved settings and unsaved work from this browser. It cannot be undone.',
+            message: 'This removes your history, templates and settings from this browser and clears the builder. It cannot be undone.',
             confirmText: 'Delete everything'
         });
         if (!ok) return;
         history.clear();
         for (const t of templates.list()) templates.remove(t.id);
-        storage.remove(DRAFT_KEY);
+        updateSettings({ ...DEFAULT_SETTINGS });
         storage.remove('settings');
+        replaceWorkspace(createWorkspace());
+        commitSoon.cancel();
+        saveDraft.cancel();
+        storage.remove(DRAFT_KEY);
+        syncSettingsForm();
         renderHistory();
         renderTemplates();
         toast('All saved data was deleted from this browser.', 'success');
@@ -913,6 +997,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         selectContents(el.code);
     });
     el.modeButtons.forEach(btn => btn.addEventListener('click', () => updateSettings({ outputMode: btn.dataset.outputMode })));
+    el.wrap.addEventListener('click', () => updateSettings({ wrapOutput: !state.settings.wrapOutput }));
 
     el.issuesList.addEventListener('click', (event) => {
         const btn = event.target.closest('button[data-goto]');

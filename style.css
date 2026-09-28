@@ -425,7 +425,12 @@ kbd {
 .row .grow { flex: 1 1 7rem; min-width: 0; }
 .row .alias { flex: 0 1 7.5rem; min-width: 5rem; }
 
-.row-tools { display: flex; gap: 0.1rem; margin-left: auto; }
+.row-tools { display: flex; flex-wrap: nowrap; gap: 0.1rem; margin-left: auto; }
+.row-tools .btn-icon { width: 2rem; }
+
+/* Column rows: shrink the selects before the tools wrap onto their own line */
+.column-row .select-narrow { min-width: 0; max-width: 9.5rem; }
+.column-row .alias { flex-basis: 6.5rem; }
 
 .card {
     display: grid;
@@ -564,6 +569,20 @@ kbd {
 }
 .builder-actions .btn-primary { flex: 1 1 12rem; min-height: 2.6rem; font-size: 1rem; }
 
+/* Wide screens: Generate stays in view at the bottom of a long builder */
+@media (min-width: 1100px) {
+    .builder-actions {
+        position: sticky;
+        bottom: 0;
+        z-index: 5;
+        margin-inline: -1rem;
+        margin-bottom: -1rem;
+        padding: 0.75rem 1rem calc(0.75rem + var(--safe-bottom));
+        background: var(--surface);
+        border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    }
+}
+
 /* -------------------------------------------------------------- output */
 
 .dialect-badge {
@@ -626,6 +645,10 @@ kbd {
     -webkit-user-select: none;
 }
 
+/* Wrap long lines (display only). Continuation lines start after the number. */
+.sql-output.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.sql-output.wrap .line { display: block; padding-left: 3.45em; text-indent: -3.45em; }
+
 .tok-keyword { color: var(--tok-keyword); font-weight: 650; }
 .tok-string { color: var(--tok-string); }
 .tok-number { color: var(--tok-number); }
@@ -633,6 +656,7 @@ kbd {
 .tok-func { color: var(--tok-func); }
 .tok-identifier { color: var(--tok-identifier); }
 .tok-comment { color: var(--tok-comment); font-style: italic; }
+.tok-param { color: var(--tok-number); font-weight: 650; }
 
 .output-state:empty { display: none; }
 .output-state { margin-bottom: 0.5rem; }
@@ -798,6 +822,43 @@ kbd {
 
 .mobile-bar { display: none; }
 
+.status-badge {
+    min-width: 1.35rem;
+    padding: 0 0.35rem;
+    border-radius: 999px;
+    background: var(--warning);
+    color: var(--surface);
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1.35rem;
+    text-align: center;
+}
+.status-badge[data-level="error"] { background: var(--danger); }
+
+.output-panel:focus { outline: none; }
+
+/* Below the two-column layout the SQL sits under the builder, so phones,
+   tablets and narrow windows get a fixed bar with the main actions. */
+@media (max-width: 1099px) {
+    .app { padding-bottom: calc(6rem + var(--safe-bottom)); }
+    .toast { bottom: calc(5.5rem + var(--safe-bottom)); }
+    .output-panel { scroll-margin-top: calc(0.75rem + var(--safe-top)); }
+
+    .mobile-bar {
+        position: fixed;
+        inset: auto 0 0 0;
+        z-index: 40;
+        display: grid;
+        grid-template-columns: 2fr 1fr 1fr;
+        gap: 0.5rem;
+        padding: 0.6rem calc(0.75rem + var(--safe-right)) calc(0.6rem + var(--safe-bottom)) calc(0.75rem + var(--safe-left));
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+        box-shadow: var(--shadow-lg);
+    }
+    .mobile-bar .btn { min-height: 2.75rem; }
+}
+
 @media (max-width: 719px) {
     body { font-size: 16px; } /* 16px inputs prevent iOS zoom on focus */
     .app { padding: calc(0.75rem + var(--safe-top)) calc(0.75rem + var(--safe-right)) calc(6rem + var(--safe-bottom)) calc(0.75rem + var(--safe-left)); }
@@ -814,21 +875,11 @@ kbd {
     .builder-actions .btn-primary { grid-column: 1 / -1; }
     .output-actions { width: 100%; }
     .sql-output { font-size: 0.8rem; max-height: none; }
-    .toast { bottom: calc(5.5rem + var(--safe-bottom)); }
-
-    .mobile-bar {
-        position: fixed;
-        inset: auto 0 0 0;
-        z-index: 40;
-        display: grid;
-        grid-template-columns: 2fr 1fr 1fr;
-        gap: 0.5rem;
-        padding: 0.6rem calc(0.75rem + var(--safe-right)) calc(0.6rem + var(--safe-bottom)) calc(0.75rem + var(--safe-left));
-        background: var(--surface);
-        border-top: 1px solid var(--border);
-        box-shadow: var(--shadow-lg);
-    }
-    .mobile-bar .btn { min-height: 2.75rem; }
+    .segment { min-height: 2.5rem; padding-inline: 0.75rem; }
+    /* Theme lives in Settings, and shortcuts need a keyboard: one toolbar row */
+    #theme-btn, #shortcuts-btn { display: none; }
+    .row-tools .btn-icon { width: 2.6rem; }
+    .column-row .select-narrow { max-width: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

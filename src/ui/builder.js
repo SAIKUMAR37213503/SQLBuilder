@@ -37,6 +37,10 @@ const WINDOW_ARG_PLACEHOLDERS = {
 };
 import { MAX_NESTING_DEPTH } from '../validation.js';
 
+const PARAM_PLACEHOLDER = 'parameter name (optional)';
+
+const ASSIGNMENT_TYPES = [['value', 'Value'], ['column', 'Column / expression'], ['param', 'Parameter']];
+
 const fieldId = (path) => `f-${path.replace(/[^\w-]/g, '-')}`;
 
 // ---------------------------------------------------------------------------
@@ -478,6 +482,7 @@ class Renderer {
         const valueTypes = [
             ['value', 'Value'],
             ['column', 'Column / expression'],
+            spec.operands === 1 || spec.operands === 2 ? ['param', 'Parameter'] : null,
             spec.subquery ? ['subquery', 'Subquery', !canNest && c.valueType !== 'subquery'] : null
         ].filter(Boolean);
 
@@ -494,14 +499,15 @@ class Renderer {
             }
         }
         if (c.valueType !== 'subquery' && showsValues) {
-            const placeholder = c.valueType === 'column' ? 'column or expression' : 'value';
+            const isParam = c.valueType === 'param';
+            const placeholder = isParam ? PARAM_PLACEHOLDER : c.valueType === 'column' ? 'column or expression' : 'value';
             if (spec.operands === 1) {
-                parts.push(textInput(joinPath(path, 'value'), c.value, { label: `${n} value`, hidden: true, placeholder, className: 'grow' }));
+                parts.push(textInput(joinPath(path, 'value'), c.value, { label: `${n} ${isParam ? 'parameter name' : 'value'}`, hidden: true, placeholder, className: 'grow' }));
             } else if (spec.operands === 2) {
                 parts.push(
-                    textInput(joinPath(path, 'value'), c.value, { label: `${n} lower bound`, hidden: true, placeholder: 'from', className: 'grow' }),
+                    textInput(joinPath(path, 'value'), c.value, { label: `${n} lower bound${isParam ? ' parameter name' : ''}`, hidden: true, placeholder: isParam ? PARAM_PLACEHOLDER : 'from', className: 'grow' }),
                     h('span', { class: 'keyword' }, 'AND'),
-                    textInput(joinPath(path, 'value2'), c.value2, { label: `${n} upper bound`, hidden: true, placeholder: 'to', className: 'grow' })
+                    textInput(joinPath(path, 'value2'), c.value2, { label: `${n} upper bound${isParam ? ' parameter name' : ''}`, hidden: true, placeholder: isParam ? PARAM_PLACEHOLDER : 'to', className: 'grow' })
                 );
             } else if (spec.operands === 'list') {
                 parts.push(textInput(joinPath(path, 'value'), c.value, { label: `${n} values`, hidden: true, placeholder: c.valueType === 'column' ? '(a, b) or expression' : 'a, b, c', className: 'grow' }));
@@ -521,21 +527,72 @@ class Renderer {
     // ------------------------------------------------------ INSERT / UPDATE / DELETE
 
     insert(q, path) {
+        const fromSelect = q.source === 'select';
         return h('div', { class: 'dml-editor', dataset: { path } },
             field(joinPath(path, 'table'), q.table, { label: 'Table', placeholder: 'e.g. employees', required: true }),
             field(joinPath(path, 'columns'), q.columns, { label: 'Columns', placeholder: 'e.g. name, department, salary', hint: 'Comma-separated. Optional, but recommended.' }),
-            h('fieldset', { class: 'fieldset' },
-                h('legend', {}, 'Rows'),
-                h('p', { class: 'field-hint' }, "Values are SQL: write text in single quotes, e.g. 'Ada', 95000, NULL."),
-                h('ol', { class: 'item-list' }, q.rows.map((row, i) => {
-                    const rPath = joinPath(path, 'rows', i);
-                    return h('li', { class: 'row', dataset: { path: rPath } },
-                        h('span', { class: 'keyword' }, `Row ${i + 1}`),
-                        textInput(joinPath(rPath, 'values'), row.values, { label: `Values for row ${i + 1}`, hidden: true, placeholder: "'Ada', 'Engineering', 95000", className: 'grow' }),
-                        q.rows.length > 1 ? rowTools(rPath, i, q.rows.length, 'row') : null);
+            h('div', { class: 'row' },
+                h('label', { class: 'field-label', for: fieldId(joinPath(path, 'source')) }, 'Rows from'),
+                select(joinPath(path, 'source'), q.source, [['values', 'Values I type (VALUES)'], ['select', 'A query (INSERT … SELECT)']], { rerender: true })
+            ),
+            fromSelect
+                ? h('fieldset', { class: 'fieldset' },
+                    h('legend', {}, 'SELECT'),
+                    h('p', { class: 'field-hint' }, 'Its columns are inserted in order into the columns listed above.'),
+                    this.select(q.select, joinPath(path, 'select'), { depth: 1, top: false, branch: false }))
+                : h('fieldset', { class: 'fieldset' },
+                    h('legend', {}, 'Rows'),
+                    h('p', { class: 'field-hint' }, "Values are SQL: write text in single quotes, e.g. 'Ada', 95000, NULL."),
+                    h('ol', { class: 'item-list' }, q.rows.map((row, i) => {
+                        const rPath = joinPath(path, 'rows', i);
+                        return h('li', { class: 'row', dataset: { path: rPath } },
+                            h('span', { class: 'keyword' }, `Row ${i + 1}`),
+                            textInput(joinPath(rPath, 'values'), row.values, { label: `Values for row ${i + 1}`, hidden: true, placeholder: "'Ada', 'Engineering', 95000", className: 'grow' }),
+                            q.rows.length > 1 ? rowTools(rPath, i, q.rows.length, 'row') : null);
+                    })),
+                    addBar(button('+ Row', 'add-item', joinPath(path, 'rows'), { arg: 'row' }))
+                ),
+            this.upsert(q.upsert, joinPath(path, 'upsert'))
+        );
+    }
+
+    // ON CONFLICT (PostgreSQL) / ON DUPLICATE KEY UPDATE (MySQL)
+    upsert(u, path) {
+        const modePath = joinPath(path, 'mode');
+        return h('fieldset', { class: 'fieldset', dataset: { path } },
+            h('legend', {}, 'On conflict (upsert)'),
+            h('div', { class: 'row' },
+                h('label', { class: 'field-label', for: fieldId(modePath) }, 'When a row already exists'),
+                select(modePath, u.mode, [
+                    ['', 'Fail (default)'],
+                    ['nothing', 'Skip the row (DO NOTHING)'],
+                    ['update', 'Update the existing row']
+                ], { rerender: true })
+            ),
+            u.mode ? field(joinPath(path, 'conflict'), u.conflict, {
+                label: 'Conflict columns', placeholder: 'e.g. email',
+                hint: 'The unique key that detects an existing row (PostgreSQL). MySQL uses every unique key.'
+            }) : null,
+            u.mode === 'update' ? [
+                h('h4', { class: 'sub-heading' }, 'Update'),
+                h('ol', { class: 'item-list' }, u.set.map((a, i) => {
+                    const aPath = joinPath(path, 'set', i);
+                    return h('li', { class: 'row', dataset: { path: aPath } },
+                        textInput(joinPath(aPath, 'column'), a.column, { label: `Conflict update column ${i + 1}`, hidden: true, placeholder: 'column', className: 'grow' }),
+                        h('span', { class: 'keyword' }, '='),
+                        select(joinPath(aPath, 'valueType'), a.valueType, [['inserted', 'Inserted value'], ...ASSIGNMENT_TYPES],
+                            { label: `Conflict update ${i + 1} value type`, rerender: true, className: 'select-narrow' }),
+                        a.valueType === 'inserted' ? null : textInput(joinPath(aPath, 'value'), a.value, {
+                            label: `Conflict update ${i + 1} new value`, hidden: true, className: 'grow',
+                            placeholder: a.valueType === 'param' ? PARAM_PLACEHOLDER : 'new value'
+                        }),
+                        rowTools(aPath, i, u.set.length, 'conflict update'));
                 })),
-                addBar(button('+ Row', 'add-item', joinPath(path, 'rows'), { arg: 'row' }))
-            )
+                addBar(
+                    button('+ Column', 'add-item', joinPath(path, 'set'), { arg: 'upsertAssignment' }),
+                    button('Update all inserted columns', 'fill-upsert', path)
+                )
+            ] : null
         );
     }
 
@@ -549,8 +606,8 @@ class Renderer {
                     return h('li', { class: 'row', dataset: { path: aPath } },
                         textInput(joinPath(aPath, 'column'), a.column, { label: `SET column ${i + 1}`, hidden: true, placeholder: 'column', className: 'grow' }),
                         h('span', { class: 'keyword' }, '='),
-                        select(joinPath(aPath, 'valueType'), a.valueType, [['value', 'Value'], ['column', 'Column / expression']], { label: `SET ${i + 1} value type`, className: 'select-narrow' }),
-                        textInput(joinPath(aPath, 'value'), a.value, { label: `SET ${i + 1} new value`, hidden: true, placeholder: 'new value', className: 'grow' }),
+                        select(joinPath(aPath, 'valueType'), a.valueType, ASSIGNMENT_TYPES, { label: `SET ${i + 1} value type`, rerender: true, className: 'select-narrow' }),
+                        textInput(joinPath(aPath, 'value'), a.value, { label: `SET ${i + 1} new value`, hidden: true, placeholder: a.valueType === 'param' ? PARAM_PLACEHOLDER : 'new value', className: 'grow' }),
                         rowTools(aPath, i, q.set.length, 'assignment'));
                 })),
                 addBar(button('+ Column', 'add-item', joinPath(path, 'set'), { arg: 'assignment' }))

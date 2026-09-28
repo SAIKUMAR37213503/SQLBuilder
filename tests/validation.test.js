@@ -400,3 +400,176 @@ describe('window function validation', () => {
         expect(validateQuery(q)).toEqual([]);
     });
 });
+
+describe('dialect and correctness checks', () => {
+    const derived = (inner) => {
+        const q = select();
+        q.from = createSubquerySource();
+        q.from.alias = 'x';
+        Object.assign(q.from.query, { columns: [createColumn('id')], from: createTableSource('t') }, inner);
+        return q;
+    };
+
+    test('SQL Server rejects ORDER BY in a subquery without LIMIT / OFFSET', () => {
+        const q = derived({ orderBy: [createOrderItem('id')] });
+        const issue = find(validateQuery(q, { dialect: 'sqlserver' }), "doesn't allow ORDER BY inside a subquery");
+        expect(issue.level).toBe('error');
+        expect(issue.path).toBe('from.query.orderBy');
+        expect(find(validateQuery(derived({ orderBy: [createOrderItem('id')], limit: '5' }), { dialect: 'sqlserver' }), 'ORDER BY inside')).toBeUndefined();
+        expect(find(validateQuery(q, { dialect: 'postgresql' }), 'ORDER BY inside a subquery').level).toBe('info');
+    });
+
+    test('SQL Server rejects ORDER BY inside a CTE', () => {
+        const q = select({ ctes: [createCte()] });
+        Object.assign(q.ctes[0], { name: 'c' });
+        Object.assign(q.ctes[0].query, { columns: [createColumn('id')], from: createTableSource('t'), orderBy: [createOrderItem('id')] });
+        expect(hasErrors(validateQuery(q, { dialect: 'sqlserver' }))).toBe(true);
+        expect(hasErrors(validateQuery(q, { dialect: 'generic' }))).toBe(false);
+    });
+
+    test('MySQL rejects LIMIT inside IN (subquery)', () => {
+        const sub = createSelect({ columns: [createColumn('id')], from: createTableSource('b'), limit: '5' });
+        const q = select({ where: where(cond('id', 'IN', '', { valueType: 'subquery', subquery: sub })) });
+        const issue = find(validateQuery(q, { dialect: 'mysql' }), 'LIMIT inside an IN');
+        expect(issue.level).toBe('error');
+        expect(find(validateQuery(q, { dialect: 'postgresql' }), 'LIMIT inside')).toBeUndefined();
+        const scalar = select({ where: where(cond('id', '=', '', { valueType: 'subquery', subquery: sub })) });
+        expect(find(validateQuery(scalar, { dialect: 'mysql' }), 'LIMIT inside')).toBeUndefined();
+    });
+
+    test('HAVING on a SELECT alias warns except on MySQL', () => {
+        const q = select({
+            columns: [createColumn('dept'), createColumn('salary', { aggregate: 'SUM', alias: 'total' })],
+            groupBy: [createGroupByItem('dept')],
+            having: where(cond('total', '>', '100'))
+        });
+        const issue = find(validateQuery(q, { dialect: 'postgresql' }), 'is a SELECT alias');
+        expect(issue.level).toBe('warning');
+        expect(issue.message).toContain('SUM(salary)');
+        expect(issue.path).toBe('having.items.0.left');
+        expect(find(validateQuery(q, { dialect: 'mysql' }), 'SELECT alias')).toBeUndefined();
+        q.having = where(cond('SUM(salary)', '>', '100'));
+        expect(find(validateQuery(q, { dialect: 'postgresql' }), 'SELECT alias')).toBeUndefined();
+    });
+
+    test('reserved words as names warn unless identifiers are quoted', () => {
+        const q = select({ columns: [createColumn('o.id', { alias: 'order' })], from: createTableSource('orders', 'o') });
+        const issue = find(validateQuery(q), 'reserved SQL word');
+        expect(issue.level).toBe('warning');
+        expect(issue.path).toBe('columns.0.alias');
+        expect(find(validateQuery(q, { quoteIdentifiers: true }), 'reserved')).toBeUndefined();
+        expect(find(validateQuery(select({ from: createTableSource('group') })), 'reserved SQL word').path).toBe('from.table');
+        expect(find(validateQuery(select({ columns: [createColumn('t.select')] })), 'reserved SQL word')).toBeTruthy();
+        expect(find(validateQuery(select({ columns: [createColumn('COUNT(order_id)')] })), 'reserved')).toBeUndefined();
+    });
+
+    test('INSERT warns about leading-zero numbers', () => {
+        const q = createInsert();
+        Object.assign(q, { table: 't', columns: 'zip, n', rows: [{ values: '01234, 0' }] });
+        const issues = validateQuery(q);
+        expect(find(issues, "write '01234'").level).toBe('warning');
+        expect(issues.filter(i => i.message.includes('stored as the number'))).toHaveLength(1);
+    });
+});
+
+describe('INSERT … SELECT, upserts and parameters', () => {
+    const baseInsert = (extra = {}) => {
+        const q = createInsert();
+        Object.assign(q, { table: 'customers', columns: 'email, name', rows: [{ values: "'a@x.io', 'Ada'" }] }, extra);
+        return q;
+    };
+
+    test('INSERT … SELECT column count must match the listed columns', () => {
+        const q = baseInsert({ source: 'select' });
+        q.select = select({ columns: [createColumn('a')] });
+        const issue = find(validateQuery(q), 'SELECT returns 1 column but 2 columns are listed');
+        expect(issue.level).toBe('error');
+        expect(issue.path).toBe('select.columns');
+        q.select.columns.push(createColumn('b'));
+        expect(hasErrors(validateQuery(q))).toBe(false);
+    });
+
+    test('INSERT … SELECT validates the query, forbids CTEs and allows ORDER BY on SQL Server', () => {
+        const q = baseInsert({ source: 'select' });
+        q.select = select({ columns: [createColumn('a'), createColumn('b')], orderBy: [createOrderItem('a')] });
+        expect(hasErrors(validateQuery(q, { dialect: 'sqlserver' }))).toBe(false);
+        q.select.ctes = [createCte()];
+        expect(find(validateQuery(q), 'WITH (CTEs) can only be used on the main query')).toBeTruthy();
+        q.select.ctes = [];
+        q.select.from.table = '';
+        expect(find(validateQuery(q), 'table to select from').path).toBe('select.from.table');
+    });
+
+    test('VALUES rows are not checked when the rows come from a query', () => {
+        const q = baseInsert({ source: 'select', rows: [{ values: '' }] });
+        q.select = select({ columns: [createColumn('a'), createColumn('b')] });
+        expect(hasErrors(validateQuery(q))).toBe(false);
+    });
+
+    test('upsert support per dialect', () => {
+        const q = baseInsert({ upsert: { mode: 'nothing', conflict: '', set: [] } });
+        expect(find(validateQuery(q, { dialect: 'generic' }), "isn't available for Generic SQL").level).toBe('error');
+        expect(find(validateQuery(q, { dialect: 'sqlserver' }), "isn't available for SQL Server")).toBeTruthy();
+        expect(hasErrors(validateQuery(q, { dialect: 'postgresql' }))).toBe(false);
+        expect(find(validateQuery(q, { dialect: 'mysql' }), 'MySQL has no “do nothing”').level).toBe('error');
+    });
+
+    test('PostgreSQL DO UPDATE needs conflict columns and assignments', () => {
+        const q = baseInsert({ upsert: { mode: 'update', conflict: '', set: [] } });
+        const issues = validateQuery(q, { dialect: 'postgresql' });
+        expect(find(issues, 'needs the conflict columns').path).toBe('upsert.conflict');
+        expect(find(issues, 'Add at least one column to update').path).toBe('upsert.set');
+        q.upsert.conflict = 'email';
+        q.upsert.set = [{ column: 'name', valueType: 'inserted', value: '' }];
+        expect(hasErrors(validateQuery(q, { dialect: 'postgresql' }))).toBe(false);
+    });
+
+    test('upsert assignments: invalid, duplicate and not-inserted columns', () => {
+        const q = baseInsert({
+            upsert: {
+                mode: 'update', conflict: 'email',
+                set: [
+                    { column: 'name', valueType: 'inserted', value: '' },
+                    { column: 'name', valueType: 'value', value: 'x' },
+                    { column: 'visits', valueType: 'inserted', value: '' },
+                    { column: 'a b', valueType: 'value', value: '1' }
+                ]
+            }
+        });
+        const issues = validateQuery(q, { dialect: 'postgresql' });
+        expect(find(issues, 'is updated twice')).toBeTruthy();
+        expect(find(issues, "isn't one of the inserted columns").level).toBe('warning');
+        expect(find(issues, "“a b” isn't a valid column name")).toBeTruthy();
+    });
+
+    test('MySQL notes the ignored conflict columns and VALUES() deprecation', () => {
+        const q = baseInsert({ upsert: { mode: 'update', conflict: 'email', set: [{ column: 'name', valueType: 'inserted', value: '' }] } });
+        const issues = validateQuery(q, { dialect: 'mysql' });
+        expect(hasErrors(issues)).toBe(false);
+        expect(find(issues, "aren't part of the SQL").level).toBe('info');
+        expect(find(issues, 'deprecated from 8.0.20').level).toBe('info');
+    });
+
+    test('parameter names', () => {
+        const q = select({ where: where(cond('a', '=', 'bad name', { valueType: 'param' })) });
+        expect(find(validateQuery(q), 'can only contain letters').level).toBe('error');
+        const numbered = select({ where: where(cond('a', '=', '2', { valueType: 'param' })) });
+        expect(hasErrors(validateQuery(numbered, { dialect: 'postgresql' }))).toBe(false);
+        expect(find(validateQuery(numbered, { dialect: 'sqlserver' }), 'must start with a letter')).toBeTruthy();
+        const named = select({ where: where(cond('a', '=', 'x', { valueType: 'param' }), cond('b', '=', 'y', { valueType: 'param' })) });
+        const tips = validateQuery(named, { dialect: 'mysql' }).filter(i => i.message.includes('parameter names'));
+        expect(tips).toHaveLength(1);
+        expect(validateQuery(named, { dialect: 'sqlserver' })).toEqual([]);
+    });
+
+    test('parameters are not offered for list operators', () => {
+        const q = select({ where: where(cond('a', 'IN', '', { valueType: 'param' })) });
+        expect(find(validateQuery(q), "can't take a parameter")).toBeTruthy();
+    });
+
+    test('UPDATE SET with a parameter', () => {
+        const q = createUpdate();
+        Object.assign(q, { table: 't', set: [{ column: 'x', valueType: 'param', value: '' }], where: where(cond('id', '=', '1')) });
+        expect(validateQuery(q)).toEqual([]);
+    });
+});

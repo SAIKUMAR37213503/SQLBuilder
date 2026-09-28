@@ -19,7 +19,7 @@ Everything you enter stays **on your device**:
 
 - This data is never sent to the developer or anyone else.
 - On Android, the app opts out of Android backup (`allowBackup="false"`), so it is not copied to Google Drive or other backups. It is deleted when you uninstall the app or clear its storage.
-- You can delete history, templates and settings at any time: **Settings → Delete all saved data…** in the app (or **Clear history** in the History tab), or Android **Settings → Apps → SQL Builder Pro Lite → Storage → Clear storage**.
+- You can delete history, templates, settings and the query in progress at any time: **Settings → Delete all saved data…** in the app (or **Clear history** in the History tab), or Android **Settings → Apps → SQL Builder Pro Lite → Storage → Clear storage**.
 
 ## What the app does not do
 

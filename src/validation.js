@@ -13,15 +13,24 @@
 // Only errors block generation; warnings never stop the user.
 
 import {
-    OPERATORS, JOIN_TYPES, SET_OPERATORS, AGGREGATES, LOGIC_OPERATORS, WINDOW_FUNCTIONS, WINDOW_FRAMES, joinPath
+    OPERATORS, JOIN_TYPES, SET_OPERATORS, AGGREGATES, LOGIC_OPERATORS, WINDOW_FUNCTIONS, WINDOW_FRAMES, UPSERT_MODES, joinPath
 } from './model.js';
 import { getDialect } from './dialects.js';
 import {
     findSyntaxProblem, isQualifiedName, isIdentifier, isColumnReference, splitTopLevel,
-    containsAggregateCall, normalizeExpr, isNumberLiteral, isQuotedString, isBareIdentifier, stripStrings
+    containsAggregateCall, normalizeExpr, isNumberLiteral, isQuotedString, isBareIdentifier, stripStrings, hasLeadingZero
 } from './sql-utils.js';
 
 export const MAX_NESTING_DEPTH = 4;
+
+// Words reserved in all supported dialects: used unquoted as a name they make
+// the statement fail. Deliberately short; not a full keyword list.
+export const RESERVED_WORDS = new Set([
+    'ALL', 'AND', 'AS', 'ASC', 'BETWEEN', 'BY', 'CASE', 'CHECK', 'COLUMN', 'CONSTRAINT', 'CREATE', 'DEFAULT',
+    'DELETE', 'DESC', 'DISTINCT', 'DROP', 'ELSE', 'END', 'FOREIGN', 'FROM', 'GRANT', 'GROUP', 'HAVING', 'IN',
+    'INSERT', 'INTO', 'IS', 'JOIN', 'LIKE', 'NOT', 'NULL', 'ON', 'OR', 'ORDER', 'PRIMARY', 'REFERENCES', 'SELECT',
+    'SET', 'TABLE', 'THEN', 'TO', 'UNION', 'UPDATE', 'VALUES', 'WHEN', 'WHERE', 'WITH'
+]);
 
 const SQL_VALUE_KEYWORDS = new Set([
     'NULL', 'DEFAULT', 'TRUE', 'FALSE', 'CURRENT_DATE', 'CURRENT_TIME', 'CURRENT_TIMESTAMP',
@@ -29,8 +38,13 @@ const SQL_VALUE_KEYWORDS = new Set([
 ]);
 
 /**
+ * @typedef {{ dialect?: string, quoteIdentifiers?: boolean }} ValidateOptions
+ *   quoteIdentifiers: names will be quoted, so reserved words are safe
+ */
+
+/**
  * @param {any} workspace
- * @param {{ dialect?: string }} [options]
+ * @param {ValidateOptions} [options]
  */
 export function validateWorkspace(workspace, options = {}) {
     return validateQuery(workspace[workspace.type], options, workspace.type);
@@ -38,11 +52,11 @@ export function validateWorkspace(workspace, options = {}) {
 
 /**
  * @param {any} query
- * @param {{ dialect?: string }} [options]
+ * @param {ValidateOptions} [options]
  * @param {string} [basePath]
  */
 export function validateQuery(query, options = {}, basePath = '') {
-    const v = new Validator(getDialect(options.dialect));
+    const v = new Validator(getDialect(options.dialect), Boolean(options.quoteIdentifiers));
     switch (query.kind) {
         case 'select': v.select(query, basePath, { scope: '', depth: 0, branch: false, top: true }); break;
         case 'insert': v.insert(query, basePath); break;
@@ -50,6 +64,7 @@ export function validateQuery(query, options = {}, basePath = '') {
         case 'delete': v.delete(query, basePath); break;
         default: v.add('error', 'builder', `Unknown query type "${query.kind}".`, basePath);
     }
+    v.finish();
     return v.issues;
 }
 
@@ -66,9 +81,52 @@ const blank = (value) => String(value ?? '').trim() === '';
 const quote = (text) => `“${String(text).trim()}”`;
 
 class Validator {
-    constructor(dialect) {
+    constructor(dialect, quoteIdentifiers = false) {
         this.dialect = dialect;
+        this.quoteIdentifiers = quoteIdentifiers;
         this.issues = [];
+        /** @type {null | { path: string, scope: string }} first parameter whose name the dialect can't use */
+        this.ignoredParam = null;
+    }
+
+    // Statement-wide notes, added once after everything else was checked
+    finish() {
+        if (this.ignoredParam) {
+            const { path, scope } = this.ignoredParam;
+            this.add('info', 'builder', this.dialect.id === 'mysql'
+                ? 'MySQL parameters are written as ?, so parameter names aren\'t part of the SQL. Bind the values in the order the ? appear.'
+                : 'PostgreSQL parameters are numbered ($1, $2, … in order), so parameter names aren\'t part of the SQL. Enter a number instead of a name to choose the position.',
+            path, scope);
+        }
+    }
+
+    // Parameter placeholder: the optional name the user typed
+    param(name, path, scope) {
+        const text = String(name ?? '').trim();
+        if (text === '') return;
+        const numeric = /^\d+$/.test(text);
+        if (!numeric && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text)) {
+            this.add('error', 'builder', `Parameter name ${quote(text)} can only contain letters, numbers and _, and must start with a letter.`, path, scope);
+            return;
+        }
+        const id = this.dialect.id;
+        if (id === 'mysql' || (id === 'postgresql' && !numeric)) {
+            // Reported once per statement by finish()
+            if (!this.ignoredParam) this.ignoredParam = { path, scope };
+        } else if (id !== 'postgresql' && numeric) {
+            this.add('error', 'builder', `Parameter name ${quote(text)} must start with a letter in ${this.dialect.label}.`, path, scope);
+        }
+    }
+
+    // A bare name (or dotted chain) that is a reserved word fails unless quoted
+    reserved(name, path, scope) {
+        if (this.quoteIdentifiers) return;
+        const word = String(name ?? '').trim().split('.').find(part => isBareIdentifier(part) && RESERVED_WORDS.has(part.toUpperCase()));
+        if (word) {
+            this.add('warning', 'syntax',
+                `${quote(word)} is a reserved SQL word, so the query fails unless it's quoted. Turn on “Quote table and column names” in Settings, or write it in quotes.`,
+                path, scope);
+        }
     }
 
     add(level, category, message, path, scope = '') {
@@ -96,6 +154,8 @@ class Validator {
             this.add('error', 'builder',
                 `${quote(name)} isn't a valid table name. Use letters, numbers and _ (optionally schema.table), or wrap the name in quotes.`,
                 path, scope);
+        } else {
+            this.reserved(name, path, scope);
         }
     }
 
@@ -104,6 +164,8 @@ class Validator {
             this.add('error', 'builder',
                 `Alias ${quote(name)} can only contain letters, numbers and _ and can't start with a number (or wrap it in quotes).`,
                 path, scope);
+        } else if (!blank(name)) {
+            this.reserved(name, path, scope);
         }
     }
 
@@ -138,9 +200,24 @@ class Validator {
                 }
             });
             this.pagination(q, path, scope);
+            if (!ctx.top && !ctx.insertSource) this.nestedOrderBy(q, path, scope);
         }
 
         this.setOps(q, path, ctx);
+    }
+
+    // ORDER BY inside a subquery or CTE only matters together with LIMIT/OFFSET
+    nestedOrderBy(q, path, scope) {
+        if (q.orderBy.length === 0 || !blank(q.limit) || !blank(q.offset)) return;
+        if (this.dialect.subqueryOrderByNeedsLimit) {
+            this.add('error', 'builder',
+                `${this.dialect.label} doesn't allow ORDER BY inside a subquery or CTE without LIMIT or OFFSET. Remove the sort here and sort the main query, or add a LIMIT.`,
+                joinPath(path, 'orderBy'), scope);
+        } else {
+            this.add('info', 'builder',
+                'ORDER BY inside a subquery or CTE doesn\'t decide the order of the final result; sort the main query instead.',
+                joinPath(path, 'orderBy'), scope);
+        }
     }
 
     ctes(q, path, ctx) {
@@ -159,6 +236,8 @@ class Validator {
                 this.add('error', 'builder', `CTE name ${quote(name)} can only contain letters, numbers and _.`, joinPath(cPath, 'name'));
             } else if (seen.has(name.toLowerCase())) {
                 this.add('error', 'builder', `Two CTEs are named ${quote(name)}.`, joinPath(cPath, 'name'));
+            } else {
+                this.reserved(name, joinPath(cPath, 'name'), '');
             }
             seen.add(name.toLowerCase());
             this.select(cte.query, joinPath(cPath, 'query'), {
@@ -188,7 +267,10 @@ class Validator {
             } else {
                 if (!AGGREGATES.includes(col.aggregate)) this.add('error', 'builder', `Unknown aggregate ${quote(col.aggregate)}.`, joinPath(cPath, 'aggregate'), scope);
                 const countStar = col.aggregate === 'COUNT' && blank(col.expr);
-                if (!countStar) this.fragment(col.expr, joinPath(cPath, 'expr'), scope, { label: 'a column or expression' });
+                if (!countStar && this.fragment(col.expr, joinPath(cPath, 'expr'), scope, { label: 'a column or expression' })
+                    && isColumnReference(String(col.expr).trim())) {
+                    this.reserved(col.expr, joinPath(cPath, 'expr'), scope);
+                }
                 if (col.aggregate && col.aggregate !== 'COUNT' && String(col.expr).trim() === '*') {
                     this.add('error', 'builder', `${col.aggregate}(*) isn't valid; choose a column.`, joinPath(cPath, 'expr'), scope);
                 }
@@ -405,6 +487,12 @@ class Validator {
             this.select(c.subquery, joinPath(path, 'subquery'), {
                 scope: `Subquery in ${clause}`, depth: ctx.depth + 1, branch: false, top: false
             });
+            const limited = !blank(c.subquery.limit) || !blank(c.subquery.offset);
+            if ((c.op === 'IN' || c.op === 'NOT IN') && limited && !this.dialect.limitInInSubquery) {
+                this.add('error', 'builder',
+                    `${this.dialect.label} doesn't support LIMIT inside an ${c.op} (…) subquery. Put the limited query in a FROM subquery instead: ${c.op} (SELECT id FROM (SELECT … LIMIT n) AS t).`,
+                    joinPath(path, 'subquery', 'limit'), scope);
+            }
             if (!spec.subqueryOnly && outputColumnCount(c.subquery) > 1) {
                 this.add('error', 'builder', `A subquery used with ${c.op} must return exactly one column.`, joinPath(path, 'subquery', 'columns'), scope);
             }
@@ -412,6 +500,16 @@ class Validator {
         }
         if (spec.subqueryOnly) {
             this.add('error', 'builder', `${c.op} needs a subquery; set the value type to "Subquery".`, joinPath(path, 'valueType'), scope);
+            return;
+        }
+
+        if (c.valueType === 'param') {
+            if (spec.operands !== 1 && spec.operands !== 2) {
+                this.add('error', 'builder', `${c.op} can't take a parameter here; use a value list or a subquery.`, joinPath(path, 'valueType'), scope);
+                return;
+            }
+            this.param(c.value, joinPath(path, 'value'), scope);
+            if (spec.operands === 2) this.param(c.value2, joinPath(path, 'value2'), scope);
             return;
         }
 
@@ -468,9 +566,45 @@ class Validator {
             });
         }
 
+        if (countActive(q.having) > 0 && !this.dialect.havingAcceptsAlias) this.havingAliases(q, path, scope, groupKeys);
+
         if (countActive(q.having) > 0 && groupKeys.size === 0 && !aggregated) {
             this.add('warning', 'builder', 'HAVING filters groups, but there is no GROUP BY or aggregate. Did you mean WHERE?', joinPath(path, 'having'), scope);
         }
+    }
+
+    // HAVING runs before SELECT, so most databases can't see SELECT aliases there
+    havingAliases(q, path, scope, groupKeys) {
+        const aliases = new Map();
+        for (const col of q.columns) {
+            if (col.kind === 'window' || blank(col.alias)) continue;
+            const key = normalizeExpr(String(col.alias).trim());
+            if (col.kind === 'column' && (normalizeExpr(String(col.expr).trim()).split('.').pop() === key || groupKeys.has(key))) continue;
+            let expression = 'the CASE expression';
+            if (col.kind === 'column') {
+                const e = String(col.expr).trim();
+                expression = col.aggregate === 'COUNT DISTINCT' ? `COUNT(DISTINCT ${e})`
+                    : col.aggregate ? `${col.aggregate}(${e || '*'})` : e;
+            }
+            aliases.set(key, expression);
+        }
+        if (aliases.size === 0) return;
+        const check = (group, gPath) => group.items.forEach((item, i) => {
+            const iPath = joinPath(gPath, 'items', i);
+            if (item.kind === 'group') return check(item, iPath);
+            if (item.kind !== 'condition') return;
+            const texts = [['left', item.left], ...(item.valueType === 'column' ? [['value', item.value], ['value2', item.value2]] : [])];
+            for (const [key, text] of texts) {
+                const expression = aliases.get(normalizeExpr(String(text ?? '').trim()));
+                if (expression) {
+                    this.add('warning', 'builder',
+                        `${quote(text)} is a SELECT alias; ${this.dialect.label} doesn't allow aliases in HAVING. Repeat the expression instead: ${expression}.`,
+                        joinPath(iPath, key), scope);
+                    return;
+                }
+            }
+        });
+        check(q.having, joinPath(path, 'having'));
     }
 
     pagination(q, path, scope) {
@@ -542,6 +676,21 @@ class Validator {
             this.add('info', 'builder', 'Listing the columns makes the INSERT safer if the table changes later.', joinPath(path, 'columns'));
         }
 
+        this.upsert(q.upsert, joinPath(path, 'upsert'), columns);
+
+        if (q.source === 'select') {
+            this.select(q.select, joinPath(path, 'select'), {
+                scope: 'SELECT for INSERT', depth: 1, branch: false, top: false, insertSource: true
+            });
+            const count = outputColumnCount(q.select);
+            if (columns.length > 0 && count > 0 && count !== columns.length) {
+                this.add('error', 'builder',
+                    `The SELECT returns ${count} column${count === 1 ? '' : 's'} but ${columns.length} column${columns.length === 1 ? ' is' : 's are'} listed for the INSERT.`,
+                    joinPath(path, 'select', 'columns'));
+            }
+            return;
+        }
+
         if (q.rows.length === 0) {
             this.add('error', 'builder', 'Add at least one row of values.', joinPath(path, 'rows'));
         }
@@ -565,6 +714,8 @@ class Validator {
             parts.forEach(part => {
                 if (isBareIdentifier(part) && !SQL_VALUE_KEYWORDS.has(part.toUpperCase())) {
                     this.add('warning', 'builder', `${label}: ${part} will be read as a column name. If it's text, write '${part}'.`, rPath);
+                } else if (hasLeadingZero(part)) {
+                    this.add('warning', 'builder', `${label}: ${part} will be stored as the number ${Number(part)}. If it's a code (zip, phone, ID), write '${part}'.`, rPath);
                 }
             });
         });
@@ -587,13 +738,65 @@ class Validator {
                 this.add('error', 'builder', `Column ${quote(col)} is set twice.`, joinPath(aPath, 'column'));
             }
             seen.add(col.toLowerCase());
-            if (a.valueType === 'column') this.fragment(a.value, joinPath(aPath, 'value'), '', { label: 'the new value' });
-            else if (blank(a.value)) this.add('error', 'builder', "Enter the new value. (Use '' for empty text or NULL.)", joinPath(aPath, 'value'));
+            this.assignmentValue(a, aPath);
         });
         this.group(q.where, joinPath(path, 'where'), '', { depth: 0 }, 'WHERE');
         if (countActive(q.where) === 0) {
             const table = blank(q.table) ? 'the table' : quote(q.table);
             this.add('warning', 'safety', `Warning: This UPDATE query has no WHERE clause and will modify every row in ${table}.`, joinPath(path, 'where'));
+        }
+    }
+
+    assignmentValue(a, aPath) {
+        if (a.valueType === 'column') this.fragment(a.value, joinPath(aPath, 'value'), '', { label: 'the new value' });
+        else if (a.valueType === 'param') this.param(a.value, joinPath(aPath, 'value'), '');
+        else if (a.valueType === 'inserted') return;
+        else if (blank(a.value)) this.add('error', 'builder', "Enter the new value. (Use '' for empty text or NULL.)", joinPath(aPath, 'value'));
+    }
+
+    // ON CONFLICT (PostgreSQL) / ON DUPLICATE KEY UPDATE (MySQL)
+    upsert(u, path, insertColumns) {
+        if (!u || !u.mode) return;
+        const d = this.dialect;
+        if (!UPSERT_MODES.includes(u.mode)) {
+            this.add('error', 'builder', `Unknown conflict handling ${quote(u.mode)}.`, joinPath(path, 'mode'));
+            return;
+        }
+        if (!d.upsert) {
+            this.add('error', 'builder', `Conflict handling (upsert) isn't available for ${d.label} yet. Choose PostgreSQL or MySQL in Settings, or set “On conflict” to “Fail (default)”.`, joinPath(path, 'mode'));
+            return;
+        }
+        const target = splitTopLevel(String(u.conflict)).filter(c => c !== '');
+        target.forEach(col => {
+            if (!isColumnReference(col) || col.endsWith('*')) this.add('error', 'builder', `${quote(col)} isn't a valid column name.`, joinPath(path, 'conflict'));
+        });
+        if (d.upsert === 'on-duplicate-key') {
+            if (u.mode === 'nothing') {
+                this.add('error', 'builder', 'MySQL has no “do nothing” on conflict. Choose “Update the existing row” (for example set a column to its current value).', joinPath(path, 'mode'));
+                return;
+            }
+            if (target.length) this.add('info', 'builder', 'MySQL checks every unique key, so the conflict columns aren\'t part of the SQL.', joinPath(path, 'conflict'));
+        } else if (u.mode === 'update' && target.length === 0) {
+            this.add('error', 'builder', 'PostgreSQL needs the conflict columns (the unique key, e.g. email) to update on conflict.', joinPath(path, 'conflict'));
+        }
+        if (u.mode !== 'update') return;
+        if (u.set.length === 0) this.add('error', 'builder', 'Add at least one column to update on conflict.', joinPath(path, 'set'));
+        const known = new Set(insertColumns.map(c => c.toLowerCase()));
+        const seen = new Set();
+        u.set.forEach((a, i) => {
+            const aPath = joinPath(path, 'set', i);
+            const col = String(a.column).trim();
+            if (!col) this.add('error', 'builder', 'Enter the column to update.', joinPath(aPath, 'column'));
+            else if (!isColumnReference(col) || col.endsWith('*')) this.add('error', 'builder', `${quote(col)} isn't a valid column name.`, joinPath(aPath, 'column'));
+            else if (seen.has(col.toLowerCase())) this.add('error', 'builder', `Column ${quote(col)} is updated twice.`, joinPath(aPath, 'column'));
+            else if (a.valueType === 'inserted' && known.size > 0 && !known.has(col.toLowerCase())) {
+                this.add('warning', 'builder', `${quote(col)} isn't one of the inserted columns, so its “inserted value” is the column default.`, joinPath(aPath, 'column'));
+            }
+            seen.add(col.toLowerCase());
+            this.assignmentValue(a, aPath);
+        });
+        if (d.upsert === 'on-duplicate-key' && u.set.some(a => a.valueType === 'inserted')) {
+            this.add('info', 'builder', 'VALUES(column) works in all MySQL 8 versions but is deprecated from 8.0.20; newer code can use a row alias instead.', joinPath(path, 'set'));
         }
     }
 

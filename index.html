@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=ed4f291a78e0">
+    <link rel="stylesheet" href="style.css?v=02c6d86a96df">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -60,7 +60,7 @@
             </section>
 
             <div class="side">
-                <section class="panel output-panel" aria-labelledby="output-heading">
+                <section class="panel output-panel" id="output-panel" tabindex="-1" aria-labelledby="output-heading">
                     <div class="panel-header">
                         <h2 id="output-heading">SQL <span class="dialect-badge" id="dialect-badge"></span></h2>
                         <div class="output-actions">
@@ -68,6 +68,7 @@
                                 <button type="button" class="segment" data-output-mode="formatted" aria-pressed="true">Formatted</button>
                                 <button type="button" class="segment" data-output-mode="compact" aria-pressed="false">One line</button>
                             </div>
+                            <button type="button" class="btn btn-ghost" id="wrap-btn" aria-pressed="false" title="Wrap long lines (display only; copied SQL is unchanged)">Wrap</button>
                             <button type="button" class="btn btn-ghost" id="select-all-btn">Select all</button>
                             <button type="button" class="btn btn-ghost" id="download-btn">Download</button>
                             <button type="button" class="btn btn-ghost" id="share-btn" hidden>Share</button>
@@ -80,7 +81,7 @@
                     <p class="complexity" id="complexity"></p>
 
                     <div class="issues" aria-labelledby="issues-heading">
-                        <h3 id="issues-heading" class="issues-heading">Checks <span id="issues-summary" class="issues-summary"></span></h3>
+                        <h3 id="issues-heading" class="issues-heading">Checks <span id="issues-summary" class="issues-summary" aria-live="polite"></span></h3>
                         <ul id="issues-list" class="issues-list"></ul>
                     </div>
 
@@ -127,11 +128,11 @@
         </footer>
     </div>
 
-    <!-- Mobile: keep the primary actions reachable -->
+    <!-- Phones, tablets and narrow windows: keep the primary actions reachable -->
     <div class="mobile-bar">
         <button type="button" class="btn btn-primary" data-command="generate">Generate</button>
         <button type="button" class="btn btn-secondary" data-command="copy">Copy</button>
-        <a class="btn btn-secondary" href="#sql-output">View SQL</a>
+        <a class="btn btn-secondary" id="view-sql-btn" href="#output-panel" aria-label="View SQL and checks">View SQL <span class="status-badge" id="status-badge" aria-hidden="true" hidden></span></a>
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -214,6 +215,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=c72bce6f54a3" defer></script>
+    <script src="dist/sqlbuilder.js?v=4507ca0aa514" defer></script>
 </body>
 </html>

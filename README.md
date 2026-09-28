@@ -16,7 +16,12 @@ It comes in four forms, all built from the same code:
 
 ## Features
 
-**Query types:** SELECT, INSERT (one or many rows), UPDATE, DELETE.
+**Query types:** SELECT, INSERT, UPDATE, DELETE.
+
+**INSERT builder**
+- Rows from `VALUES` (one or many rows) or from a query (`INSERT INTO … SELECT …`), with the column count checked.
+- **Upserts** ("On conflict"): PostgreSQL `ON CONFLICT (…) DO NOTHING` / `DO UPDATE SET …` and MySQL `ON DUPLICATE KEY UPDATE …`. Update values can be the inserted value (`EXCLUDED.col` / `VALUES(col)`), a value, a column/expression or a parameter; "Update all inserted columns" fills them in.
+- Numbers with a leading zero (`007`) are flagged, because they are stored as numbers and lose the zero.
 
 **SELECT builder**
 - **Window functions** (`… OVER (PARTITION BY … ORDER BY … frame)`):
@@ -45,16 +50,21 @@ It comes in four forms, all built from the same code:
 **Values vs. expressions:** every condition value is either
 - a **Value**, which is quoted and escaped for you: `John` → `'John'`, `O'Brien` → `'O''Brien'`, while numbers stay numbers, `true`/`false` become the dialect's boolean, and `null` becomes `NULL`;
 - a **Column / expression**, inserted as written (`o.user_id`, `CURRENT_DATE`); or
-- a **Subquery**.
+- a **Subquery**; or
+- a **Parameter** placeholder written in the dialect's style (`:name` / `?`, `$1`, `?`, `@name`), numbered in output order.
+
+Values with a leading zero, such as ZIP codes (`01234`), are quoted as text so the zero is kept.
+
+A custom SQL condition that contains a top-level `AND`/`OR` is wrapped in parentheses when it sits next to other conditions, so it can't change the meaning of the group.
 
 **Output**
-- Formatted SQL (one clause per line, 4-space indentation) or a single line
-- Syntax highlighting and line numbers; the line numbers are never copied
+- Formatted SQL (one clause per line, 4-space indentation) or a single line, with an optional Wrap toggle for long lines
+- Syntax highlighting (including parameter placeholders) and line numbers; the line numbers are never copied
 - Live preview while you type (can be switched off)
 - Copy, Select all, Download `.sql`. On Android, Download and Export open the share sheet so you can save to Files or Drive, or send to another app. A Share button shares the SQL text.
 
 **Checks:** the checks panel shows three kinds of message:
-- **Errors** (block generation): missing fields, invalid names or aliases, unbalanced quotes or parentheses, a join without a condition, column-count mismatches between combined queries, INSERT value/column mismatches, wrong window-function arguments, a window result used in WHERE/HAVING, operators or functions the dialect lacks, …
+- **Errors** (block generation): missing fields, ORDER BY in a subquery without TOP/LIMIT on SQL Server, LIMIT inside an `IN` subquery on MySQL, INSERT … SELECT column-count mismatches, upserts the dialect doesn't support, invalid names or aliases, unbalanced quotes or parentheses, a join without a condition, column-count mismatches between combined queries, INSERT value/column mismatches, wrong window-function arguments, a window result used in WHERE/HAVING, operators or functions the dialect lacks, …
 - **Warnings** (never block):
   - UPDATE or DELETE without WHERE
   - columns missing from GROUP BY
@@ -62,14 +72,20 @@ It comes in four forms, all built from the same code:
   - duplicate column names
   - unquoted text in INSERT values
   - ranking window functions without ORDER BY (an error on SQL Server)
-- **Tips**, e.g. LIMIT without ORDER BY, LIKE without a wildcard, or INTERSECT precedence.
+  - reserved words used as table, alias or column names without identifier quoting
+  - a SELECT alias used in HAVING (except MySQL, which accepts it)
+  - leading-zero numbers in INSERT values
+  - an upsert that updates from an inserted value for a column the INSERT doesn't list
+- **Tips**, e.g. LIMIT without ORDER BY, LIKE without a wildcard, INTERSECT precedence, ORDER BY in a subquery (the database may ignore it), or parameter names the dialect ignores.
+
+Messages are listed errors first, then warnings, then tips. On narrower screens the bottom bar's View SQL button shows the number of errors and warnings.
 
 "Go to field" jumps to the problem.
 
 **Workspace**
 - **History** of generated queries: search, restore, copy, delete, clear. It keeps the last 50, and can be turned off.
-- **Templates**: save, load, rename, duplicate, delete, and import/export as JSON.
-- **Examples**: twelve starter queries.
+- **Templates**: save, load, rename, duplicate, delete, and import/export as JSON. A template remembers its dialect and switches to it when loaded (restoring history does the same).
+- **Examples**: fifteen starter queries.
 - Import/export of the current query as JSON (validated, never executed), and download of the SQL.
 - Undo / redo of every change.
 - Unsaved work is restored when you come back; this can be turned off.
@@ -92,8 +108,13 @@ Generic SQL is the default. Dialects change only what is listed here:
 | INTERSECT / EXCEPT | ✓ (+ `ALL`) | ✓ (+ `ALL`) | ✓ (+ `ALL`), tip: needs 8.0.31+ | ✓ (no `ALL` variants) |
 | NTH_VALUE | ✓ | ✓ | ✓ | reported as an error |
 | Ranking functions without ORDER BY | warning | warning | warning | error (required) |
+| Parameter placeholders | `:name`, or `?` if unnamed | `$1`, `$2`, … (names ignored, tip shown) | `?` (names ignored, tip shown) | `@name`, or `@p1`, `@p2`, … |
+| Upsert | reported as an error | `ON CONFLICT (…) DO NOTHING` / `DO UPDATE SET …`, inserted value `EXCLUDED.col` | `ON DUPLICATE KEY UPDATE …`, inserted value `VALUES(col)` (tip: deprecated in 8.0.20+) | reported as an error (`MERGE` not supported yet) |
+| ORDER BY in a subquery | tip | tip | tip | error unless LIMIT or OFFSET is set |
+| LIMIT in an `IN` subquery | ✓ | ✓ | reported as an error | ✓ (`TOP`) |
+| SELECT alias in HAVING | warning | warning | accepted | warning |
 
-Not dialect-aware (yet): date/time functions, parameter placeholders, `RETURNING`/`OUTPUT`, upserts. Expressions you type are passed through unchanged.
+Not dialect-aware (yet): date/time functions, `RETURNING`/`OUTPUT`, `MERGE`. Expressions you type are passed through unchanged.
 
 ## Example
 
@@ -254,14 +275,16 @@ Fabric_Sync/                                      ← unrelated Power BI content
 - INSERT values are SQL expressions: write text in quotes. A warning flags likely unquoted text.
 - GROUP BY checking is a heuristic: it compares expressions textually and can't know about functional dependencies.
 - Dialect support covers only the differences listed above.
+- Reserved-word warnings use a short curated list, not each database's full keyword list.
+- Upserts cover PostgreSQL and MySQL only; SQL Server `MERGE` is not generated.
+- MySQL's backslash handling inside `LIKE` patterns is not special-cased.
 - Window frames are limited to three `ROWS` presets.
 - MySQL's minimum versions (8.0 for window functions, 8.0.31 for INTERSECT/EXCEPT) aren't enforced; they're shown only as notes and tips.
 
 ## Roadmap
 
 Candidates, in rough priority order:
-- `INSERT … SELECT` and upserts (`ON CONFLICT`, `ON DUPLICATE KEY`, `MERGE`)
-- Parameter placeholders per dialect (`$1`, `?`, `@p1`)
+- SQL Server `MERGE`, and `RETURNING` / `OUTPUT`
 - Recursive CTEs
 - More window options: named `WINDOW` clauses, `RANGE`/`GROUPS` frames and custom frame bounds
 - Optional schema hints (known tables/columns) for autocomplete and validation

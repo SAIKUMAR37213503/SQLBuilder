@@ -315,6 +315,52 @@ describe('INSERT / UPDATE / DELETE', () => {
         expect(sql()).toBe('DELETE FROM logs\nWHERE id = 7;');
     });
 
+    test('INSERT … SELECT builds the query with the SELECT editor', async () => {
+        selectType('insert');
+        type('insert.table', 'archive');
+        type('insert.columns', 'id');
+        choose('insert.source', 'select');
+        await settle();
+        expect(field('insert.rows.0.values')).toBeNull();
+        type('insert.select.from.table', 'orders');
+        type('insert.select.columns.0.expr', 'id');
+        await settle();
+        expect(sql()).toBe('INSERT INTO archive (id)\nSELECT id\nFROM orders;');
+    });
+
+    test('upsert: choosing Update adds a row, and the fill button uses the inserted columns', async () => {
+        app.state.settings.dialect = 'postgresql';
+        selectType('insert');
+        type('insert.table', 'customers');
+        type('insert.columns', 'email, name, city');
+        type('insert.rows.0.values', "'a@x.io', 'Ada', 'Oslo'");
+        choose('insert.upsert.mode', 'update');
+        await settle();
+        expect(field('insert.upsert.set.0.column')).toBeTruthy();
+        type('insert.upsert.conflict', 'email');
+        $('[data-action="fill-upsert"]').click();
+        await settle();
+        expect(app.state.workspace.insert.upsert.set.map(a => a.column)).toEqual(['name', 'city']);
+        expect(sql()).toBe(
+            "INSERT INTO customers (email, name, city)\nVALUES ('a@x.io', 'Ada', 'Oslo')\nON CONFLICT (email) DO UPDATE\nSET\n    name = EXCLUDED.name,\n    city = EXCLUDED.city;"
+        );
+        expect(document.activeElement.dataset.action).toBe('fill-upsert');
+    });
+
+    test('a condition can use a parameter; list operators fall back to a value', async () => {
+        await fillSimpleSelect();
+        add('select.where.items', 'condition');
+        type('select.where.items.0.left', 'id');
+        choose('select.where.items.0.valueType', 'param');
+        await settle();
+        expect(sql()).toBe('SELECT name\nFROM users\nWHERE id = ?;');
+        expect(field('select.where.items.0.value').placeholder).toContain('parameter name');
+        choose('select.where.items.0.op', 'IN');
+        await settle();
+        expect(app.state.workspace.select.where.items[0].valueType).toBe('value');
+        expect($$('[data-path="select.where.items.0.valueType"] option').map(o => o.value)).not.toContain('param');
+    });
+
     test('switching type keeps each query', async () => {
         await fillSimpleSelect();
         selectType('delete');
@@ -444,6 +490,19 @@ describe('undo / redo', () => {
         expect(field('select.columns.1.expr')).toBeTruthy();
     });
 
+    test('typing after Undo is kept when Redo is pressed right away', async () => {
+        await fillSimpleSelect();
+        add('select.columns', 'column');
+        await settle();
+        $('#undo-btn').click();
+        await settle();
+        type('select.from.table', 'accounts');
+        $('#redo-btn').click();
+        await settle();
+        expect(field('select.from.table').value).toBe('accounts');
+        expect($$('[data-path^="select.columns."][data-path$=".expr"]')).toHaveLength(1);
+    });
+
     test('Clear and Reset all are undoable', async () => {
         await fillSimpleSelect();
         $('#clear-btn').click();
@@ -535,6 +594,21 @@ describe('templates', () => {
         $('#template-list [data-action="template-delete"]').click();
         await answerConfirm(true);
         expect(app.templates.list()).toHaveLength(1);
+    });
+
+    test('a template remembers its dialect', async () => {
+        await fillSimpleSelect('customers');
+        app.state.settings.dialect = 'postgresql';
+        $('#template-save-btn').click();
+        await answerPrompt('Pg customers');
+        expect(app.templates.list()[0].dialect).toBe('postgresql');
+        expect($('#template-list').textContent).toContain('PostgreSQL');
+
+        app.state.settings.dialect = 'generic';
+        $('#template-list [data-action="template-load"]').click();
+        await settle();
+        expect(app.state.settings.dialect).toBe('postgresql');
+        expect(toast()).toContain('dialect switched to PostgreSQL');
     });
 
     test('cancelling the name prompt saves nothing', async () => {
@@ -675,6 +749,71 @@ describe('settings, theme, persistence', () => {
         expect(app.history.list()).toHaveLength(0);
         expect(app.templates.list()).toHaveLength(0);
     });
+
+    test('delete all saved data also clears the builder and resets settings', async () => {
+        await fillSimpleSelect('secret_table');
+        $('#settings-btn').click();
+        choose('select.distinct', true);
+        const dialect = $('[data-setting="dialect"]');
+        dialect.value = 'mysql';
+        dialect.dispatchEvent(new Event('change', { bubbles: true }));
+        $('#clear-data-btn').click();
+        await answerConfirm(true);
+        await settle();
+        expect(field('select.from.table').value).toBe('');
+        expect($('[data-setting="dialect"]').value).toBe('generic');
+        expect(app.state.settings.dialect).toBe('generic');
+        expect(backend.getItem(`${STORAGE_PREFIX}draft`)).toBeNull();
+        expect(backend.getItem(`${STORAGE_PREFIX}settings`)).toBeNull();
+    });
+});
+
+describe('output wrapping', () => {
+    test('Wrap is display only, remembered, and copying still gives the plain SQL', async () => {
+        await fillSimpleSelect();
+        const copied = [];
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { copied.push(t); } }, configurable: true });
+        $('#wrap-btn').click();
+        await settle();
+        expect($('#sql-output').classList.contains('wrap')).toBe(true);
+        expect($('#wrap-btn').getAttribute('aria-pressed')).toBe('true');
+        $('#copy-btn').click();
+        await settle();
+        expect(copied).toEqual(['SELECT name\nFROM users;']);
+        boot(backend);
+        expect($('#sql-output').classList.contains('wrap')).toBe(true);
+    });
+});
+
+describe('checks panel', () => {
+    test('errors are listed before warnings and tips, and the bar shows the count', async () => {
+        const upd = $('input[name="query-type"][value="update"]');
+        upd.checked = true;
+        upd.dispatchEvent(new Event('change', { bubbles: true }));
+        type('update.table', 't');
+        await settle();
+        // no WHERE (warning) and an empty SET column (error)
+        const levels = $$('#issues-list .issue-level').map(n => n.textContent);
+        expect(levels[0]).toBe('Error');
+        expect(levels.indexOf('Warning')).toBeGreaterThan(levels.lastIndexOf('Error'));
+        expect($('#status-badge').hidden).toBe(false);
+        expect($('#status-badge').dataset.level).toBe('error');
+        expect($('#view-sql-btn').getAttribute('aria-label')).toMatch(/\d errors?\)/);
+
+        type('update.set.0.column', 'a');
+        type('update.set.0.value', '1');
+        await settle();
+        expect($('#status-badge').dataset.level).toBe('warning');
+    });
+
+    test('field descriptions still point at the right message after sorting', async () => {
+        type('select.columns.0.expr', 'x');
+        $('#generate-btn').click();
+        await settle();
+        const input = field('select.from.table');
+        const id = input.getAttribute('aria-describedby').split(' ').pop();
+        expect(document.getElementById(id).textContent).toContain('table to select from');
+    });
 });
 
 describe('keyboard and accessibility', () => {
@@ -695,6 +834,24 @@ describe('keyboard and accessibility', () => {
         choose(`${windowPath}.frame`, 'moving');
         await settle();
         expect(field(`${windowPath}.frameSize`)).toBeTruthy();
+        const unnamed = $$('#builder input, #builder select, #builder button').filter(control => {
+            if (control.getAttribute('aria-label')) return false;
+            if (control.id && document.querySelector(`label[for="${control.id}"]`)) return false;
+            if (control.closest('label')) return false;
+            return control.tagName !== 'BUTTON' || control.textContent.trim() === '';
+        });
+        expect(unnamed.map(c => c.outerHTML)).toEqual([]);
+    });
+
+    test('INSERT … SELECT and upsert controls have accessible names', async () => {
+        const radio = $('input[name="query-type"][value="insert"]');
+        radio.checked = true;
+        radio.dispatchEvent(new Event('change', { bubbles: true }));
+        choose('insert.source', 'select');
+        choose('insert.upsert.mode', 'update');
+        add('insert.upsert.set', 'upsertAssignment');
+        choose('insert.upsert.set.1.valueType', 'param');
+        await settle();
         const unnamed = $$('#builder input, #builder select, #builder button').filter(control => {
             if (control.getAttribute('aria-label')) return false;
             if (control.id && document.querySelector(`label[for="${control.id}"]`)) return false;

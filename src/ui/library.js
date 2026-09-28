@@ -54,7 +54,8 @@ export function renderTemplateList(list, templates) {
     list.replaceChildren(...templates.map(t => h('li', { class: 'library-item' },
         h('div', { class: 'library-meta' },
             h('span', { class: `type-badge type-${t.workspace.type}` }, t.workspace.type.toUpperCase()),
-            h('strong', { class: 'library-name' }, t.name)
+            h('strong', { class: 'library-name' }, t.name),
+            t.dialect ? h('span', {}, getDialect(t.dialect).label) : null
         ),
         h('p', { class: 'library-detail' }, `Updated ${formatTime(t.updatedAt)}`),
         h('div', { class: 'library-actions' },

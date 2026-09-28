@@ -131,7 +131,10 @@ export function countColumns(columnString) {
 }
 
 const NUMBER_RE = /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
-const QUOTED_STRING_RE = /^'(?:[^']|'')*'$/;
+// 'text', or N'text' (SQL Server Unicode literal)
+const QUOTED_STRING_RE = /^[Nn]?'(?:[^']|'')*'$/;
+// 007, 01234, -012: digit strings whose leading zero would be lost as a number
+const LEADING_ZERO_RE = /^-?0\d/;
 
 export function isNumberLiteral(text) {
     return NUMBER_RE.test(text);
@@ -139,4 +142,41 @@ export function isNumberLiteral(text) {
 
 export function isQuotedString(text) {
     return QUOTED_STRING_RE.test(text);
+}
+
+/** "01234", "007": looks numeric, but a number would drop the leading zero. */
+export function hasLeadingZero(text) {
+    return LEADING_ZERO_RE.test(text) && isNumberLiteral(text);
+}
+
+// Returns true when `text` contains the word AND or OR outside quotes and
+// parentheses, i.e. when it would change meaning next to other conditions.
+//   hasTopLevelLogic("a = 1 OR b = 2")   -> true
+//   hasTopLevelLogic("(a = 1 OR b = 2)") -> false
+//   hasTopLevelLogic("x = 'A OR B'")     -> false
+export function hasTopLevelLogic(text) {
+    let depth = 0;
+    let quote = null;
+    let word = '';
+    for (let i = 0; i <= text.length; i++) {
+        const ch = text[i] ?? ' ';
+        if (quote) {
+            if (ch === quote) {
+                if (text[i + 1] === quote) i++;
+                else quote = null;
+            }
+            continue;
+        }
+        if (/[\p{L}\p{N}_$]/u.test(ch)) {
+            word += ch;
+            continue;
+        }
+        if (depth === 0 && /^(and|or)$/i.test(word)) return true;
+        word = '';
+        if (ch === "'" || ch === '"' || ch === '`') quote = ch;
+        else if (ch === '[') quote = ']';
+        else if (ch === '(') depth++;
+        else if (ch === ')') depth = Math.max(0, depth - 1);
+    }
+    return false;
 }

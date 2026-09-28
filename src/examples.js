@@ -162,6 +162,53 @@ export const EXAMPLES = [
         })
     },
     {
+        id: 'insert-select',
+        name: 'Copy rows with INSERT … SELECT',
+        description: 'Archive last year\'s orders into another table.',
+        build: () => workspace('insert', (q) => {
+            q.table = 'orders_archive';
+            q.columns = 'id, customer_id, total, created_at';
+            q.source = 'select';
+            q.select = createSelect({
+                columns: ['id', 'customer_id', 'total', 'created_at'].map(c => createColumn(c)),
+                from: createTableSource('orders'),
+                where: createGroup('AND', [cond('created_at', '<', '2026-01-01')])
+            });
+        })
+    },
+    {
+        id: 'upsert',
+        name: 'Upsert: insert or update',
+        description: 'PostgreSQL ON CONFLICT / MySQL ON DUPLICATE KEY UPDATE.',
+        dialects: ['postgresql', 'mysql'],
+        build: () => workspace('insert', (q) => {
+            q.table = 'customers';
+            q.columns = 'email, name, updated_at';
+            q.rows = [{ values: "'ada@example.com', 'Ada Lovelace', CURRENT_TIMESTAMP" }];
+            q.upsert = {
+                mode: 'update',
+                conflict: 'email',
+                set: [
+                    { column: 'name', valueType: 'inserted', value: '' },
+                    { column: 'updated_at', valueType: 'inserted', value: '' }
+                ]
+            };
+        })
+    },
+    {
+        id: 'parameters',
+        name: 'Parameters for application code',
+        description: 'Placeholders written in each dialect\'s style ($1, ?, @name).',
+        build: () => workspace('select', (q) => {
+            q.columns = ['id', 'email'].map(c => createColumn(c));
+            q.from = createTableSource('users');
+            q.where = createGroup('AND', [
+                cond('status', '=', 'status', { valueType: 'param' }),
+                cond('created_at', 'BETWEEN', 'from_date', { valueType: 'param', value2: 'to_date' })
+            ]);
+        })
+    },
+    {
         id: 'update-safe',
         name: 'Update with a WHERE',
         description: 'Change one row safely.',
