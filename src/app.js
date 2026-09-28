@@ -34,6 +34,7 @@ import { bindShortcuts, SHORTCUTS, modLabel } from './ui/shortcuts.js';
 import { openPalette } from './ui/palette.js';
 import { createSuggester } from './ui/suggest.js';
 import { fieldContext, suggest } from './suggest.js';
+import { analyzeJoin, applyJoinCandidate, isEmptyGroup, checkSchema } from './joins.js';
 import { createWebPlatform } from './platform/web.js';
 
 const DRAFT_KEY = 'draft';
@@ -232,6 +233,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
         if (suggester) suggester.close();
         el.builder.replaceChildren(renderEditor(state.workspace, ui));
+        renderJoinHints();
 
         const target = focus || previous;
         if (target) focusTarget(target);
@@ -260,8 +262,16 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
     const pristine = () => isPristine(state.workspace);
 
+    // The validator's checks, plus hints from the schema (never errors)
+    function currentIssues() {
+        return [
+            ...validateWorkspace(state.workspace, validationOptions()),
+            ...checkSchema(state.workspace, schema.list(), getDialect(state.settings.dialect))
+        ];
+    }
+
     function refresh() {
-        state.issues = validateWorkspace(state.workspace, validationOptions());
+        state.issues = currentIssues();
         const valid = !hasErrors(state.issues);
         const live = state.settings.livePreview;
 
@@ -276,6 +286,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         renderOutput(valid);
         renderIssues();
         markFields();
+        renderJoinHints();
         renderStructure();
         renderQueryName();
         el.undo.disabled = !undoStack.canUndo;
@@ -565,6 +576,12 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             const index = Number(splitPath(path).pop());
             mutate(() => { getAt(state.workspace, listPath).splice(index, 1); },
                 { action: 'add-item', path: listPath });
+        } else if (action === 'use-join-on') {
+            const found = analyzeJoin(state.workspace, path, schema.list(), getDialect(state.settings.dialect));
+            const candidate = found && found.candidates[Number(arg)];
+            if (!candidate) return;
+            mutate(() => applyJoinCandidate(found.join, candidate), { within: `${path}.on` });
+            toast(`Joined on ${candidate.label}.`);
         } else if (action === 'fill-upsert') {
             mutate(() => fillUpsert(path), { path, action: 'fill-upsert' });
         } else if (action === 'move-up' || action === 'move-down') {
@@ -576,6 +593,36 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             mutate(() => { [list[index], list[to]] = [list[to], list[index]]; },
                 { action, path: `${listPath}.${to}` });
         }
+    }
+
+    // Under each join's ON: the conditions the schema's foreign keys suggest,
+    // shown while ON is still empty. Updated in place, never re-rendering the editor.
+    function renderJoinHints() {
+        const tables = schema.list();
+        const dialect = getDialect(state.settings.dialect);
+        el.builder.querySelectorAll('[data-join-hint]').forEach((/** @type {any} */ box) => {
+            const path = box.dataset.joinHint;
+            const found = tables.length ? analyzeJoin(state.workspace, path, tables, dialect) : null;
+            const show = Boolean(found && found.target && found.target.table && found.earlier.length && isEmptyGroup(found.join.on));
+            const signature = show ? `${found.target.table.name}|${found.candidates.map(c => c.label).join('|')}` : '';
+            if (box.dataset.signature === signature) return;
+            box.dataset.signature = signature;
+            box.hidden = !show;
+            if (!show) {
+                box.replaceChildren();
+                return;
+            }
+            const name = found.target.table.name;
+            box.replaceChildren(found.candidates.length
+                ? h('p', { class: 'join-hint-text' }, `Your schema links ${name} to the tables before it:`)
+                : h('p', { class: 'join-hint-text' }, `No foreign key in your schema links ${name} to the tables before it; write the ON condition below.`),
+            ...found.candidates.slice(0, 4).map((candidate, i) => h('button', {
+                type: 'button',
+                class: 'btn btn-secondary btn-sm join-hint-use',
+                dataset: { action: 'use-join-on', path, arg: i },
+                'aria-label': `Use ON ${candidate.label}`
+            }, h('span', { 'aria-hidden': 'true' }, 'Use '), h('code', {}, candidate.label))));
+        });
     }
 
     // Upsert: update every inserted column (except the conflict key) with the
@@ -609,7 +656,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     function generate() {
         commitSoon.flush();
         scheduleRefresh.cancel();
-        state.issues = validateWorkspace(state.workspace, validationOptions());
+        state.issues = currentIssues();
         if (hasErrors(state.issues)) {
             state.attempted = true;
             refresh();
@@ -1085,6 +1132,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     function renderSchema() {
         const all = schema.list();
         if (suggester) suggester.close();
+        // Schema tips and join hints follow the schema; they never change the SQL
+        state.issues = currentIssues();
+        renderIssues();
+        markFields();
+        renderJoinHints();
         const query = state.schemaSearch.trim();
         const needle = query.toLowerCase();
         const shown = needle

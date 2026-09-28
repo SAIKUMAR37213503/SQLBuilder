@@ -395,6 +395,8 @@ class Renderer {
                         ? h('p', { class: 'field-hint' }, 'CROSS JOIN pairs every row with every row of the other table; it has no ON condition.')
                         : h('div', { class: 'join-on' },
                             h('p', { class: 'subquery-label' }, 'ON'),
+                            // Filled by the app from the schema: suggested ON conditions
+                            join.source.kind === 'table' ? h('div', { class: 'join-hint', hidden: true, dataset: { joinHint: jPath } }) : null,
                             this.group(join.on, joinPath(jPath, 'on'), ctx, { clause: 'ON', root: true, defaultValueType: 'column' }))
                 );
             })),

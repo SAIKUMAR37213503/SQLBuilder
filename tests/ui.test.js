@@ -2010,3 +2010,96 @@ describe('field suggestions', () => {
         boot();
     });
 });
+
+describe('JOIN assistant', () => {
+    const SCHEMA = [
+        { name: 'departments', columns: [{ name: 'id' }, { name: 'name' }], primaryKey: ['id'] },
+        { name: 'employees', columns: [{ name: 'id' }, { name: 'name' }, { name: 'department_id' }], primaryKey: ['id'], foreignKeys: [{ columns: ['department_id'], refTable: 'departments', refColumns: ['id'] }] }
+    ];
+    const hint = () => $('[data-join-hint="select.joins.0"]');
+
+    async function joinDepartments() {
+        type('select.from.table', 'employees');
+        type('select.from.alias', 'e');
+        type('select.columns.0.expr', 'e.name');
+        add('select.joins', 'join');
+        await settle();
+        type('select.joins.0.source.table', 'departments');
+        type('select.joins.0.source.alias', 'd');
+        await settle();
+    }
+
+    test('without a schema nothing changes', async () => {
+        await joinDepartments();
+        expect(hint().hidden).toBe(true);
+        expect(issues().some(m => /schema/.test(m))).toBe(false);
+    });
+
+    test('offers the ON condition from the foreign key; one tap fills it, and Undo takes it back', async () => {
+        app.schema.apply(SCHEMA);
+        await joinDepartments();
+        expect(hint().hidden).toBe(false);
+        expect(hint().textContent).toContain('Your schema links departments to the tables before it:');
+        const use = hint().querySelector('[data-action="use-join-on"]');
+        expect(use.getAttribute('aria-label')).toBe('Use ON e.department_id = d.id');
+        use.click();
+        await settle();
+        expect(field('select.joins.0.on.items.0.left').value).toBe('e.department_id');
+        expect(field('select.joins.0.on.items.0.value').value).toBe('d.id');
+        expect(toast()).toBe('Joined on e.department_id = d.id.');
+        expect(hint().hidden).toBe(true);
+        expect(sql()).toMatch(/INNER JOIN departments AS d\s+ON e.department_id = d.id/);
+        expect($('#issues-summary').textContent).toBe('— all good');
+
+        $('#undo-btn').click();
+        await settle();
+        expect(field('select.joins.0.on.items.0.left').value).toBe('');
+        expect(hint().hidden).toBe(false);
+    });
+
+    test('the hint appears as soon as the table is typed, without re-rendering the editor', async () => {
+        app.schema.apply(SCHEMA);
+        type('select.from.table', 'employees');
+        add('select.joins', 'join');
+        await settle();
+        const input = field('select.joins.0.source.table');
+        input.focus();
+        type('select.joins.0.source.table', 'departments');
+        await settle();
+        expect(hint().hidden).toBe(false);
+        expect(document.activeElement).toBe(input);
+        expect(hint().querySelector('[data-action="use-join-on"]').textContent).toBe('Use employees.department_id = departments.id');
+    });
+
+    test('Checks shows schema tips and the repeat warning; they never block the SQL', async () => {
+        app.schema.apply(SCHEMA);
+        await joinDepartments();
+        type('select.joins.0.on.items.0.left', 'e.name');
+        type('select.joins.0.on.items.0.value', 'd.name');
+        type('select.columns.0.expr', 'e.nmae');
+        await settle();
+        expect(issues()).toEqual(expect.arrayContaining([
+            '“e.nmae”: employees has no column nmae in your schema.',
+            'Your schema links departments by e.department_id = d.id; this ON condition uses other columns.',
+            expect.stringMatching(/^e\.name = d\.name isn't a key on either side/)
+        ]));
+        expect(sql()).toContain('ON e.name = d.name');
+        expect($('#field-suggestions').hidden).toBe(true);
+    });
+
+    test('importing a schema updates the checks of the current query', async () => {
+        await joinDepartments();
+        type('select.columns.0.expr', 'e.nmae');
+        await settle();
+        expect(issues().some(m => m.includes('nmae'))).toBe(false);
+        $('#schema-import-btn').click();
+        await settle();
+        $('#schema-import-text').value = JSON.stringify({ tables: SCHEMA });
+        $('#schema-import-text').dispatchEvent(new Event('input', { bubbles: true }));
+        await settle();
+        $('#schema-import-dialog button[type="submit"]').click();
+        await settle();
+        expect(issues()).toContain('“e.nmae”: employees has no column nmae in your schema.');
+        expect(hint().hidden).toBe(false);
+    });
+});

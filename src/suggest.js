@@ -29,7 +29,8 @@ const NO_PARENS = new Set(['CURRENT_DATE', 'CURRENT_TIMESTAMP']);
 
 /**
  * @typedef {{ label: string, insert: string, detail: string, kind: 'table' | 'column' | 'alias' | 'function' }} Suggestion
- * @typedef {{ ref: string, detail: string, columns: { name: string, detail: string }[] }} Source
+ * @typedef {{ ref: string, detail: string, columns: { name: string, detail: string }[], table?: any }} Source
+ *   table: the schema table, when the source is one (its columns are then complete)
  * @typedef {{ kind: 'table', ctes: string[] }
  *   | { kind: 'column', local: Source[], outer: Source[], outputs: string[], functions: boolean }} Context
  */
@@ -217,7 +218,8 @@ function tableSource(name, alias, env) {
     return {
         ref,
         detail: table ? table.name : 'table',
-        columns: table ? table.columns.map((/** @type {any} */ c) => ({ name: c.name, detail: c.type })) : []
+        columns: table ? table.columns.map((/** @type {any} */ c) => ({ name: c.name, detail: c.type })) : [],
+        ...(table ? { table } : {})
     };
 }
 

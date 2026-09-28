@@ -933,6 +933,13 @@ kbd {
 .palette-group { color: var(--text-muted); font-size: 0.8rem; }
 .palette-keys { display: flex; gap: 0.2rem; }
 
+/* JOIN assistant: suggested ON conditions */
+.join-hint { display: flex; flex-wrap: wrap; gap: 0.35rem 0.5rem; align-items: center; margin: 0 0 0.5rem; padding: 0.5rem 0.6rem; border: 1px dashed var(--border); border-radius: var(--radius); }
+.join-hint[hidden] { display: none; }
+.join-hint-text { flex: 1 1 100%; margin: 0; color: var(--text-2); font-size: 0.85rem; }
+.join-hint-use { max-width: 100%; white-space: normal; text-align: left; }
+.join-hint-use code { font-family: var(--font-mono); font-size: 0.8rem; overflow-wrap: anywhere; }
+
 /* Suggestions under builder fields */
 .suggest-list {
     position: fixed;
