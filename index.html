@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=263b7b497773">
+    <link rel="stylesheet" href="style.css?v=769f5f1d17bb">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -85,7 +85,12 @@
 
                     <div id="output-state" class="output-state" aria-live="polite"></div>
                     <pre id="sql-output" class="sql-output" tabindex="0" aria-label="Generated SQL" aria-describedby="output-state"><code id="sql-code"></code></pre>
-                    <p class="complexity" id="complexity"></p>
+                    <details class="structure" id="structure" hidden>
+                        <summary class="structure-summary"><span class="structure-title">Query structure</span> <span class="complexity" id="complexity"></span></summary>
+                        <p class="structure-intro">The order a database works through this query, which differs from the order it is written. Select a step to edit it.</p>
+                        <ol class="structure-steps" id="structure-steps"></ol>
+                        <p class="structure-notes" id="structure-notes"></p>
+                    </details>
 
                     <div class="issues" aria-labelledby="issues-heading">
                         <h3 id="issues-heading" class="issues-heading">Checks <span id="issues-summary" class="issues-summary" aria-live="polite"></span></h3>
@@ -256,6 +261,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=1487cd0c357e" defer></script>
+    <script src="dist/sqlbuilder.js?v=8b5ec3fd9985" defer></script>
 </body>
 </html>

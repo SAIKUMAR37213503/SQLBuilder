@@ -8,6 +8,7 @@ import {
     isPristine, describeComplexity
 } from './model.js';
 import { generateSQL } from './generator.js';
+import { describeStructure } from './structure.js';
 import { validateWorkspace, hasErrors, summarize } from './validation.js';
 import { listDialects, getDialect } from './dialects.js';
 import { createStorage } from './storage.js';
@@ -84,6 +85,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         templateFilter: $('template-filter'),
         exampleFilter: $('example-filter'),
         complexity: $('complexity'),
+        structure: $('structure'),
+        structureSteps: $('structure-steps'),
+        structureNotes: $('structure-notes'),
         issuesSummary: $('issues-summary'),
         issuesList: $('issues-list'),
         issues: /** @type {any} */ (doc.querySelector('.issues')),
@@ -225,7 +229,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         renderOutput(valid);
         renderIssues();
         markFields();
-        renderComplexity();
+        renderStructure();
         el.undo.disabled = !undoStack.canUndo;
         el.redo.disabled = !undoStack.canRedo;
         saveDraft();
@@ -341,18 +345,47 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         });
     }
 
-    function renderComplexity() {
-        if (state.workspace.type !== 'select' || pristine()) {
-            el.complexity.textContent = '';
+    /** The "Query structure" panel: counts in its summary, steps when opened. */
+    function renderStructure() {
+        el.structure.hidden = pristine();
+        if (el.structure.hidden) return;
+        const parts = [];
+        if (state.workspace.type === 'select') {
+            const { subqueries, joins, conditions } = describeComplexity(state.workspace.select);
+            const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+            if (joins) parts.push(plural(joins, 'join'));
+            if (subqueries) parts.push(subqueries === 1 ? '1 subquery' : `${subqueries} subqueries`);
+            if (conditions) parts.push(plural(conditions, 'condition'));
+        }
+        el.complexity.textContent = parts.length ? `· ${parts.join(' · ')}` : '';
+
+        const { steps, notes } = describeStructure(state.workspace, getDialect(state.settings.dialect));
+        el.structureSteps.replaceChildren(...steps.map((step, i) =>
+            h('li', { class: 'structure-step' },
+                h('button', {
+                    type: 'button',
+                    class: 'structure-jump',
+                    dataset: { action: 'structure-jump', section: step.target.section || null, path: step.target.path || null }
+                },
+                h('span', { class: 'structure-index', 'aria-hidden': 'true' }, String(i + 1)),
+                h('span', { class: 'structure-clause' }, step.clause),
+                h('span', { class: 'structure-detail' }, step.detail)),
+                h('p', { class: 'structure-explain' }, step.explanation))));
+        el.structureNotes.textContent = notes.join(' ');
+    }
+
+    /** Opens a builder section (or finds a field) and moves focus to it. */
+    function jumpTo({ section, path }) {
+        const details = section ? el.builder.querySelector(`details[data-section="${cssEscape(section)}"]`) : null;
+        if (!details) {
+            if (path) goToField(path);
             return;
         }
-        const { subqueries, joins, conditions } = describeComplexity(state.workspace.select);
-        const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-        const parts = [];
-        if (joins) parts.push(plural(joins, 'join'));
-        if (subqueries) parts.push(subqueries === 1 ? '1 subquery' : `${subqueries} subqueries`);
-        if (conditions) parts.push(plural(conditions, 'condition'));
-        el.complexity.textContent = parts.length ? `Query size: ${parts.join(' · ')}` : '';
+        details.open = true;
+        state.openSections.set(section, true);
+        const summary = details.querySelector('summary');
+        summary.focus();
+        if (typeof summary.scrollIntoView === 'function') summary.scrollIntoView({ block: 'start', behavior: 'smooth' });
     }
 
     const saveDraft = debounce(() => {
@@ -1052,6 +1085,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (btn) goToField(btn.dataset.goto);
     });
     el.outputState.addEventListener('click', onLibraryClick);
+    el.structureSteps.addEventListener('click', (event) => {
+        const btn = event.target.closest('button[data-action="structure-jump"]');
+        if (btn) jumpTo({ section: btn.dataset.section, path: btn.dataset.path });
+    });
 
     doc.addEventListener('click', (event) => {
         const cmd = /** @type {any} */ (event.target).closest('[data-command]');

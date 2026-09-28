@@ -988,6 +988,56 @@ describe('INTERSECT / EXCEPT and window functions in the UI', () => {
     });
 });
 
+describe('query structure panel', () => {
+    const loadExample = async (id) => {
+        $(`#example-list [data-action="example-load"][data-id="${id}"]`).click();
+        await settle();
+    };
+    const steps = () => $$('#structure-steps .structure-clause').map(n => n.textContent);
+
+    test('is hidden for an empty query and lists the steps in processing order', async () => {
+        expect($('#structure').hidden).toBe(true);
+        await loadExample('join-aggregate');
+        expect($('#structure').hidden).toBe(false);
+        expect($('#complexity').textContent).toBe('· 1 join · 1 condition');
+        expect(steps()).toEqual(['FROM', 'JOIN', 'GROUP BY', 'HAVING', 'SELECT', 'ORDER BY']);
+        expect($$('#structure-steps .structure-jump').every(b => b.type === 'button')).toBe(true);
+    });
+
+    test('follows the dialect and query type', async () => {
+        await loadExample('page-results');
+        expect(steps().at(-1)).toBe('LIMIT');
+        pickDialect('sqlserver');
+        await settle();
+        expect(steps().at(-1)).toBe('TOP');
+        $('input[name="query-type"][value="delete"]').click();
+        type('delete.table', 'audit_log');
+        await settle();
+        expect(steps()).toEqual(['DELETE FROM', 'No WHERE']);
+    });
+
+    test('a step opens its builder section and moves focus there', async () => {
+        await loadExample('join-aggregate');
+        const grouping = $('details[data-section="select:grouping"]');
+        grouping.open = false;
+        $$('#structure-steps .structure-jump').find(b => b.textContent.includes('HAVING')).click();
+        expect(grouping.open).toBe(true);
+        expect(document.activeElement).toBe(grouping.querySelector('summary'));
+        // The open state survives the next re-render of the builder
+        add('select.orderBy', 'orderBy');
+        await settle();
+        expect($('details[data-section="select:grouping"]').open).toBe(true);
+    });
+
+    test('a DML step moves focus to its field', async () => {
+        $('input[name="query-type"][value="delete"]').click();
+        type('delete.table', 'audit_log');
+        await settle();
+        $$('#structure-steps .structure-jump').find(b => b.textContent.includes('No WHERE')).click();
+        expect($('[data-path="delete.where"]').contains(document.activeElement)).toBe(true);
+    });
+});
+
 describe('dialects in the UI', () => {
     const optionText = (path, value) => field(path).querySelector(`option[value="${value}"]`).textContent;
 

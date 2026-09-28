@@ -61,6 +61,7 @@ A custom SQL condition that contains a top-level `AND`/`OR` is wrapped in parent
 - Formatted SQL (one clause per line, 4-space indentation) or a single line, with an optional Wrap toggle for long lines
 - Syntax highlighting (including parameter placeholders) and line numbers; the line numbers are never copied
 - Live preview while you type (can be switched off)
+- **Query structure**: a panel under the SQL that lists the parts of the query in the order a database works through them (for a SELECT: WITH, FROM, JOIN, WHERE, GROUP BY, HAVING, SELECT, UNION, ORDER BY, LIMIT/TOP), each with a one-line explanation. Selecting a step opens that part of the builder. It describes structure only; it says nothing about speed.
 - Copy, Select all, Download `.sql`. On Android, Download and Export open the share sheet so you can save to Files or Drive, or send to another app. A Share button shares the SQL text.
 
 **Checks:** the checks panel shows three kinds of message:
@@ -204,6 +205,7 @@ src/
 ├── generator.js      model → SQL (formatted or one line), no string post-processing
 ├── dialects.js       Every dialect difference: writing rules plus supports/restrictions flags
 ├── validation.js     model → issues { level, category, message, path }
+├── structure.js      model → the query's steps in processing order, with explanations
 ├── sql-utils.js      Quote/paren-aware splitting and balance checks (not a SQL parser)
 ├── tokenizer.js      Highlighting tokens (no HTML)
 ├── serialization.js  JSON import/export; rebuilds untrusted input field by field

@@ -706,8 +706,61 @@ kbd {
 .empty-title { color: var(--text); font-weight: 650; }
 .empty-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: center; margin-top: 0.25rem; }
 
-.complexity { margin-top: 0.5rem; color: var(--text-muted); font-size: 0.8rem; }
-.complexity:empty { display: none; }
+/* Query structure: the clauses in processing order, each a jump into the builder */
+.structure { margin-top: 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); }
+.structure-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+    min-height: 2.5rem;
+    padding: 0.45rem 0.75rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    list-style: none;
+}
+.structure-summary::-webkit-details-marker { display: none; }
+.structure-summary::before { content: "▸"; color: var(--text-muted); transition: transform var(--transition); }
+.structure[open] > .structure-summary::before { transform: rotate(90deg); }
+.structure-summary:hover { background: var(--surface-2); }
+.structure-title { font-size: 0.85rem; font-weight: 650; }
+.complexity { color: var(--text-muted); font-size: 0.8rem; }
+.structure-intro, .structure-notes { padding: 0 0.75rem; color: var(--text-muted); font-size: 0.8rem; }
+.structure-notes:empty { display: none; }
+.structure-steps { display: grid; gap: 0.15rem; margin: 0.4rem 0; padding: 0 0.4rem; list-style: none; }
+.structure-step { padding: 0.15rem 0; }
+.structure-jump {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.5rem;
+    align-items: baseline;
+    width: 100%;
+    min-height: 2.25rem;
+    padding: 0.35rem 0.4rem;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.structure-jump:hover { background: var(--surface-2); }
+.structure-jump:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.structure-index {
+    display: inline-grid;
+    place-items: center;
+    min-width: 1.35rem;
+    height: 1.35rem;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+.structure-clause { font-family: var(--font-mono); font-size: 0.85rem; font-weight: 700; color: var(--tok-keyword); }
+.structure-detail { color: var(--text-2); font-size: 0.85rem; overflow-wrap: anywhere; }
+.structure-explain { margin: 0 0 0.2rem 2.25rem; color: var(--text-muted); font-size: 0.8rem; }
 
 .issues { margin-top: 0.75rem; }
 .issues-heading { font-size: 0.9rem; font-weight: 650; }
