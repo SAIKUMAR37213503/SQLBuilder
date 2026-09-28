@@ -85,6 +85,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         wrap: $('wrap-btn'),
         dialectSelect: $('dialect-select'),
         templateFilter: $('template-filter'),
+        templateSearch: $('template-search'),
+        templateSort: $('template-sort'),
         exampleFilter: $('example-filter'),
         complexity: $('complexity'),
         structure: $('structure'),
@@ -138,6 +140,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         sourceId: /** @type {string | null} */ (null),   // template being edited
         libraryTab: 'history',
         templateFilter: 'all',           // dialect id or 'all'
+        templateSearch: '',
+        templateSort: 'name',            // 'name' or 'recent'
         exampleFilter: /** @type {string | null} */ (null) // null: follow the selected dialect
     };
     if (state.settings.restoreSession) {
@@ -798,12 +802,25 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         el.historyClear.disabled = history.list().length === 0;
     }
 
+    // Pinned first, then by name or most recently updated; filtered by dialect and search text
     function renderTemplates() {
         const all = templates.list();
         const filter = state.templateFilter;
+        const query = state.templateSearch.trim();
+        const needle = query.toLowerCase();
         // Templates saved without a dialect (older versions) are shown for every dialect
-        const shown = filter === 'all' ? all : all.filter(t => !t.dialect || t.dialect === filter);
-        renderTemplateList(el.templateList, shown, { total: all.length, filterLabel: filter === 'all' ? '' : getDialect(filter).label });
+        const shown = all
+            .filter(t => filter === 'all' || !t.dialect || t.dialect === filter)
+            .filter(t => !needle || [t.name, t.description, t.category, t.dialect && getDialect(t.dialect).label, t.workspace.type]
+                .some(text => text && text.toLowerCase().includes(needle)))
+            .sort((a, b) => (Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)))
+                || (state.templateSort === 'recent' ? b.updatedAt - a.updatedAt : a.name.localeCompare(b.name)));
+        renderTemplateList(el.templateList, shown, {
+            total: all.length,
+            filterLabel: filter === 'all' ? '' : getDialect(filter).label,
+            query,
+            currentId: state.sourceId
+        });
         el.templateExport.disabled = all.length === 0;
     }
 
@@ -876,6 +893,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     if (!template) return;
                     const switched = switchDialect(template.dialect);
                     replaceWorkspace(structuredClone(template.workspace), `Loaded “${template.name}”${switched}. Undo restores your previous query.`, template.id);
+                    renderTemplates();
                     break;
                 }
                 case 'template-rename': {
@@ -887,6 +905,15 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     renderTemplates();
                     renderQueryName();
                     toast(`Renamed to “${renamed.name}”.`, 'success');
+                    break;
+                }
+                case 'template-pin':
+                case 'template-unpin': {
+                    const pinned = templates.setPinned(id, action === 'template-pin');
+                    renderTemplates();
+                    // Keep focus on the same template's pin button after the list is rebuilt
+                    el.templateList.querySelector(`[data-id="${cssEscape(id)}"][data-action^="template-${pinned.pinned ? 'unpin' : 'pin'}"]`)?.focus();
+                    toast(pinned.pinned ? `Pinned “${pinned.name}” to the top.` : `Unpinned “${pinned.name}”.`);
                     break;
                 }
                 case 'template-duplicate': {
@@ -1193,6 +1220,14 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.dialectSelect.addEventListener('change', () => {
         updateSettings({ dialect: el.dialectSelect.value });
         announceDialect();
+    });
+    el.templateSearch.addEventListener('input', () => {
+        state.templateSearch = el.templateSearch.value;
+        renderTemplates();
+    });
+    el.templateSort.addEventListener('change', () => {
+        state.templateSort = el.templateSort.value === 'recent' ? 'recent' : 'name';
+        renderTemplates();
     });
     el.templateFilter.addEventListener('change', () => {
         state.templateFilter = el.templateFilter.value;

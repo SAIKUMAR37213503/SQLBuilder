@@ -45,6 +45,7 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
                     createdAt: Number(t.createdAt) || 0,
                     updatedAt: Number(t.updatedAt) || 0,
                     ...templateDetails(t),
+                    ...(t.pinned === true ? { pinned: true } : {}),
                     workspace: normalizeWorkspace(t.workspace)
                 }];
             } catch {
@@ -142,6 +143,17 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
             return updated;
         },
 
+        /** Pins a template to the top of the list, or unpins it. */
+        setPinned(id, pinned) {
+            const changed = { ...find(id) };
+            if (pinned) changed.pinned = true;
+            else delete changed.pinned;
+            withTransaction(() => {
+                templates = templates.map(t => (t.id === id ? changed : t));
+            });
+            return changed;
+        },
+
         /** Categories in use, for suggestions when saving. */
         categories: () => [...new Set(templates.map(t => t.category).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
 
@@ -178,6 +190,7 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
                         createdAt: time,
                         updatedAt: time,
                         ...templateDetails(item),
+                        ...(item.pinned === true ? { pinned: true } : {}),
                         workspace: structuredClone(item.workspace)
                     };
                     templates = [...templates, template];

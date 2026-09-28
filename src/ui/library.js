@@ -48,20 +48,25 @@ export function renderHistoryList(list, entries, { enabled, filtered }) {
 
 /**
  * @param {any} list
- * @param {any[]} templates the templates to show (already filtered)
- * @param {{ total?: number, filterLabel?: string }} [options] total saved, and the dialect filter's label ('' = all)
+ * @param {any[]} templates the templates to show (already filtered and sorted)
+ * @param {{ total?: number, filterLabel?: string, query?: string, currentId?: string | null }} [options]
+ *   total saved, the dialect filter's label ('' = all), the search text, and
+ *   the template being edited
  */
-export function renderTemplateList(list, templates, { total = templates.length, filterLabel = '' } = {}) {
+export function renderTemplateList(list, templates, { total = templates.length, filterLabel = '', query = '', currentId = null } = {}) {
     if (templates.length === 0) {
-        list.replaceChildren(h('li', { class: 'empty-state' }, total > 0 && filterLabel
-            ? `No templates for ${filterLabel}. Choose “All dialects” to see all ${total}.`
-            : 'No saved templates yet. Build a query, then choose “Save current query”.'));
+        let message = 'No saved templates yet. Build a query, then choose “Save current query”.';
+        if (total > 0 && query) message = `No templates match “${query}”${filterLabel ? ` for ${filterLabel}` : ''}.`;
+        else if (total > 0 && filterLabel) message = `No templates for ${filterLabel}. Choose “All dialects” to see all ${total}.`;
+        list.replaceChildren(h('li', { class: 'empty-state' }, message));
         return;
     }
-    list.replaceChildren(...templates.map(t => h('li', { class: 'library-item' },
+    list.replaceChildren(...templates.map(t => h('li', { class: `library-item${t.pinned ? ' pinned' : ''}` },
         h('div', { class: 'library-meta' },
             h('span', { class: `type-badge type-${t.workspace.type}` }, t.workspace.type.toUpperCase()),
             h('strong', { class: 'library-name' }, t.name),
+            t.pinned ? h('span', { class: 'library-chip library-pin' }, 'Pinned') : null,
+            t.id === currentId ? h('span', { class: 'library-chip library-current' }, 'Editing') : null,
             h('span', {}, t.dialect ? getDialect(t.dialect).label : 'Any dialect'),
             t.category ? h('span', { class: 'library-chip' }, t.category) : null
         ),
@@ -69,6 +74,9 @@ export function renderTemplateList(list, templates, { total = templates.length, 
         h('p', { class: 'library-detail' }, `Updated ${formatTime(t.updatedAt)}`),
         h('div', { class: 'library-actions' },
             action('Load', 'template-load', t.id, { label: `Load template ${t.name}`, variant: 'secondary' }),
+            t.pinned
+                ? action('Unpin', 'template-unpin', t.id, { label: `Unpin template ${t.name}` })
+                : action('Pin', 'template-pin', t.id, { label: `Pin template ${t.name} to the top` }),
             action('Rename', 'template-rename', t.id, { label: `Rename template ${t.name}` }),
             action('Duplicate', 'template-duplicate', t.id, { label: `Duplicate template ${t.name}` }),
             action('Delete', 'template-delete', t.id, { label: `Delete template ${t.name}`, variant: 'danger-ghost' })

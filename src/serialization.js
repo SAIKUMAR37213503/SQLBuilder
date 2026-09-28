@@ -297,17 +297,18 @@ export function createTemplatesExport(templates) {
         kind: 'templates',
         version: MODEL_VERSION,
         exportedAt: new Date().toISOString(),
-        templates: templates.map(({ name, dialect, description, category, workspace, createdAt, updatedAt }) => ({
+        templates: templates.map(({ name, dialect, description, category, pinned, workspace, createdAt, updatedAt }) => ({
             name,
             ...(dialect ? { dialect } : {}),
             ...(description ? { description } : {}),
             ...(category ? { category } : {}),
+            ...(pinned ? { pinned: true } : {}),
             workspace, createdAt, updatedAt
         }))
     };
 }
 
-/** @returns {{ ok: true, templates: { name: string, dialect?: string, description?: string, category?: string, workspace: any }[] } | { ok: false, error: string }} */
+/** @returns {{ ok: true, templates: { name: string, dialect?: string, description?: string, category?: string, pinned?: boolean, workspace: any }[] } | { ok: false, error: string }} */
 export function parseTemplatesFile(text) {
     try {
         const data = parseJson(text);
@@ -322,7 +323,11 @@ export function parseTemplatesFile(text) {
             // Unknown dialects, and over-long descriptions / categories, are cleaned by the template store
             const optional = (key) => (typeof t[key] === 'string' && t[key].trim() ? { [key]: t[key] } : {});
             try {
-                return { name, ...optional('dialect'), ...optional('description'), ...optional('category'), workspace: normalizeWorkspace(t.workspace) };
+                return {
+                    name, ...optional('dialect'), ...optional('description'), ...optional('category'),
+                    ...(t.pinned === true ? { pinned: true } : {}),
+                    workspace: normalizeWorkspace(t.workspace)
+                };
             } catch (error) {
                 throw new ImportError(`Template “${name}”: ${describeError(error)}`);
             }

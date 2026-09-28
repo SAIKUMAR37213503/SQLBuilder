@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=32d6dc12a6ea">
+    <link rel="stylesheet" href="style.css?v=d7473ff7215e">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -128,9 +128,20 @@
                             <button type="button" class="btn btn-secondary btn-sm" id="template-save-btn">Save current query…</button>
                             <button type="button" class="btn btn-ghost btn-sm" id="template-import-btn">Import…</button>
                             <button type="button" class="btn btn-ghost btn-sm" id="template-export-btn">Export all</button>
+                        </div>
+                        <div class="library-toolbar library-toolbar-filters">
+                            <label class="visually-hidden" for="template-search">Search templates</label>
+                            <input type="search" id="template-search" class="input" placeholder="Search templates…" autocomplete="off">
                             <label class="library-filter">
                                 <span>Dialect</span>
                                 <select id="template-filter" class="select select-sm"></select>
+                            </label>
+                            <label class="library-filter library-sort">
+                                <span>Sort</span>
+                                <select id="template-sort" class="select select-sm">
+                                    <option value="name">Name</option>
+                                    <option value="recent">Recently updated</option>
+                                </select>
                             </label>
                         </div>
                         <ul class="library-list" id="template-list"></ul>
@@ -265,6 +276,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=8b7414d2bfe9" defer></script>
+    <script src="dist/sqlbuilder.js?v=cc809f5adb13" defer></script>
 </body>
 </html>

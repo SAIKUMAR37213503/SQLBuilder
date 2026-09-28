@@ -215,6 +215,23 @@ describe('template dialects', () => {
         expect(() => store.update('missing', w)).toThrow('no longer exists');
     });
 
+    test('pinning is stored, exported and imported; copies are not pinned', () => {
+        const storage = memoryStorage();
+        const store = createTemplateStore(storage);
+        const a = store.create('A', w);
+        expect(a.pinned).toBeUndefined();
+        expect(store.setPinned(a.id, true).pinned).toBe(true);
+        expect(createTemplateStore(storage).get(a.id).pinned).toBe(true);
+        expect(store.duplicate(a.id).pinned).toBeUndefined();
+        const parsed = parseTemplatesFile(JSON.stringify(createTemplatesExport(store.list())));
+        expect(parsed.ok && parsed.templates.map(t => Boolean(t.pinned))).toEqual([true, false]);
+        expect(store.importMany(parsed.ok ? parsed.templates : [])[0].pinned).toBe(true);
+        expect('pinned' in store.setPinned(a.id, false)).toBe(false);
+        // Only a real true counts
+        storage.set('templates', [{ id: 'x', name: 'X', pinned: 'yes', workspace: w }]);
+        expect(createTemplateStore(storage).get('x').pinned).toBeUndefined();
+    });
+
     test('templates saved by earlier versions (no dialect) still load', () => {
         const storage = memoryStorage();
         storage.set('templates', [{ id: 'x', name: 'Old', createdAt: 1, updatedAt: 1, workspace: w }]);

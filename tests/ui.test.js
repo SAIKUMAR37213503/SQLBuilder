@@ -1063,6 +1063,65 @@ describe('saving the current query', () => {
     });
 });
 
+describe('template library', () => {
+    const names = () => $$('#template-list .library-name').map(n => n.textContent);
+    async function saveAs(table, name, category = '') {
+        type('select.from.table', table);
+        type('select.columns.0.expr', 'id');
+        await settle();
+        $('#template-save-btn').click();
+        await answerTemplate(name, { category });
+    }
+    const search = (text) => {
+        $('#template-search').value = text;
+        $('#template-search').dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const sortBy = (value) => {
+        $('#template-sort').value = value;
+        $('#template-sort').dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    test('search matches name, category and description; sort by name or recent', async () => {
+        await saveAs('b', 'Beta report', 'Finance');
+        await vi.advanceTimersByTimeAsync(60_000);
+        await saveAs('a', 'Alpha list');
+        expect(names()).toEqual(['Alpha list', 'Beta report']);
+        sortBy('recent');
+        expect(names()).toEqual(['Alpha list', 'Beta report']);
+        search('finance');
+        expect(names()).toEqual(['Beta report']);
+        search('nothing like this');
+        expect($('#template-list').textContent).toBe('No templates match “nothing like this”.');
+        search('');
+        expect(names()).toHaveLength(2);
+    });
+
+    test('Pin moves a template to the top and keeps focus on it', async () => {
+        await saveAs('a', 'Alpha');
+        await saveAs('b', 'Beta');
+        expect(names()).toEqual(['Alpha', 'Beta']);
+        $('[aria-label="Pin template Beta to the top"]').click();
+        await settle();
+        expect(names()).toEqual(['Beta', 'Alpha']);
+        expect($('#template-list .library-item').textContent).toContain('Pinned');
+        expect(document.activeElement).toBe($('[aria-label="Unpin template Beta"]'));
+        expect(JSON.parse(backend.getItem(`${STORAGE_PREFIX}templates`)).find(t => t.name === 'Beta').pinned).toBe(true);
+        $('[aria-label="Unpin template Beta"]').click();
+        await settle();
+        expect(names()).toEqual(['Alpha', 'Beta']);
+    });
+
+    test('the template being edited is marked', async () => {
+        await saveAs('a', 'Alpha');
+        expect($('#template-list .library-current').textContent).toBe('Editing');
+        $('#reset-btn').click();
+        await settle();
+        $('[data-action="template-load"]').click();
+        await settle();
+        expect($('#template-list .library-current')).not.toBeNull();
+    });
+});
+
 describe('query structure panel', () => {
     const loadExample = async (id) => {
         $(`#example-list [data-action="example-load"][data-id="${id}"]`).click();
