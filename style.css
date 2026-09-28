@@ -825,12 +825,17 @@ kbd {
     cursor: pointer;
 }
 .tabs [role="tab"][aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+/* Very narrow phones (320px): the three tabs share the row instead of overflowing it */
+@media (max-width: 359px) {
+    .tabs [role="tab"] { flex: 1 1 auto; min-width: 0; padding-inline: 0.2rem; font-size: 0.9rem; }
+}
 
 .tab-panel { display: grid; gap: 0.6rem; }
 .library-toolbar { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
 .library-toolbar .input { flex: 1 1 10rem; width: auto; font-family: var(--font-sans); }
 .library-toolbar-filters #template-search { flex-basis: 100%; }
-.library-toolbar-filters .library-filter { flex: 1 1 11rem; margin-left: 0; }
+.library-toolbar-filters .library-filter { flex: 1 1 11rem; min-width: 0; margin-left: 0; }
+.tab-panel > * { min-width: 0; }
 .library-toolbar-filters .library-filter select { flex: 1; min-width: 0; }
 .library-pin { border-color: var(--accent); color: var(--accent); }
 .library-current { border-color: var(--success); color: var(--success); }
