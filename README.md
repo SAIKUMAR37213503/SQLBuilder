@@ -90,6 +90,7 @@ Messages are listed errors first, then warnings, then tips. On narrower screens 
 - **Examples**: twenty-two starter queries, each tagged Beginner, Intermediate or Advanced and with a topic (filtering, joins, aggregation, window functions and more). They are filtered to the selected dialect and can be filtered by topic (the upsert example only exists for PostgreSQL and MySQL). Each one shows a one-line preview of the SQL it produces in that dialect.
 - Import/export of the current query as JSON (validated, never executed), and download of the SQL. An exported query remembers its dialect, and importing it switches back to that dialect.
 - **Schema** (Schema tab): describe your tables once and keep them in this browser. Add or edit a table as a `CREATE TABLE` statement (types are optional), or import many at once by pasting or choosing a `.sql` file (pg_dump, mysqldump and SQL Server "Script Table as" output work) or a schema `.json` file. The import shows what it found, which statements it skipped (indexes, functions, `SET`, …) and any lines it couldn't read, before anything is saved. Primary keys, unique keys and foreign keys (inline `REFERENCES` or `ALTER TABLE … ADD CONSTRAINT`) are kept. Tables and columns can be searched, and the schema can be exported as JSON or as `CREATE TABLE` statements. The SQL you paste is only read, never run, and the schema doesn't change the SQL the builder generates. Limits: 500 tables, 500 columns per table.
+- **Suggestions** (once the schema has tables): table fields list your tables and the query's CTEs; column and expression fields (columns, conditions, JOIN ON, GROUP BY, ORDER BY, CASE, window functions, SET) list the columns of the tables in that query, qualified with the alias when there are several, plus a few common functions for the selected dialect. Typing `e.` lists the columns of alias `e`. A subquery in WHERE also sees the outer query's tables; a derived table or CTE shows the columns it selects. ↓ (or Alt+↓) opens the list, ↑/↓ move, Enter or a tap puts the suggestion in the field, Esc or Tab closes it. Nothing is picked unless you choose it, and names that need quotes are quoted for the dialect. Without a schema, fields work exactly as before.
 - **Full backup** (File → Back up everything / Restore from backup…): one JSON file (`sql-builder-backup`, version 2) with all templates (including pins and dates), history, the schema and settings. Version 1 backups still restore. Restoring validates every field first and asks how to restore: **Merge** (default) adds the templates, history and schema tables that aren't here yet and skips exact copies (a table already here keeps your version), keeping your settings; **Replace** asks for confirmation, then swaps templates, history, schema and settings for the backup's (a version 1 backup leaves the schema as it is). History isn't restored while saving history is turned off. A backup never contains anything that leaves your device unless you move the file yourself.
 - Undo / redo of every change.
 - **Command palette** (Ctrl/⌘+K, or File → Commands… on touch screens): search and run commands such as Generate, Copy, Save, switching the query type, dialect, output format or theme, opening the library tabs, import/export and settings. It only lists commands that apply right now and runs the same actions as the buttons.
@@ -162,7 +163,8 @@ A single column stays on the `SELECT` line (`SELECT * FROM …`); two or more ar
 | `Ctrl`/`⌘` + `Z` | Undo, when focus is not in a text field (text fields keep the browser's own undo) |
 | `Ctrl`/`⌘` + `Shift` + `Z` (or `Ctrl` + `Y`) | Redo, outside text fields |
 | `?` | Show shortcuts |
-| `Esc` | Close dialogs and menus |
+| `↓` | In a table or column field, show suggestions from your schema |
+| `Esc` | Close suggestions, dialogs and menus |
 
 ## Using it
 
@@ -218,6 +220,7 @@ src/
 ├── schema.js         Schema model (tables, columns, keys), validation, storage, CREATE TABLE output
 ├── ddl.js            Reads CREATE TABLE / ALTER TABLE … ADD text into schema tables (never runs it)
 ├── sql-lexer.js      SQL tokens with positions, for reading pasted DDL
+├── suggest.js        Which tables/columns a builder field can use (scope, aliases, CTEs)
 ├── storage.js        Guarded localStorage wrapper
 ├── settings.js / history.js / templates.js / undo.js / examples.js
 ├── app.js            Controller: state, events, rendering pipeline
@@ -230,6 +233,7 @@ src/
     ├── library.js    History / Templates / Examples / Schema lists
     ├── dialogs.js    Native <dialog> helpers
     ├── palette.js    Command palette (filtering + combobox dialog)
+    ├── suggest.js    Suggestion list under builder fields (ARIA combobox)
     ├── theme.js, shortcuts.js, dom.js (safe element builder)
 ```
 
@@ -299,7 +303,8 @@ Fabric_Sync/                                      ← unrelated Power BI content
 
 - **Not a SQL parser.** Expressions you type (columns, custom conditions, CASE parts, INSERT values) are inserted as written. Validation only checks balanced quotes and parentheses and rejects `;` and `--`. It cannot tell whether a column exists or a function is valid.
 - You can't paste a query in to edit it; queries are built with the builder or imported as JSON. Pasted SQL is only read for `CREATE TABLE` definitions in the Schema tab.
-- The schema is not used by the builder yet: there are no column suggestions or join help from it so far.
+- The schema only drives suggestions so far: there is no JOIN help from foreign keys, and unknown tables or columns aren't flagged yet.
+- Suggestions come from the saved schema and what the query selects; a column produced by an expression without an alias has no name to suggest.
 - CTEs are only allowed on the main query, and recursive CTEs aren't supported.
 - INSERT values are SQL expressions: write text in quotes. A warning flags likely unquoted text.
 - GROUP BY checking is a heuristic: it compares expressions textually and can't know about functional dependencies.
@@ -316,7 +321,7 @@ Candidates, in rough priority order:
 - SQL Server `MERGE`, and `RETURNING` / `OUTPUT`
 - Recursive CTEs
 - More window options: named `WINDOW` clauses, `RANGE`/`GROUPS` frames and custom frame bounds
-- Use the schema for column suggestions, JOIN help and checks against known tables and columns
+- Use the schema for JOIN help and checks against known tables and columns
 
 ## License
 

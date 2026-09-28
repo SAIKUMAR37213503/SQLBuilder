@@ -1882,3 +1882,131 @@ describe('full backup with a schema', () => {
         expect(app.schema.list().map(t => t.name)).toEqual(['keep']);
     });
 });
+
+describe('field suggestions', () => {
+    const list = () => $('#field-suggestions');
+    const optionLabels = () => $$('#field-suggestions [role="option"] .suggest-label').map(n => n.textContent);
+    const SCHEMA = [
+        { name: 'employees', columns: [{ name: 'id', type: 'int' }, { name: 'name', type: 'text' }, { name: 'department_id', type: 'int' }, { name: 'salary', type: 'numeric' }] },
+        { name: 'departments', columns: [{ name: 'id', type: 'int' }, { name: 'name', type: 'text' }] }
+    ];
+
+    function typeAt(path, value) {
+        const input = field(path);
+        input.focus();
+        input.value = value;
+        input.setSelectionRange(value.length, value.length);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        return input;
+    }
+
+    test('without a schema the fields stay plain text fields', async () => {
+        const input = typeAt('select.from.table', 'emp');
+        expect(input.hasAttribute('role')).toBe(false);
+        expect(list().hidden).toBe(true);
+        press('ArrowDown', {}, input);
+        expect(list().hidden).toBe(true);
+    });
+
+    test('table field: typing lists tables; arrows and Enter put one in the field and the model', async () => {
+        app.schema.apply(SCHEMA);
+        const input = typeAt('select.from.table', 'emp');
+        expect(input.getAttribute('role')).toBe('combobox');
+        expect(input.getAttribute('aria-controls')).toBe('field-suggestions');
+        expect(input.getAttribute('aria-expanded')).toBe('true');
+        expect(optionLabels()).toEqual(['employees']);
+        // Nothing is chosen until the person picks it
+        expect(input.hasAttribute('aria-activedescendant')).toBe(false);
+        press('ArrowDown', {}, input);
+        expect(input.getAttribute('aria-activedescendant')).toBe('field-suggestions-0');
+        expect($('#field-suggestions-0').getAttribute('aria-selected')).toBe('true');
+        press('Enter', {}, input);
+        expect(input.value).toBe('employees');
+        expect(app.state.workspace.select.from.table).toBe('employees');
+        expect(list().hidden).toBe(true);
+        expect(input.getAttribute('aria-expanded')).toBe('false');
+        type('select.columns.0.expr', 'name');
+        await settle();
+        expect(sql()).toContain('FROM employees');
+    });
+
+    test('column field: "alias." lists that table\'s columns; a tap chooses; Escape and Tab close', async () => {
+        app.schema.apply(SCHEMA);
+        typeAt('select.from.table', 'employees');
+        type('select.from.alias', 'e');
+        add('select.joins', 'join');
+        await settle();
+        type('select.joins.0.source.table', 'departments');
+        type('select.joins.0.source.alias', 'd');
+        await settle();
+
+        let input = typeAt('select.columns.0.expr', 'sal');
+        expect(optionLabels()).toEqual(['e.salary']);
+        press('Escape', {}, input);
+        expect(list().hidden).toBe(true);
+
+        input = typeAt('select.columns.0.expr', 'e');
+        expect(optionLabels()).toContain('e.');
+        const alias = $$('#field-suggestions [role="option"]').find(o => o.textContent.startsWith('e.'));
+        alias.click();
+        expect(input.value).toBe('e.');
+        // Straight on to the columns of e
+        expect(optionLabels()).toEqual(['id', 'name', 'department_id', 'salary']);
+        $$('#field-suggestions [role="option"]')[3].click();
+        expect(input.value).toBe('e.salary');
+        expect(app.state.workspace.select.columns[0].expr).toBe('e.salary');
+        expect(list().hidden).toBe(true);
+
+        input = typeAt('select.columns.0.expr', 'e.salary + d.');
+        expect(optionLabels()).toEqual(['id', 'name']);
+        press('ArrowUp', {}, input);
+        press('Enter', {}, input);
+        expect(input.value).toBe('e.salary + d.name');
+        input = typeAt('select.columns.0.expr', 'na');
+        press('Tab', {}, input);
+        expect(list().hidden).toBe(true);
+    });
+
+    test('ArrowDown opens the full list in an empty field; Enter with nothing chosen types as usual', async () => {
+        app.schema.apply(SCHEMA);
+        const input = typeAt('select.from.table', '');
+        press('ArrowDown', {}, input);
+        expect(optionLabels()).toEqual(['departments', 'employees']);
+        expect(input.getAttribute('aria-activedescendant')).toBe('field-suggestions-0');
+        press('Escape', {}, input);
+        typeAt('select.from.table', 'dep');
+        const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+        input.dispatchEvent(enter);
+        expect(enter.defaultPrevented).toBe(false);
+        expect(input.value).toBe('dep');
+        expect(list().hidden).toBe(true);
+    });
+
+    test('the list closes when the field loses focus, the builder re-renders or Back is pressed', async () => {
+        app.schema.apply(SCHEMA);
+        let input = typeAt('select.from.table', 'e');
+        expect(list().hidden).toBe(false);
+        input.blur();
+        expect(list().hidden).toBe(true);
+
+        input = typeAt('select.from.table', 'e');
+        add('select.joins', 'join');
+        expect(list().hidden).toBe(true);
+
+        input = typeAt('select.from.table', 'e');
+        expect(app.handleBack()).toBe(true);
+        expect(list().hidden).toBe(true);
+    });
+
+    test('suggestions never change generated SQL on their own, and are removed with the app', async () => {
+        app.schema.apply(SCHEMA);
+        await fillSimpleSelect('employees', 'name');
+        const before = sql();
+        typeAt('select.columns.0.expr', 'name');
+        await settle();
+        expect(sql()).toBe(before);
+        app.destroy();
+        expect(document.getElementById('field-suggestions')).toBeNull();
+        boot();
+    });
+});

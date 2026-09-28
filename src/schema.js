@@ -202,6 +202,9 @@ const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 
 
 export function createSchemaStore(storage) {
     let tables = load();
+    // list()'s sorted copy, kept until the next change
+    /** @type {any[] | null} */
+    let sorted = null;
 
     function load() {
         const stored = storage.get(SCHEMA_KEY, null);
@@ -231,11 +234,12 @@ export function createSchemaStore(storage) {
                 : 'Browser storage is unavailable, so the schema can\'t be saved.');
         }
         tables = next;
+        sorted = null;
     }
 
     return {
-        /** All tables, sorted by name. */
-        list: () => tables.slice().sort(byName),
+        /** All tables, sorted by name. The same array until the schema changes. */
+        list: () => (sorted ||= /** @type {any[]} */ (Object.freeze(tables.slice().sort(byName)))),
 
         get: (/** @type {string} */ name) => findTable(tables, name),
 

@@ -32,6 +32,8 @@ import { promptDialog, templateDialog, confirmDialog, showDialog, closeDialog, e
 import { applyTheme, nextTheme, effectiveTheme, THEME_LABELS } from './ui/theme.js';
 import { bindShortcuts, SHORTCUTS, modLabel } from './ui/shortcuts.js';
 import { openPalette } from './ui/palette.js';
+import { createSuggester } from './ui/suggest.js';
+import { fieldContext, suggest } from './suggest.js';
 import { createWebPlatform } from './platform/web.js';
 
 const DRAFT_KEY = 'draft';
@@ -173,6 +175,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     // Set while the schema import dialog is open: fills it with a chosen file's text
     /** @type {null | ((text: string) => void)} */
     let fillSchemaImport = null;
+    /** @type {null | ReturnType<typeof createSuggester>} */
+    let suggester = null;
     if (state.settings.restoreSession) {
         const sourceId = storage.get(SOURCE_KEY);
         if (typeof sourceId === 'string' && templates.get(sourceId)) state.sourceId = sourceId;
@@ -226,6 +230,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             ? { path: active.dataset.path, action: active.dataset.action }
             : null;
 
+        if (suggester) suggester.close();
         el.builder.replaceChildren(renderEditor(state.workspace, ui));
 
         const target = focus || previous;
@@ -1079,6 +1084,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
     function renderSchema() {
         const all = schema.list();
+        if (suggester) suggester.close();
         const query = state.schemaSearch.trim();
         const needle = query.toLowerCase();
         const shown = needle
@@ -1339,6 +1345,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     // Android back button: close the top-most overlay. Returns false when there
     // is nothing to close, so the platform can apply its default behaviour.
     function handleBack() {
+        if (suggester && suggester.open) {
+            suggester.close();
+            return true;
+        }
         const dialogs = [el.confirmDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
         const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
         if (open) {
@@ -1507,6 +1517,19 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     // ------------------------------------------------------------------ wiring
 
     el.builder.addEventListener('input', onBuilderInput);
+    // Suggestions from the schema; without a schema the fields work as before
+    suggester = createSuggester({
+        root: el.builder,
+        doc,
+        signal,
+        enabled: (input) => schema.size > 0 && fieldContext(state.workspace, input.dataset.path, { tables: schema.list() }) !== null,
+        compute: (input) => {
+            const tables = schema.list();
+            const context = fieldContext(state.workspace, input.dataset.path, { tables });
+            if (!context) return null;
+            return suggest(context, input.value, input.selectionStart ?? input.value.length, { tables, dialect: getDialect(state.settings.dialect) });
+        }
+    });
     el.builder.addEventListener('change', onBuilderChange);
     el.builder.addEventListener('click', onBuilderClick);
     el.builder.addEventListener('focusout', onBuilderFocusOut);
