@@ -414,6 +414,9 @@ kbd {
 .sub-heading { font-size: 0.85rem; font-weight: 650; color: var(--text-2); }
 
 .item-list { display: grid; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
+/* Long option labels (e.g. in a UNION card's select) must not widen the page */
+.item-list > li, .card > *, .select-editor > .section { min-width: 0; }
+.card-header > .select { flex: 0 1 auto; min-width: 0; }
 
 .row {
     display: flex;
