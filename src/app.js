@@ -80,7 +80,6 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         selectAll: $('select-all-btn'),
         modeButtons: $$('[data-output-mode]'),
         wrap: $('wrap-btn'),
-        dialectBadge: $('dialect-badge'),
         dialectSelect: $('dialect-select'),
         templateFilter: $('template-filter'),
         exampleFilter: $('example-filter'),
@@ -229,7 +228,6 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         renderComplexity();
         el.undo.disabled = !undoStack.canUndo;
         el.redo.disabled = !undoStack.canRedo;
-        el.dialectBadge.textContent = getDialect(state.settings.dialect).label;
         saveDraft();
     }
 

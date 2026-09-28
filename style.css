@@ -585,7 +585,7 @@ kbd {
 
 /* ------------------------------------------------------- dialect picker */
 
-.builder-title { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; }
+.panel-title { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; }
 .dialect-picker { display: inline-flex; gap: 0.4rem; align-items: center; }
 .dialect-picker-label { color: var(--text-muted); font-size: 0.8rem; font-weight: 600; }
 .dialect-select {
@@ -620,17 +620,6 @@ kbd {
 .library-chip { padding: 0.05rem 0.45rem; border: 1px solid var(--border); border-radius: 999px; font-size: 0.75rem; }
 
 /* -------------------------------------------------------------- output */
-
-.dialect-badge {
-    margin-left: 0.35rem;
-    padding: 0.1rem 0.5rem;
-    border-radius: 999px;
-    background: var(--surface-3);
-    color: var(--text-2);
-    font-size: 0.75rem;
-    font-weight: 600;
-    vertical-align: middle;
-}
 
 .output-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
 

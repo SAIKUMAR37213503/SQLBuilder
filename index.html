@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=7d2757ac14c0">
+    <link rel="stylesheet" href="style.css?v=263b7b497773">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -41,14 +41,7 @@
         <main class="workspace">
             <section class="panel builder-panel" aria-labelledby="builder-heading">
                 <div class="panel-header">
-                    <div class="builder-title">
-                        <h2 id="builder-heading">Build</h2>
-                        <label class="dialect-picker">
-                            <span class="dialect-picker-label">Dialect</span>
-                            <select id="dialect-select" class="dialect-select" aria-describedby="dialect-picker-note"></select>
-                        </label>
-                        <span class="visually-hidden" id="dialect-picker-note">Changes the SQL that is generated and the checks. Your query is kept.</span>
-                    </div>
+                    <h2 id="builder-heading">Build</h2>
                     <div class="type-tabs" role="radiogroup" aria-label="Query type">
                         <label class="type-tab"><input type="radio" name="query-type" value="select" checked><span>SELECT</span></label>
                         <label class="type-tab"><input type="radio" name="query-type" value="insert"><span>INSERT</span></label>
@@ -69,7 +62,14 @@
             <div class="side">
                 <section class="panel output-panel" id="output-panel" tabindex="-1" aria-labelledby="output-heading">
                     <div class="panel-header">
-                        <h2 id="output-heading">SQL <span class="dialect-badge" id="dialect-badge"></span></h2>
+                        <div class="panel-title">
+                            <h2 id="output-heading">SQL</h2>
+                            <label class="dialect-picker">
+                                <span class="dialect-picker-label">Dialect</span>
+                                <select id="dialect-select" class="dialect-select" aria-describedby="dialect-picker-note"></select>
+                            </label>
+                            <span class="visually-hidden" id="dialect-picker-note">Changes the SQL that is generated and the checks. Your query is kept.</span>
+                        </div>
                         <div class="output-actions">
                             <div class="segmented" role="group" aria-label="SQL layout">
                                 <button type="button" class="segment" data-output-mode="formatted" aria-pressed="true">Formatted</button>
@@ -256,6 +256,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=1b3b2e58778a" defer></script>
+    <script src="dist/sqlbuilder.js?v=1487cd0c357e" defer></script>
 </body>
 </html>

@@ -89,12 +89,12 @@ Messages are listed errors first, then warnings, then tips. On narrower screens 
 - Import/export of the current query as JSON (validated, never executed), and download of the SQL. An exported query remembers its dialect, and importing it switches back to that dialect.
 - Undo / redo of every change.
 - Unsaved work is restored when you come back; this can be turned off.
-- Settings: dialect (also in the builder header), identifier quoting, live preview, history, session restore, theme, and delete all saved data.
+- Settings: dialect (also next to the SQL heading), identifier quoting, live preview, history, session restore, theme, and delete all saved data.
 - Light / Dark / System theme.
 
 ## SQL dialects
 
-Four dialects are supported: **Generic SQL** (the default), **Microsoft SQL Server**, **PostgreSQL** and **MySQL** (8.0.31 or later is assumed). Pick one with the **Dialect** menu at the top of the builder (or in Settings). The query itself is kept when you switch: only the generated SQL and the checks change, and a message says how many parts of the query the new dialect can't express.
+Four dialects are supported: **Generic SQL** (the default), **Microsoft SQL Server**, **PostgreSQL** and **MySQL** (8.0.31 or later is assumed). Pick one with the **Dialect** menu next to the SQL heading, above the generated SQL (or in Settings). The query itself is kept when you switch: only the generated SQL and the checks change, and a message says how many parts of the query the new dialect can't express.
 
 All four dialects share one query model, generator and validator. Everything that differs is described once per dialect in `src/dialects.js` as settings and capability flags (for example `supports.fullJoin` or `restrictions.rankingNeedsOrderBy`), and a test makes sure the generator, validator and UI never check which dialect is selected.
 

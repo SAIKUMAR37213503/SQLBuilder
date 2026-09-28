@@ -719,7 +719,7 @@ describe('settings, theme, persistence', () => {
         quote.dispatchEvent(new Event('change', { bubbles: true }));
         await settle();
         expect(sql()).toBe('SELECT TOP 10 [name]\nFROM [users];');
-        expect($('#dialect-badge').textContent).toBe('Microsoft SQL Server');
+        expect($('#dialect-select').value).toBe('sqlserver');
     });
 
     test('with live preview off, SQL appears only after Generate and goes stale', async () => {
@@ -991,18 +991,19 @@ describe('INTERSECT / EXCEPT and window functions in the UI', () => {
 describe('dialects in the UI', () => {
     const optionText = (path, value) => field(path).querySelector(`option[value="${value}"]`).textContent;
 
-    test('the builder header picker changes the SQL, badge and settings, and keeps the query', async () => {
+    test('the picker next to the SQL heading changes the SQL and settings, and keeps the query', async () => {
         await fillSimpleSelect();
         type('select.limit', '5');
         await settle();
         const before = JSON.stringify(app.state.workspace);
+        expect($('#output-panel #dialect-select')).not.toBeNull();
+        expect($('.builder-panel #dialect-select')).toBeNull();
         expect($('#dialect-select').value).toBe('generic');
         expect($$('#dialect-select option').map(o => o.textContent)).toEqual(['Generic SQL', 'Microsoft SQL Server', 'PostgreSQL', 'MySQL']);
 
         pickDialect('sqlserver');
         await settle();
         expect(sql()).toBe('SELECT TOP 5 name\nFROM users;');
-        expect($('#dialect-badge').textContent).toBe('Microsoft SQL Server');
         expect(app.state.settings.dialect).toBe('sqlserver');
         expect(JSON.parse(backend.getItem(`${STORAGE_PREFIX}settings`)).dialect).toBe('sqlserver');
         expect(JSON.stringify(app.state.workspace)).toBe(before);
