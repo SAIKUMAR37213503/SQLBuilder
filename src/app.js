@@ -652,10 +652,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             toast(`Import failed: ${result.error}`, 'error');
             return;
         }
-        if (result.dialect && listDialects().some(d => d.id === result.dialect)) {
-            updateSettings({ dialect: result.dialect });
-        }
-        replaceWorkspace(result.workspace, 'Query imported. Undo restores your previous query.');
+        const switched = switchDialect(result.dialect);
+        replaceWorkspace(result.workspace, `Query imported${switched}. Undo restores your previous query.`);
     }
 
     function importTemplates(text) {

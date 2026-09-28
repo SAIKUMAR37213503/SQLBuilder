@@ -677,6 +677,23 @@ describe('query import / export', () => {
         expect(toast()).toContain('Query imported');
     });
 
+    test('importing a query saved for another dialect switches to it and says so', async () => {
+        pickDialect('mysql');
+        await fillSimpleSelect('orders');
+        let exported = null;
+        vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => { exported = blob; return 'blob:x'; });
+        vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        $('[data-command="export-query"]').click();
+        const text = await exported.text();
+
+        pickDialect('generic');
+        $('[data-command="import-query"]').click();
+        await chooseFile(text);
+        expect($('#dialect-select').value).toBe('mysql');
+        expect(toast()).toBe('Query imported (dialect switched to MySQL). Undo restores your previous query.');
+    });
+
     test('malformed imports leave the workspace untouched', async () => {
         await fillSimpleSelect('keep');
         for (const bad of ['not json', '{"type":"drop"}', '{"type":"select","select":{"columns":"x"}}']) {
