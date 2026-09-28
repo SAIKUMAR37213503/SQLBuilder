@@ -18,10 +18,11 @@ import { createHistory } from './history.js';
 import { createTemplateStore, TemplateError } from './templates.js';
 import { UndoStack } from './undo.js';
 import {
-    normalizeWorkspace, parseQueryFile, parseTemplatesFile, createQueryExport, createTemplatesExport, MAX_IMPORT_BYTES
+    normalizeWorkspace, parseQueryFile, parseTemplatesFile, createQueryExport, createTemplatesExport, MAX_IMPORT_BYTES,
+    createBackup, parseBackupFile, MAX_BACKUP_BYTES
 } from './serialization.js';
 import { EXAMPLES, examplesFor } from './examples.js';
-import { h, byPath, debounce, cssEscape } from './ui/dom.js';
+import { h, byPath, debounce, cssEscape, formatTime } from './ui/dom.js';
 import { renderEditor } from './ui/builder.js';
 import { renderSqlCode, selectContents } from './ui/output.js';
 import { renderHistoryList, renderTemplateList, renderExampleList } from './ui/library.js';
@@ -117,6 +118,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         confirmDialog: $('confirm-dialog'),
         shortcutsDialog: $('shortcuts-dialog'),
         paletteDialog: $('palette-dialog'),
+        backupDialog: $('backup-dialog'),
         clearData: $('clear-data-btn'),
         viewSql: $('view-sql-btn'),
         statusBadge: $('status-badge')
@@ -689,8 +691,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     async function onFileChosen() {
         const file = el.fileInput.files && el.fileInput.files[0];
         if (!file) return;
-        if (file.size > MAX_IMPORT_BYTES) {
-            toast('That file is too large to import (limit 1 MB).', 'error');
+        const mode = el.fileInput.dataset.mode;
+        const limit = mode === 'backup' ? MAX_BACKUP_BYTES : MAX_IMPORT_BYTES;
+        if (file.size > limit) {
+            toast(`That file is too large to import (limit ${limit / 1024 / 1024} MB).`, 'error');
             return;
         }
         let text;
@@ -700,7 +704,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             toast('The file could not be read.', 'error');
             return;
         }
-        if (el.fileInput.dataset.mode === 'templates') importTemplates(text);
+        if (mode === 'templates') importTemplates(text);
+        else if (mode === 'backup') await restoreBackup(text);
         else importQuery(text);
     }
 
@@ -727,6 +732,72 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         } catch (error) {
             toast(error instanceof TemplateError ? error.message : 'Templates could not be imported.', 'error');
         }
+    }
+
+    // ----------------------------------------------------------------- backup
+
+    const count = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+    async function exportBackup() {
+        const backup = createBackup({ templates: templates.list(), history: history.list(), settings: state.settings });
+        const date = new Date().toISOString().slice(0, 10);
+        await downloadFile(`sql-builder-backup-${date}.json`, JSON.stringify(backup, null, 2), 'application/json',
+            `Backed up ${count(backup.templates.length, 'template')}, ${count(backup.history.length, 'history entry', 'history entries')} and your settings.`);
+    }
+
+    /** Asks how to restore. Resolves 'merge', 'replace' or null. */
+    async function askRestoreMode(backup) {
+        const dialog = el.backupDialog;
+        const when = Date.parse(backup.exportedAt);
+        dialog.querySelector('#backup-summary').textContent = `This backup${Number.isNaN(when) ? '' : ` from ${formatTime(when)}`} has ${count(backup.templates.length, 'template')}, ${count(backup.history.length, 'history entry', 'history entries')} and settings. Nothing changes until you choose Restore.`;
+        const merge = dialog.querySelector('input[value="merge"]');
+        merge.checked = true;
+        const result = await showDialog(dialog, () => merge.focus());
+        if (result !== 'confirm') return null;
+        return dialog.querySelector('input[name="backup-mode"]:checked').value === 'replace' ? 'replace' : 'merge';
+    }
+
+    async function restoreBackup(text) {
+        const backup = parseBackupFile(text);
+        if ('error' in backup) {
+            toast(`Restore failed: ${backup.error}`, 'error');
+            return;
+        }
+        const mode = await askRestoreMode(backup);
+        if (!mode) return;
+        const replace = mode === 'replace';
+        if (replace) {
+            const ok = await confirmDialog(el.confirmDialog, {
+                title: 'Replace your saved data?',
+                message: `Your ${count(templates.list().length, 'template')} and ${count(history.list().length, 'history entry', 'history entries')} will be deleted and replaced by the backup's, and your settings will change to the backup's. This cannot be undone.`,
+                confirmText: 'Replace'
+            });
+            if (!ok) return;
+        }
+        let added;
+        try {
+            added = templates.restore(backup.templates, { replace });
+        } catch (error) {
+            toast(error instanceof TemplateError ? `Restore failed: ${error.message}` : 'The backup could not be restored.', 'error');
+            return;
+        }
+        if (replace) updateSettings(backup.settings);
+        const parts = [`${count(added.added, 'template')} added${added.skipped ? ` (${added.skipped} already here)` : ''}`];
+        // History stays off when the person turned it off
+        if (state.settings.saveHistory) {
+            const restored = history.restore(backup.history, { replace });
+            parts.push(`${count(restored.added, 'history entry', 'history entries')} added${restored.skipped ? ` (${restored.skipped} already here)` : ''}${restored.dropped ? `, keeping the newest ${history.list().length}` : ''}`);
+        } else if (backup.history.length) {
+            parts.push('history not restored because saving history is turned off');
+        }
+        if (state.sourceId && !templates.get(state.sourceId)) {
+            state.sourceId = null;
+            saveDraft();
+        }
+        renderTemplates();
+        renderHistory();
+        renderQueryName();
+        toast(`Backup restored: ${parts.join(', ')}. ${replace ? 'Settings restored from the backup.' : 'Your settings were kept.'}`, 'success');
     }
 
     function clearCurrent() {
@@ -1058,7 +1129,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     // Android back button: close the top-most overlay. Returns false when there
     // is nothing to close, so the platform can apply its default behaviour.
     function handleBack() {
-        const dialogs = [el.confirmDialog, el.promptDialog, el.templateDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
+        const dialogs = [el.confirmDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
         const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
         if (open) {
             closeDialog(open, 'cancel');
@@ -1183,6 +1254,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             { id: 'open-examples', group: 'Library', label: 'Open examples', run: () => openLibraryTab('examples') },
             { id: 'export-query', group: 'File', label: 'Export query (.json)', run: exportQuery },
             { id: 'import-query', group: 'File', label: 'Import query (.json)…', run: () => chooseFile('query') },
+            { id: 'export-backup', group: 'File', label: 'Back up everything (.json)', keywords: 'backup export templates history settings', run: exportBackup },
+            { id: 'import-backup', group: 'File', label: 'Restore from backup…', keywords: 'backup import templates history settings', run: () => chooseFile('backup') },
             templates.list().length > 0 && { id: 'export-templates', group: 'Templates', label: 'Export all templates', run: exportTemplates },
             { id: 'import-templates', group: 'Templates', label: 'Import templates…', run: () => chooseFile('templates') },
             { id: 'shortcuts', group: 'Help', label: 'Show keyboard shortcuts', keys: ['?'], run: () => showDialog(el.shortcutsDialog) },
@@ -1259,6 +1332,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             'export-query': exportQuery,
             'import-query': () => chooseFile('query'),
             'download-sql': downloadSql,
+            'export-backup': exportBackup,
+            'import-backup': () => chooseFile('backup'),
             palette: showPalette,
             generate,
             copy: copySql
@@ -1314,7 +1389,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.templateExport.addEventListener('click', exportTemplates);
     el.fileInput.addEventListener('change', onFileChosen);
 
-    [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog, el.paletteDialog].forEach(enhanceDialog);
+    [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog, el.paletteDialog, el.backupDialog].forEach(enhanceDialog);
 
     bindShortcuts(doc, signal, {
         generate,

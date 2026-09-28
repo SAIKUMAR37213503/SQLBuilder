@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=7486ca6a3b6c">
+    <link rel="stylesheet" href="style.css?v=ec667dbb61e9">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -31,6 +31,8 @@
                         <button type="button" class="menu-item" data-command="export-query">Export query (.json)</button>
                         <button type="button" class="menu-item" data-command="import-query">Import query (.json)…</button>
                         <button type="button" class="menu-item" data-command="download-sql">Download SQL (.sql)</button>
+                        <button type="button" class="menu-item" data-command="export-backup">Back up everything (.json)</button>
+                        <button type="button" class="menu-item" data-command="import-backup">Restore from backup…</button>
                     </div>
                 </details>
                 <button type="button" class="btn btn-ghost" id="theme-btn">Theme</button>
@@ -251,6 +253,22 @@
         </form>
     </dialog>
 
+    <dialog id="backup-dialog" class="dialog dialog-sm" aria-labelledby="backup-title" aria-describedby="backup-summary">
+        <form method="dialog" class="dialog-body">
+            <h2 id="backup-title" class="dialog-title">Restore from backup</h2>
+            <p id="backup-summary" class="dialog-message"></p>
+            <fieldset class="fieldset">
+                <legend>How to restore</legend>
+                <label class="check check-block"><input type="radio" name="backup-mode" value="merge" checked> <span><strong>Merge</strong> (recommended): add the templates and history that aren't here yet. Your settings stay as they are.</span></label>
+                <label class="check check-block"><input type="radio" name="backup-mode" value="replace"> <span><strong>Replace</strong>: delete your current templates and history, then use the backup's, including its settings.</span></label>
+            </fieldset>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary" value="confirm">Restore</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="confirm-dialog" class="dialog dialog-sm" aria-labelledby="confirm-title" aria-describedby="confirm-message">
         <form method="dialog" class="dialog-body">
             <h2 id="confirm-title" class="dialog-title">Are you sure?</h2>
@@ -287,6 +305,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=f8d6b32751a0" defer></script>
+    <script src="dist/sqlbuilder.js?v=f0eb3382d96b" defer></script>
 </body>
 </html>

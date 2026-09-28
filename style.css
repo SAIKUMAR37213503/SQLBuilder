@@ -487,6 +487,8 @@ kbd {
 
 .check { display: inline-flex; gap: 0.45rem; align-items: center; cursor: pointer; }
 .check input { width: 1.05rem; height: 1.05rem; accent-color: var(--accent); }
+.check-block { align-items: flex-start; }
+.check-block input { flex: none; margin-top: 0.2rem; }
 
 .add-bar { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .add-bar .btn { color: var(--accent); }

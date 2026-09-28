@@ -5,7 +5,8 @@ import { createHistory, HISTORY_LIMIT } from '../src/history.js';
 import { createTemplateStore, TemplateError } from '../src/templates.js';
 import { UndoStack } from '../src/undo.js';
 import {
-    normalizeWorkspace, parseQueryFile, createQueryExport, parseTemplatesFile, createTemplatesExport, ImportError, APP_ID
+    normalizeWorkspace, parseQueryFile, createQueryExport, parseTemplatesFile, createTemplatesExport, ImportError, APP_ID,
+    createBackup, parseBackupFile, BACKUP_FORMAT, BACKUP_VERSION
 } from '../src/serialization.js';
 import { EXAMPLES } from '../src/examples.js';
 import { createWorkspace, createCondition, createGroup } from '../src/model.js';
@@ -350,6 +351,109 @@ describe('import / export', () => {
         expect(parseTemplatesFile('{"kind":"query"}').error).toMatch(/isn't a templates file/);
         expect(parseTemplatesFile(JSON.stringify({ app: APP_ID, kind: 'templates', templates: [{ name: '', workspace: {} }] })).error).toMatch(/has no name/);
         expect(parseTemplatesFile(JSON.stringify({ kind: 'templates', templates: [{ name: 'Bad', workspace: { type: 'x' } }] })).error).toMatch(/Template “Bad”/);
+    });
+});
+
+describe('full backup', () => {
+    const w = (table) => {
+        const ws = createWorkspace();
+        ws.select.from.table = table;
+        ws.select.columns[0].expr = 'id';
+        return ws;
+    };
+    function seeded() {
+        const storage = memoryStorage();
+        let clock = 1000;
+        const templates = createTemplateStore(storage, { now: () => clock++ });
+        const history = createHistory(storage, { now: () => clock++ });
+        const a = templates.create('Orders', w('orders'), { dialect: 'mysql', category: 'Sales' });
+        templates.setPinned(a.id, true);
+        history.add({ type: 'select', dialect: 'generic', sql: 'SELECT id\nFROM orders;', workspace: w('orders') });
+        history.add({ type: 'select', dialect: 'mysql', sql: 'SELECT id\nFROM users;', workspace: w('users') });
+        return { storage, templates, history };
+    }
+    const backupOf = ({ templates, history }, settings = DEFAULT_SETTINGS) => JSON.stringify(createBackup({ templates: templates.list(), history: history.list(), settings }));
+
+    test('a backup round-trips templates (with pins and dates), history and settings', () => {
+        const source = seeded();
+        const text = backupOf(source, { ...DEFAULT_SETTINGS, dialect: 'postgresql', theme: 'dark' });
+        const data = JSON.parse(text);
+        expect(data).toMatchObject({ app: APP_ID, kind: 'backup', format: BACKUP_FORMAT, version: BACKUP_VERSION });
+        const parsed = parseBackupFile(text);
+        expect(parsed.ok).toBe(true);
+        if (!parsed.ok) return;
+        expect(parsed.settings).toMatchObject({ dialect: 'postgresql', theme: 'dark' });
+        expect(parsed.templates[0]).toMatchObject({ name: 'Orders', dialect: 'mysql', category: 'Sales', pinned: true, createdAt: 1000 });
+        expect(parsed.history.map(e => e.sql)).toEqual(['SELECT id\nFROM users;', 'SELECT id\nFROM orders;']);
+
+        const target = { storage: memoryStorage() };
+        const templates = createTemplateStore(target.storage);
+        const history = createHistory(target.storage);
+        expect(templates.restore(parsed.templates)).toEqual({ added: 1, skipped: 0 });
+        expect(history.restore(parsed.history)).toEqual({ added: 2, skipped: 0, dropped: 0 });
+        expect(createTemplateStore(target.storage).list()[0]).toMatchObject({ name: 'Orders', pinned: true, createdAt: 1000, updatedAt: source.templates.list()[0].updatedAt });
+        expect(createHistory(target.storage).list().map(e => e.dialect)).toEqual(['mysql', 'generic']);
+    });
+
+    test('merge skips exact copies; a changed template with the same name is added with a new name', () => {
+        const store = seeded();
+        const parsed = parseBackupFile(backupOf(store));
+        if (!parsed.ok) throw new Error(parsed.error);
+        expect(store.templates.restore(parsed.templates)).toEqual({ added: 0, skipped: 1 });
+        expect(store.history.restore(parsed.history)).toEqual({ added: 0, skipped: 2, dropped: 0 });
+        parsed.templates[0].workspace.select.from.table = 'orders_2024';
+        expect(store.templates.restore(parsed.templates)).toEqual({ added: 1, skipped: 0 });
+        expect(store.templates.list().map(t => t.name)).toEqual(['Orders', 'Orders (2)']);
+    });
+
+    test('replace swaps templates and history; history keeps the newest entries up to the limit', () => {
+        const store = seeded();
+        store.templates.create('Local only', w('local'));
+        const other = seeded();
+        const parsed = parseBackupFile(backupOf(other));
+        if (!parsed.ok) throw new Error(parsed.error);
+        expect(store.templates.restore(parsed.templates, { replace: true })).toEqual({ added: 1, skipped: 0 });
+        expect(store.templates.list().map(t => t.name)).toEqual(['Orders']);
+
+        const many = Array.from({ length: HISTORY_LIMIT }, (_, i) => ({ timestamp: 5000 + i, type: 'select', dialect: 'generic', sql: `SELECT ${i};`, workspace: w('t') }));
+        const result = store.history.restore(many);
+        expect(result).toEqual({ added: HISTORY_LIMIT, skipped: 0, dropped: 2 });
+        expect(store.history.list()[0].sql).toBe(`SELECT ${HISTORY_LIMIT - 1};`);
+        expect(store.history.restore([], { replace: true })).toEqual({ added: 0, skipped: 0, dropped: 0 });
+        expect(store.history.list()).toEqual([]);
+    });
+
+    test('restoring over the template limit changes nothing', () => {
+        const store = seeded();
+        const items = Array.from({ length: 200 }, (_, i) => ({ name: `T${i}`, workspace: w(`t${i}`) }));
+        expect(() => store.templates.restore(items)).toThrow(/limit of 200/);
+        expect(store.templates.list().map(t => t.name)).toEqual(['Orders']);
+        expect(store.templates.restore(items, { replace: true }).added).toBe(200);
+    });
+
+    test('files are validated field by field and never trusted', () => {
+        const error = (value) => {
+            const result = parseBackupFile(typeof value === 'string' ? value : JSON.stringify(value));
+            return result.ok ? null : result.error;
+        };
+        const base = { app: APP_ID, kind: 'backup', format: BACKUP_FORMAT, version: 1 };
+        expect(error('nope')).toBe("The file isn't valid JSON.");
+        expect(error({ kind: 'templates', templates: [] })).toMatch(/templates file/);
+        expect(error({ ...base, format: 'other' })).toMatch(/isn't a backup file/);
+        expect(error({ ...base, version: 2 })).toMatch(/newer version/);
+        expect(error({ ...base, templates: {} })).toMatch(/must be lists/);
+        expect(error({ ...base, history: [{ sql: '', workspace: w('x') }] })).toMatch(/no SQL/);
+        expect(error({ ...base, history: [{ sql: 'SELECT 1', workspace: { type: 'drop' } }] })).toMatch(/^history\[0\]/);
+        expect(error({ ...base, templates: [{ name: 'x', workspace: { type: 'select', select: { columns: 'x' } } }] })).toMatch(/Template “x”/);
+        // A backup with only settings is fine; unknown settings, dialects and dates are cleaned
+        const parsed = parseBackupFile(JSON.stringify({ ...base, settings: { theme: 'neon', dialect: 'oracle', livePreview: false }, history: [{ sql: 'SELECT 1', dialect: 'oracle', timestamp: 'soon', workspace: w('x') }] }));
+        expect(parsed.ok && parsed.settings).toEqual({ ...DEFAULT_SETTINGS, livePreview: false });
+        expect(parsed.ok && parsed.history[0]).toMatchObject({ dialect: 'generic', timestamp: 0, type: 'select' });
+        expect(parsed.ok && parsed.templates).toEqual([]);
+        // The other importers point at the right place
+        const backupText = JSON.stringify(base);
+        expect(parseQueryFile(backupText)).toEqual({ ok: false, error: 'This is a full backup. Use File, Restore from backup.' });
+        expect(parseTemplatesFile(backupText)).toEqual({ ok: false, error: 'This is a full backup. Use File, Restore from backup.' });
     });
 });
 

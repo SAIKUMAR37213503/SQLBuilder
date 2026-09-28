@@ -175,6 +175,50 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
             withTransaction(() => { templates = templates.filter(t => t.id !== id); });
         },
 
+        /**
+         * Restores templates from a backup (already validated). Merge adds the
+         * ones that aren't here yet, skipping exact copies; replace swaps the
+         * whole list. Dates and pins from the backup are kept. All or nothing.
+         * @param {any[]} items
+         * @param {{ replace?: boolean }} [options]
+         * @returns {{ added: number, skipped: number }}
+         */
+        restore(items, { replace = false } = {}) {
+            const key = (t) => JSON.stringify([t.name.toLowerCase(), t.dialect || '', t.description || '', t.category || '', t.workspace]);
+            const base = replace ? [] : templates;
+            const seen = new Set(base.map(key));
+            const fresh = [];
+            let skipped = 0;
+            for (const item of items) {
+                const cleaned = { name: cleanName(item.name), ...templateDetails(item), workspace: item.workspace };
+                if (seen.has(key(cleaned))) {
+                    skipped++;
+                    continue;
+                }
+                seen.add(key(cleaned));
+                fresh.push({ item, cleaned });
+            }
+            if (base.length + fresh.length > TEMPLATE_LIMIT) {
+                throw new TemplateError(`Restoring would exceed the limit of ${TEMPLATE_LIMIT} templates.`);
+            }
+            withTransaction(() => {
+                templates = base;
+                for (const { item, cleaned } of fresh) {
+                    const time = now();
+                    templates = [...templates, {
+                        id: createId(),
+                        name: uniqueName(cleaned.name),
+                        createdAt: Number(item.createdAt) || time,
+                        updatedAt: Number(item.updatedAt) || time,
+                        ...templateDetails(item),
+                        ...(item.pinned === true ? { pinned: true } : {}),
+                        workspace: structuredClone(item.workspace)
+                    }];
+                }
+            });
+            return { added: fresh.length, skipped };
+        },
+
         /** Adds already-validated templates; name clashes get a numeric suffix. */
         importMany(items) {
             if (templates.length + items.length > TEMPLATE_LIMIT) {

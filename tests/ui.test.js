@@ -660,6 +660,110 @@ describe('templates', () => {
     });
 });
 
+describe('full backup', () => {
+    async function exportBackup() {
+        let exported = null;
+        vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => { exported = blob; return 'blob:x'; });
+        vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        $('[data-command="export-backup"]').click();
+        await settle();
+        return exported.text();
+    }
+    async function restore(text, mode) {
+        $('[data-command="import-backup"]').click();
+        const input = $('#file-input');
+        Object.defineProperty(input, 'files', { value: [new File([text], 'backup.json', { type: 'application/json' })], configurable: true });
+        input.dispatchEvent(new Event('change'));
+        await settle();
+        const dialog = $('#backup-dialog');
+        expect(dialog.hasAttribute('open')).toBe(true);
+        if (!mode) {
+            dialog.querySelector('[value="cancel"]').click();
+        } else {
+            dialog.querySelector(`input[value="${mode}"]`).checked = true;
+            dialog.querySelector('[value="confirm"]').click();
+        }
+        await settle();
+    }
+    async function seed() {
+        await fillSimpleSelect('orders');
+        $('#generate-btn').click();
+        $('#template-save-btn').click();
+        await answerTemplate('Orders');
+    }
+
+    test('back up, then merge into another browser: adds what is missing and keeps settings', async () => {
+        await seed();
+        pickDialect('postgresql');
+        const text = await exportBackup();
+        expect(toast()).toBe('Backed up 1 template, 1 history entry and your settings.');
+        const data = JSON.parse(text);
+        expect(data).toMatchObject({ kind: 'backup', format: 'sql-builder-backup', version: 1 });
+        expect(data.settings.dialect).toBe('postgresql');
+
+        boot();
+        await restore(text, 'merge');
+        expect($('#backup-summary').textContent).toMatch(/^This backup from .+ has 1 template, 1 history entry and settings\./);
+        expect(app.templates.list().map(t => t.name)).toEqual(['Orders']);
+        expect($$('#history-list .library-item')).toHaveLength(1);
+        expect($('#dialect-select').value).toBe('generic');
+        expect(toast()).toBe('Backup restored: 1 template added, 1 history entry added. Your settings were kept.');
+
+        // Merging the same file again adds nothing
+        await restore(text, 'merge');
+        expect(toast()).toBe('Backup restored: 0 templates added (1 already here), 0 history entries added (1 already here). Your settings were kept.');
+        expect(app.templates.list()).toHaveLength(1);
+    });
+
+    test('replace asks first, then swaps templates, history and settings', async () => {
+        await seed();
+        const text = await exportBackup();
+        $('#template-save-btn').click();
+        await answerTemplate('Local only');
+        pickDialect('mysql');
+
+        await restore(text, 'replace');
+        const confirm = $('#confirm-dialog');
+        expect(confirm.hasAttribute('open')).toBe(true);
+        expect(confirm.textContent).toContain('Your 2 templates and 1 history entry will be deleted');
+        confirm.querySelector('[value="cancel"]').click();
+        await settle();
+        expect(app.templates.list()).toHaveLength(2);
+
+        await restore(text, 'replace');
+        await answerConfirm(true);
+        expect(app.templates.list().map(t => t.name)).toEqual(['Orders']);
+        expect($('#dialect-select').value).toBe('generic');
+        expect(toast()).toContain('Settings restored from the backup.');
+        // The loaded template no longer exists, so the query is unsaved again
+        expect($('#query-name').textContent).toBe('Unsaved query');
+    });
+
+    test('cancelling or a bad file changes nothing; history stays off when turned off', async () => {
+        await seed();
+        const text = await exportBackup();
+        boot();
+        await restore(text, null);
+        expect(app.templates.list()).toEqual([]);
+
+        $('[data-command="import-backup"]').click();
+        await chooseFile('{"kind":"templates","templates":[]}');
+        expect(toast()).toBe('Restore failed: This is a templates file. Import it from the Templates panel.');
+        expect($('#backup-dialog').hasAttribute('open')).toBe(false);
+
+        $('#settings-btn').click();
+        const saveHistory = $('[data-setting="saveHistory"]');
+        saveHistory.checked = false;
+        saveHistory.dispatchEvent(new Event('change', { bubbles: true }));
+        $('#settings-dialog [value="close"]').click();
+        await settle();
+        await restore(text, 'merge');
+        expect(toast()).toBe('Backup restored: 1 template added, history not restored because saving history is turned off. Your settings were kept.');
+        expect($$('#history-list .library-item')).toHaveLength(0);
+    });
+});
+
 describe('query import / export', () => {
     test('export then import restores the query and dialect', async () => {
         await fillSimpleSelect('orders');
