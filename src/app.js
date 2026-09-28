@@ -16,17 +16,19 @@ import { splitTopLevel } from './sql-utils.js';
 import { loadSettings, saveSettings, DEFAULT_SETTINGS } from './settings.js';
 import { createHistory } from './history.js';
 import { createTemplateStore, TemplateError } from './templates.js';
+import { createSchemaStore, SchemaError, tableToDdl, schemaToDdl } from './schema.js';
+import { readDdl } from './ddl.js';
 import { UndoStack } from './undo.js';
 import {
     normalizeWorkspace, parseQueryFile, parseTemplatesFile, createQueryExport, createTemplatesExport, MAX_IMPORT_BYTES,
-    createBackup, parseBackupFile, MAX_BACKUP_BYTES
+    createBackup, parseBackupFile, MAX_BACKUP_BYTES, createSchemaExport, readSchemaInput, MAX_SCHEMA_IMPORT_BYTES
 } from './serialization.js';
 import { EXAMPLES, EXAMPLE_TOPICS, examplesFor } from './examples.js';
 import { h, byPath, debounce, cssEscape, formatTime } from './ui/dom.js';
 import { renderEditor } from './ui/builder.js';
 import { renderSqlCode, selectContents } from './ui/output.js';
-import { renderHistoryList, renderTemplateList, renderExampleList } from './ui/library.js';
-import { promptDialog, templateDialog, confirmDialog, showDialog, closeDialog, enhanceDialog } from './ui/dialogs.js';
+import { renderHistoryList, renderTemplateList, renderExampleList, renderSchemaList, renderSchemaImportPreview } from './ui/library.js';
+import { promptDialog, templateDialog, confirmDialog, showDialog, closeDialog, enhanceDialog, formDialog } from './ui/dialogs.js';
 import { applyTheme, nextTheme, effectiveTheme, THEME_LABELS } from './ui/theme.js';
 import { bindShortcuts, SHORTCUTS, modLabel } from './ui/shortcuts.js';
 import { openPalette } from './ui/palette.js';
@@ -35,6 +37,13 @@ import { createWebPlatform } from './platform/web.js';
 const DRAFT_KEY = 'draft';
 // The saved template the current query was loaded from (restored with the draft)
 const SOURCE_KEY = 'draft-source';
+// Files the Schema panel can import
+const SCHEMA_FILE_TYPES = '.sql,.ddl,.txt,.json,text/plain,application/sql,application/json';
+
+const NEW_TABLE_DDL = `CREATE TABLE table_name (
+    id INT PRIMARY KEY,
+    name VARCHAR(100)
+);`;
 
 // New items for "add-item" buttons (data-arg)
 const ITEM_FACTORIES = {
@@ -109,6 +118,15 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         templateImport: $('template-import-btn'),
         templateExport: $('template-export-btn'),
         exampleList: $('example-list'),
+        schemaList: $('schema-list'),
+        schemaSearch: $('schema-search'),
+        schemaSummary: $('schema-summary'),
+        schemaAdd: $('schema-add-btn'),
+        schemaImport: $('schema-import-btn'),
+        schemaExport: $('schema-export-btn'),
+        schemaClear: $('schema-clear-btn'),
+        schemaTableDialog: $('schema-table-dialog'),
+        schemaImportDialog: $('schema-import-dialog'),
         libraryPanel: /** @type {any} */ (doc.querySelector('.library-panel')),
         fileInput: $('file-input'),
         toast: $('toast'),
@@ -131,6 +149,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
     const history = createHistory(storage);
     const templates = createTemplateStore(storage);
+    const schema = createSchemaStore(storage);
     const undoStack = new UndoStack();
 
     const state = {
@@ -148,8 +167,12 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         templateSearch: '',
         templateSort: 'name',            // 'name' or 'recent'
         exampleFilter: /** @type {string | null} */ (null), // null: follow the selected dialect
-        exampleTopic: 'all'
+        exampleTopic: 'all',
+        schemaSearch: ''
     };
+    // Set while the schema import dialog is open: fills it with a chosen file's text
+    /** @type {null | ((text: string) => void)} */
+    let fillSchemaImport = null;
     if (state.settings.restoreSession) {
         const sourceId = storage.get(SOURCE_KEY);
         if (typeof sourceId === 'string' && templates.get(sourceId)) state.sourceId = sourceId;
@@ -686,6 +709,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
     function chooseFile(mode) {
         el.fileInput.dataset.mode = mode;
+        el.fileInput.accept = mode === 'schema' ? SCHEMA_FILE_TYPES : '.json,application/json';
         el.fileInput.value = '';
         el.fileInput.click();
     }
@@ -694,7 +718,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         const file = el.fileInput.files && el.fileInput.files[0];
         if (!file) return;
         const mode = el.fileInput.dataset.mode;
-        const limit = mode === 'backup' ? MAX_BACKUP_BYTES : MAX_IMPORT_BYTES;
+        const limit = mode === 'backup' ? MAX_BACKUP_BYTES : mode === 'schema' ? MAX_SCHEMA_IMPORT_BYTES : MAX_IMPORT_BYTES;
         if (file.size > limit) {
             toast(`That file is too large to import (limit ${limit / 1024 / 1024} MB).`, 'error');
             return;
@@ -706,7 +730,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             toast('The file could not be read.', 'error');
             return;
         }
-        if (mode === 'templates') importTemplates(text);
+        if (mode === 'schema') {
+            if (fillSchemaImport) fillSchemaImport(text);
+        } else if (mode === 'templates') importTemplates(text);
         else if (mode === 'backup') await restoreBackup(text);
         else importQuery(text);
     }
@@ -741,17 +767,17 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     const count = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
     async function exportBackup() {
-        const backup = createBackup({ templates: templates.list(), history: history.list(), settings: state.settings });
+        const backup = createBackup({ templates: templates.list(), history: history.list(), settings: state.settings, schema: schema.list() });
         const date = new Date().toISOString().slice(0, 10);
         await downloadFile(`sql-builder-backup-${date}.json`, JSON.stringify(backup, null, 2), 'application/json',
-            `Backed up ${count(backup.templates.length, 'template')}, ${count(backup.history.length, 'history entry', 'history entries')} and your settings.`);
+            `Backed up ${count(backup.templates.length, 'template')}, ${count(backup.history.length, 'history entry', 'history entries')}${backup.schema.tables.length ? `, ${count(backup.schema.tables.length, 'schema table')}` : ''} and your settings.`);
     }
 
     /** Asks how to restore. Resolves 'merge', 'replace' or null. */
     async function askRestoreMode(backup) {
         const dialog = el.backupDialog;
         const when = Date.parse(backup.exportedAt);
-        dialog.querySelector('#backup-summary').textContent = `This backup${Number.isNaN(when) ? '' : ` from ${formatTime(when)}`} has ${count(backup.templates.length, 'template')}, ${count(backup.history.length, 'history entry', 'history entries')} and settings. Nothing changes until you choose Restore.`;
+        dialog.querySelector('#backup-summary').textContent = `This backup${Number.isNaN(when) ? '' : ` from ${formatTime(when)}`} has ${count(backup.templates.length, 'template')}, ${count(backup.history.length, 'history entry', 'history entries')}${backup.schema && backup.schema.length ? `, ${count(backup.schema.length, 'schema table')}` : ''} and settings. Nothing changes until you choose Restore.`;
         const merge = dialog.querySelector('input[value="merge"]');
         merge.checked = true;
         const result = await showDialog(dialog, () => merge.focus());
@@ -771,16 +797,20 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (replace) {
             const ok = await confirmDialog(el.confirmDialog, {
                 title: 'Replace your saved data?',
-                message: `Your ${count(templates.list().length, 'template')} and ${count(history.list().length, 'history entry', 'history entries')} will be deleted and replaced by the backup's, and your settings will change to the backup's. This cannot be undone.`,
+                message: `Your ${count(templates.list().length, 'template')}${backup.schema && schema.size ? `, ${count(history.list().length, 'history entry', 'history entries')} and ${count(schema.size, 'schema table')}` : ` and ${count(history.list().length, 'history entry', 'history entries')}`} will be deleted and replaced by the backup's, and your settings will change to the backup's. This cannot be undone.`,
                 confirmText: 'Replace'
             });
             if (!ok) return;
         }
         let added;
+        let tables = null;
         try {
+            // The schema first: if it doesn't fit, nothing has changed yet
+            if (backup.schema) tables = schema.apply(backup.schema, { replace, onConflict: 'keep' });
             added = templates.restore(backup.templates, { replace });
         } catch (error) {
-            toast(error instanceof TemplateError ? `Restore failed: ${error.message}` : 'The backup could not be restored.', 'error');
+            toast(error instanceof TemplateError || error instanceof SchemaError ? `Restore failed: ${error.message}` : 'The backup could not be restored.', 'error');
+            renderSchema();
             return;
         }
         if (replace) updateSettings(backup.settings);
@@ -794,12 +824,15 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             if (replace) history.clear();
             if (backup.history.length) parts.push('history not restored because saving history is turned off');
         }
+        if (tables && backup.schema.length) parts.push(`${count(tables.added, 'schema table')} added${tables.kept ? ` (${tables.kept} already here)` : ''}`);
+        else if (replace && !tables && schema.size) parts.push('your schema was kept because this backup was made before schemas existed');
         if (state.sourceId && !templates.get(state.sourceId)) {
             state.sourceId = null;
             saveDraft();
         }
         renderTemplates();
         renderHistory();
+        renderSchema();
         renderQueryName();
         toast(`Backup restored: ${parts.join(', ')}. ${replace ? 'Settings restored from the backup.' : 'Your settings were kept.'}`, 'success');
     }
@@ -1012,6 +1045,20 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     toast('Template deleted.');
                     break;
                 }
+                case 'schema-edit':
+                    await editSchemaTable(id);
+                    break;
+                case 'schema-delete': {
+                    const table = schema.get(id);
+                    if (!table) return;
+                    const ok = await confirmDialog(el.confirmDialog, { title: 'Delete table?', message: `${table.name} will be removed from your schema. Your queries and templates don't change.`, confirmText: 'Delete' });
+                    if (!ok) return;
+                    schema.remove(table.name);
+                    renderSchema();
+                    el.schemaAdd.focus();
+                    toast(`Removed ${table.name} from the schema.`);
+                    break;
+                }
                 case 'example-load': {
                     const example = EXAMPLES.find(e => e.id === id);
                     if (!example) return;
@@ -1024,8 +1071,167 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                 default:
             }
         } catch (error) {
-            toast(error instanceof TemplateError ? error.message : 'Something went wrong.', 'error');
+            toast(error instanceof TemplateError || error instanceof SchemaError ? error.message : 'Something went wrong.', 'error');
         }
+    }
+
+    // ------------------------------------------------------------------ schema
+
+    function renderSchema() {
+        const all = schema.list();
+        const query = state.schemaSearch.trim();
+        const needle = query.toLowerCase();
+        const shown = needle
+            ? all.filter(t => t.name.toLowerCase().includes(needle) || t.columns.some((/** @type {any} */ c) => c.name.toLowerCase().includes(needle)))
+            : all;
+        renderSchemaList(el.schemaList, shown, { total: all.length, query });
+        const columns = all.reduce((n, t) => n + t.columns.length, 0);
+        const links = all.reduce((n, t) => n + t.foreignKeys.length, 0);
+        el.schemaSummary.textContent = all.length
+            ? `${count(all.length, 'table')}, ${count(columns, 'column')}, ${count(links, 'link')} between tables.`
+            : '';
+        el.schemaExport.disabled = all.length === 0;
+        el.schemaClear.disabled = all.length === 0;
+    }
+
+    // Why a table definition can't be saved, or '' when it can
+    function tableDefinitionProblem(result) {
+        if (result.problems.length) {
+            const [first] = result.problems;
+            return first.line ? `Line ${first.line}: ${first.message}` : first.message;
+        }
+        if (result.skipped.length) {
+            return `Only a CREATE TABLE statement can go here; remove ${result.skipped.map((/** @type {any} */ s) => s.label).join(', ')}.`;
+        }
+        if (result.tables.length === 0) return 'Write a CREATE TABLE statement.';
+        if (result.tables.length > 1) return 'Only one table can be edited here. To add several at once, use Import.';
+        return '';
+    }
+
+    /** Adds a table, or edits the one called `name`. */
+    async function editSchemaTable(name = null) {
+        const existing = name ? schema.get(name) : null;
+        if (name && !existing) return;
+        const dialog = el.schemaTableDialog;
+        const input = dialog.querySelector('#schema-table-sql');
+        const error = dialog.querySelector('#schema-table-error');
+        dialog.querySelector('.dialog-title').textContent = existing ? `Edit ${existing.name}` : 'Add table';
+        input.value = existing ? tableToDdl(existing) : NEW_TABLE_DDL;
+        error.textContent = '';
+        /** @type {any} */
+        let saved = null;
+        const ok = await formDialog(dialog, {
+            onOpen: () => {
+                input.focus();
+                if (!existing) input.setSelectionRange(13, 23); // "table_name"
+            },
+            validate: () => {
+                const result = readDdl(input.value);
+                const problem = tableDefinitionProblem(result);
+                try {
+                    if (problem) throw new SchemaError(problem);
+                    saved = schema.save(result.tables[0], { previousName: existing ? existing.name : null });
+                    return true;
+                } catch (e) {
+                    if (!(e instanceof SchemaError)) throw e;
+                    error.textContent = e.message;
+                    input.focus();
+                    return false;
+                }
+            }
+        });
+        if (!ok || !saved) return;
+        renderSchema();
+        selectTab('schema');
+        toast(existing ? `Saved ${saved.name}.` : `Added ${saved.name} to the schema.`, 'success');
+    }
+
+    async function importSchema() {
+        const dialog = el.schemaImportDialog;
+        const input = dialog.querySelector('#schema-import-text');
+        const output = dialog.querySelector('#schema-import-result');
+        dialog.querySelector('input[value="merge"]').checked = true;
+        input.value = '';
+        /** @type {any} */
+        let result = null;
+        const preview = () => {
+            result = input.value.trim() ? readSchemaInput(input.value) : null;
+            renderSchemaImportPreview(output, result, schema.list());
+        };
+        const onInput = debounce(preview, 250);
+        preview();
+        input.addEventListener('input', onInput);
+        const fileButton = dialog.querySelector('#schema-import-file-btn');
+        const onFile = () => chooseFile('schema');
+        fileButton.addEventListener('click', onFile);
+        fillSchemaImport = (text) => {
+            input.value = text;
+            preview();
+            input.focus();
+        };
+        let ok;
+        try {
+            ok = await formDialog(dialog, {
+                onOpen: () => input.focus(),
+                validate: () => {
+                    onInput.flush();
+                    if (result && result.ok && result.tables.length) return true;
+                    if (!result) renderSchemaImportPreview(output, { ok: false, error: 'Paste CREATE TABLE statements or choose a file first.' }, []);
+                    input.focus();
+                    return false;
+                }
+            });
+        } finally {
+            onInput.cancel();
+            input.removeEventListener('input', onInput);
+            fileButton.removeEventListener('click', onFile);
+            fillSchemaImport = null;
+        }
+        if (!ok) return;
+        const replace = dialog.querySelector('input[name="schema-import-mode"]:checked').value === 'replace';
+        if (replace && schema.size) {
+            const sure = await confirmDialog(el.confirmDialog, {
+                title: 'Replace your schema?',
+                message: `Your ${count(schema.size, 'table')} will be deleted and replaced by the ${count(result.tables.length, 'imported table')}. Your queries and templates don't change.`,
+                confirmText: 'Replace'
+            });
+            if (!sure) return;
+        }
+        try {
+            const done = schema.apply(result.tables, { replace });
+            renderSchema();
+            selectTab('schema');
+            toast(`Schema imported: ${count(done.added, 'table')} added${done.replaced ? `, ${done.replaced} replaced` : ''}.`, 'success');
+        } catch (error) {
+            toast(error instanceof SchemaError ? `Import failed: ${error.message}` : 'The schema could not be imported.', 'error');
+        }
+    }
+
+    async function exportSchema(format = 'json') {
+        const tables = schema.list();
+        if (!tables.length) {
+            toast('The schema is empty; add or import tables first.', 'error');
+            return;
+        }
+        if (format === 'sql') {
+            await downloadFile('schema.sql', `${schemaToDdl(tables)}\n`, 'application/sql', `Exported ${count(tables.length, 'table')} as CREATE TABLE statements.`);
+        } else {
+            await downloadFile('sql-builder-schema.json', JSON.stringify(createSchemaExport(tables), null, 2), 'application/json', `Exported ${count(tables.length, 'table')}.`);
+        }
+    }
+
+    async function clearSchema() {
+        if (!schema.size) return;
+        const ok = await confirmDialog(el.confirmDialog, {
+            title: 'Clear the schema?',
+            message: `All ${count(schema.size, 'table')} will be removed from this browser. Your queries and templates don't change. This cannot be undone.`,
+            confirmText: 'Clear schema'
+        });
+        if (!ok) return;
+        schema.clear();
+        renderSchema();
+        el.schemaAdd.focus();
+        toast('Schema cleared.');
     }
 
     async function saveTemplate() {
@@ -1133,7 +1339,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     // Android back button: close the top-most overlay. Returns false when there
     // is nothing to close, so the platform can apply its default behaviour.
     function handleBack() {
-        const dialogs = [el.confirmDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
+        const dialogs = [el.confirmDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
         const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
         if (open) {
             closeDialog(open, 'cancel');
@@ -1190,12 +1396,17 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     async function clearAllData() {
         const ok = await confirmDialog(el.confirmDialog, {
             title: 'Delete all saved data?',
-            message: 'This removes your history, templates and settings from this browser and clears the builder. It cannot be undone.',
+            message: 'This removes your history, templates, schema and settings from this browser and clears the builder. It cannot be undone.',
             confirmText: 'Delete everything'
         });
         if (!ok) return;
         history.clear();
         for (const t of templates.list()) templates.remove(t.id);
+        try {
+            schema.clear();
+        } catch {
+            // removing never fails; storage.remove ignores errors
+        }
         updateSettings({ ...DEFAULT_SETTINGS });
         storage.remove('settings');
         replaceWorkspace(createWorkspace());
@@ -1206,6 +1417,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         syncSettingsForm();
         renderHistory();
         renderTemplates();
+        renderSchema();
         toast('All saved data was deleted from this browser.', 'success');
     }
 
@@ -1256,6 +1468,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             { id: 'open-history', group: 'Library', label: 'Open history', run: () => openLibraryTab('history') },
             { id: 'open-templates', group: 'Library', label: 'Open templates', run: () => openLibraryTab('templates') },
             { id: 'open-examples', group: 'Library', label: 'Open examples', run: () => openLibraryTab('examples') },
+            { id: 'open-schema', group: 'Schema', label: 'Open schema', keywords: 'tables columns', run: () => openLibraryTab('schema') },
+            { id: 'schema-add', group: 'Schema', label: 'Add a table to the schema…', keywords: 'create table columns', run: () => editSchemaTable() },
+            { id: 'schema-import', group: 'Schema', label: 'Import schema…', keywords: 'create table ddl sql json tables', run: importSchema },
+            schema.size > 0 && { id: 'schema-export', group: 'Schema', label: 'Export schema (.json)', keywords: 'tables', run: () => exportSchema('json') },
+            schema.size > 0 && { id: 'schema-export-sql', group: 'Schema', label: 'Export schema as CREATE TABLE (.sql)', keywords: 'ddl tables', run: () => exportSchema('sql') },
             { id: 'export-query', group: 'File', label: 'Export query (.json)', run: exportQuery },
             { id: 'import-query', group: 'File', label: 'Import query (.json)…', run: () => chooseFile('query') },
             { id: 'export-backup', group: 'File', label: 'Back up everything (.json)', keywords: 'backup export templates history settings', run: exportBackup },
@@ -1396,8 +1613,17 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.templateImport.addEventListener('click', () => chooseFile('templates'));
     el.templateExport.addEventListener('click', exportTemplates);
     el.fileInput.addEventListener('change', onFileChosen);
+    el.schemaAdd.addEventListener('click', () => editSchemaTable());
+    el.schemaImport.addEventListener('click', importSchema);
+    el.schemaExport.addEventListener('click', () => exportSchema('json'));
+    el.schemaClear.addEventListener('click', clearSchema);
+    el.schemaSearch.addEventListener('input', debounce(() => {
+        state.schemaSearch = el.schemaSearch.value;
+        renderSchema();
+    }, 150));
 
-    [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog, el.paletteDialog, el.backupDialog].forEach(enhanceDialog);
+    [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog, el.paletteDialog, el.backupDialog,
+        el.schemaTableDialog, el.schemaImportDialog].forEach(enhanceDialog);
 
     bindShortcuts(doc, signal, {
         generate,
@@ -1430,7 +1656,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     renderShortcuts();
     const where = platform.isNative ? 'on this device' : 'in this browser';
     el.storageNote.textContent = storage.available
-        ? `history, templates and settings are stored only ${where}`
+        ? `history, templates, schema and settings are stored only ${where}`
         : 'browser storage is unavailable, so history and templates won\'t be kept';
     el.dialectSelect.replaceChildren(...dialectOptions(false));
     el.dialectSelect.value = state.settings.dialect;
@@ -1442,6 +1668,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     renderHistory();
     renderTemplates();
     renderExamples();
+    renderSchema();
     selectTab('history');
     refresh();
     platform.onBack(handleBack);
@@ -1451,6 +1678,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         get state() { return state; },
         history,
         templates,
+        schema,
         generate,
         undo,
         redo,

@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=3f839b5d77f0">
+    <link rel="stylesheet" href="style.css?v=daba16b5aed7">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -115,6 +115,7 @@
                         <button type="button" role="tab" id="tab-history" aria-controls="panel-history" aria-selected="true">History</button>
                         <button type="button" role="tab" id="tab-templates" aria-controls="panel-templates" aria-selected="false" tabindex="-1">Templates</button>
                         <button type="button" role="tab" id="tab-examples" aria-controls="panel-examples" aria-selected="false" tabindex="-1">Examples</button>
+                        <button type="button" role="tab" id="tab-schema" aria-controls="panel-schema" aria-selected="false" tabindex="-1">Schema</button>
                     </div>
 
                     <div role="tabpanel" id="panel-history" aria-labelledby="tab-history" class="tab-panel">
@@ -162,6 +163,21 @@
                             </label>
                         </div>
                         <ul class="library-list" id="example-list"></ul>
+                    </div>
+
+                    <div role="tabpanel" id="panel-schema" aria-labelledby="tab-schema" class="tab-panel" hidden>
+                        <div class="library-toolbar">
+                            <button type="button" class="btn btn-secondary btn-sm" id="schema-add-btn">Add table…</button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="schema-import-btn">Import…</button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="schema-export-btn">Export</button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="schema-clear-btn">Clear</button>
+                        </div>
+                        <div class="library-toolbar">
+                            <label class="visually-hidden" for="schema-search">Search tables and columns</label>
+                            <input type="search" id="schema-search" class="input" placeholder="Search tables and columns…" autocomplete="off">
+                        </div>
+                        <p class="library-detail" id="schema-summary"></p>
+                        <ul class="library-list" id="schema-list"></ul>
                     </div>
                 </section>
             </div>
@@ -257,14 +273,51 @@
         </form>
     </dialog>
 
+    <dialog id="schema-table-dialog" class="dialog" aria-labelledby="schema-table-title">
+        <form method="dialog" class="dialog-body">
+            <h2 id="schema-table-title" class="dialog-title">Add table</h2>
+            <div class="field">
+                <label class="field-label" for="schema-table-sql">Table definition</label>
+                <textarea id="schema-table-sql" class="input textarea code-input" rows="12" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="schema-table-hint schema-table-error"></textarea>
+                <p class="field-hint" id="schema-table-hint">A CREATE TABLE statement. Types are optional. Mark keys with PRIMARY KEY, and links to other tables with REFERENCES other_table (column).</p>
+                <p class="dialog-error field-error" id="schema-table-error" role="alert"></p>
+            </div>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary">Save table</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="schema-import-dialog" class="dialog" aria-labelledby="schema-import-title">
+        <form method="dialog" class="dialog-body">
+            <h2 id="schema-import-title" class="dialog-title">Import schema</h2>
+            <div class="field">
+                <label class="field-label" for="schema-import-text">CREATE TABLE statements, or a schema file (.sql or .json)</label>
+                <textarea id="schema-import-text" class="input textarea code-input" rows="10" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="schema-import-result"></textarea>
+                <div><button type="button" class="btn btn-ghost btn-sm" id="schema-import-file-btn">Choose a file…</button></div>
+            </div>
+            <div class="schema-import-result" id="schema-import-result" aria-live="polite"></div>
+            <fieldset class="fieldset">
+                <legend>Your current schema</legend>
+                <label class="check check-block"><input type="radio" name="schema-import-mode" value="merge" checked> <span><strong>Add</strong> (recommended): add these tables; a table with the same name is replaced.</span></label>
+                <label class="check check-block"><input type="radio" name="schema-import-mode" value="replace"> <span><strong>Replace</strong>: delete the current schema first.</span></label>
+            </fieldset>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary">Import</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="backup-dialog" class="dialog dialog-sm" aria-labelledby="backup-title" aria-describedby="backup-summary">
         <form method="dialog" class="dialog-body">
             <h2 id="backup-title" class="dialog-title">Restore from backup</h2>
             <p id="backup-summary" class="dialog-message"></p>
             <fieldset class="fieldset">
                 <legend>How to restore</legend>
-                <label class="check check-block"><input type="radio" name="backup-mode" value="merge" checked> <span><strong>Merge</strong> (recommended): add the templates and history that aren't here yet. Your settings stay as they are.</span></label>
-                <label class="check check-block"><input type="radio" name="backup-mode" value="replace"> <span><strong>Replace</strong>: delete your current templates and history, then use the backup's, including its settings.</span></label>
+                <label class="check check-block"><input type="radio" name="backup-mode" value="merge" checked> <span><strong>Merge</strong> (recommended): add the templates, history and schema tables that aren't here yet. Your settings stay as they are.</span></label>
+                <label class="check check-block"><input type="radio" name="backup-mode" value="replace"> <span><strong>Replace</strong>: delete your current templates, history and schema, then use the backup's, including its settings.</span></label>
             </fieldset>
             <div class="dialog-actions">
                 <button type="submit" class="btn btn-primary" value="confirm">Restore</button>
@@ -309,6 +362,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=8f9e8df709e8" defer></script>
+    <script src="dist/sqlbuilder.js?v=0f4c5f962636" defer></script>
 </body>
 </html>

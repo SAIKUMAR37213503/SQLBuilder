@@ -444,7 +444,7 @@ describe('full backup', () => {
         expect(error('nope')).toBe("The file isn't valid JSON.");
         expect(error({ kind: 'templates', templates: [] })).toMatch(/templates file/);
         expect(error({ ...base, format: 'other' })).toMatch(/isn't a backup file/);
-        expect(error({ ...base, version: 2 })).toMatch(/newer version/);
+        expect(error({ ...base, version: 3 })).toMatch(/newer version/);
         expect(error({ ...base, templates: {} })).toMatch(/must be lists/);
         expect(error({ ...base, history: [{ sql: '', workspace: w('x') }] })).toMatch(/no SQL/);
         expect(error({ ...base, history: [{ sql: 'SELECT 1', workspace: { type: 'drop' } }] })).toMatch(/^history\[0\]/);

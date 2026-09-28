@@ -699,7 +699,7 @@ describe('full backup', () => {
         const text = await exportBackup();
         expect(toast()).toBe('Backed up 1 template, 1 history entry and your settings.');
         const data = JSON.parse(text);
-        expect(data).toMatchObject({ kind: 'backup', format: 'sql-builder-backup', version: 1 });
+        expect(data).toMatchObject({ kind: 'backup', format: 'sql-builder-backup', version: 2, schema: { tables: [] } });
         expect(data.settings.dialect).toBe('postgresql');
 
         boot();
@@ -1060,8 +1060,11 @@ describe('keyboard and accessibility', () => {
         expect($('#panel-templates').hidden).toBe(false);
         expect($('#panel-history').hidden).toBe(true);
         press('End', {}, $('#tab-templates'));
+        expect($('#tab-schema').getAttribute('aria-selected')).toBe('true');
+        press('ArrowLeft', {}, $('#tab-schema'));
         expect($('#tab-examples').getAttribute('aria-selected')).toBe('true');
-        press('ArrowRight', {}, $('#tab-examples'));
+        press('End', {}, $('#tab-examples'));
+        press('ArrowRight', {}, $('#tab-schema'));
         expect($('#tab-history').getAttribute('aria-selected')).toBe('true');
     });
 
@@ -1561,5 +1564,321 @@ describe('dialects in the UI', () => {
         const picker = $('#dialect-select');
         expect(picker.closest('label').textContent).toContain('Dialect');
         expect($(`#${picker.getAttribute('aria-describedby')}`).textContent).toContain('Your query is kept');
+    });
+});
+
+describe('schema panel', () => {
+    const names = () => $$('#schema-list .library-name').map(n => n.textContent);
+    const tableDialog = () => $('#schema-table-dialog');
+    const importDialog = () => $('#schema-import-dialog');
+    const TWO_TABLES = 'CREATE TABLE customers (id int PRIMARY KEY, name text);\n' +
+        'CREATE TABLE orders (id int PRIMARY KEY, customer_id int REFERENCES customers, total decimal(10,2));\n' +
+        'CREATE INDEX ix ON orders (customer_id);';
+
+    async function saveTable(text) {
+        $('#schema-add-btn').click();
+        await settle();
+        expect(tableDialog().hasAttribute('open')).toBe(true);
+        $('#schema-table-sql').value = text;
+        tableDialog().querySelector('button[type="submit"]').click();
+        await settle();
+    }
+
+    async function importText(text, mode = 'merge') {
+        $('#schema-import-btn').click();
+        await settle();
+        expect(importDialog().hasAttribute('open')).toBe(true);
+        $('#schema-import-text').value = text;
+        $('#schema-import-text').dispatchEvent(new Event('input', { bubbles: true }));
+        await settle();
+        importDialog().querySelector(`input[value="${mode}"]`).checked = true;
+        importDialog().querySelector('button[type="submit"]').click();
+        await settle();
+    }
+
+    async function download(button) {
+        let blob = null;
+        let name = '';
+        vi.spyOn(URL, 'createObjectURL').mockImplementation((b) => { blob = b; return 'blob:x'; });
+        vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () { name = this.download; });
+        button();
+        await settle();
+        return { name, text: await blob.text() };
+    }
+
+    test('starts empty, with export and clear turned off', () => {
+        $('#tab-schema').click();
+        expect($('#panel-schema').hidden).toBe(false);
+        expect($('#schema-list').textContent).toMatch(/^No tables yet/);
+        expect($('#schema-export-btn').disabled).toBe(true);
+        expect($('#schema-clear-btn').disabled).toBe(true);
+    });
+
+    test('add a table; a mistake keeps the dialog open with the reason; edit renames it', async () => {
+        $('#schema-add-btn').click();
+        await settle();
+        expect($('#schema-table-sql').value).toMatch(/^CREATE TABLE table_name/);
+        $('#schema-table-sql').value = 'CREATE TABLE t (a int, a text);';
+        tableDialog().querySelector('button[type="submit"]').click();
+        await settle();
+        expect(tableDialog().hasAttribute('open')).toBe(true);
+        expect($('#schema-table-error').textContent).toBe('Line 1: t has two columns named a.');
+        $('#schema-table-sql').value = 'CREATE TABLE a (x int); CREATE TABLE b (y int);';
+        tableDialog().querySelector('button[type="submit"]').click();
+        await settle();
+        expect($('#schema-table-error').textContent).toBe('Only one table can be edited here. To add several at once, use Import.');
+        $('#schema-table-sql').value = 'CREATE TABLE users (id int PRIMARY KEY, email text NOT NULL)';
+        tableDialog().querySelector('button[type="submit"]').click();
+        await settle();
+        expect(tableDialog().hasAttribute('open')).toBe(false);
+        expect(toast()).toBe('Added users to the schema.');
+        expect(names()).toEqual(['users']);
+        expect($('#schema-summary').textContent).toBe('1 table, 2 columns, 0 links between tables.');
+        expect(JSON.parse(backend.getItem(`${STORAGE_PREFIX}schema`)).tables[0].name).toBe('users');
+
+        // Two tables can't share a name
+        await saveTable('CREATE TABLE USERS (x int)');
+        expect($('#schema-table-error').textContent).toBe('A table named users already exists.');
+        tableDialog().querySelector('[value="cancel"]').click();
+        await settle();
+
+        $('[aria-label="Edit table users"]').click();
+        await settle();
+        expect($('#schema-table-title').textContent).toBe('Edit users');
+        expect($('#schema-table-sql').value).toBe('CREATE TABLE users (\n    id int PRIMARY KEY,\n    email text NOT NULL\n);');
+        $('#schema-table-sql').value = $('#schema-table-sql').value.replace('users', 'members');
+        tableDialog().querySelector('button[type="submit"]').click();
+        await settle();
+        expect(toast()).toBe('Saved members.');
+        expect(names()).toEqual(['members']);
+        expect(app.schema.size).toBe(1);
+    });
+
+    test('import shows a preview first, then adds the tables; the column list opens on demand', async () => {
+        $('#schema-import-btn').click();
+        await settle();
+        $('#schema-import-text').value = TWO_TABLES;
+        $('#schema-import-text').dispatchEvent(new Event('input', { bubbles: true }));
+        await settle();
+        expect($('#schema-import-result').textContent).toContain('Found 2 tables: customers, orders.');
+        expect($('#schema-import-result').textContent).toContain('CREATE INDEX');
+        expect(app.schema.size).toBe(0);
+        importDialog().querySelector('button[type="submit"]').click();
+        await settle();
+        expect(toast()).toBe('Schema imported: 2 tables added.');
+        expect(names()).toEqual(['customers', 'orders']);
+        expect($('#schema-summary').textContent).toBe('2 tables, 5 columns, 1 link between tables.');
+        expect(app.schema.get('orders').foreignKeys[0]).toEqual({ columns: ['customer_id'], refTable: 'customers', refColumns: ['id'] });
+
+        const orders = $$('#schema-list .library-item')[1];
+        expect(orders.textContent).toContain('links to 1 table');
+        const details = orders.querySelector('details');
+        expect(details.querySelectorAll('.schema-columns li')).toHaveLength(0);
+        details.open = true;
+        details.dispatchEvent(new Event('toggle'));
+        expect(details.querySelectorAll('.schema-columns li')).toHaveLength(3);
+        expect(details.textContent).toContain('customers.id');
+    });
+
+    test('import: nothing entered or unreadable text keeps the dialog open; importing the same name replaces it', async () => {
+        $('#schema-import-btn').click();
+        await settle();
+        importDialog().querySelector('button[type="submit"]').click();
+        await settle();
+        expect(importDialog().hasAttribute('open')).toBe(true);
+        expect($('#schema-import-result').textContent).toBe("Can't import: Paste CREATE TABLE statements or choose a file first.");
+        $('#schema-import-text').value = '{ broken';
+        $('#schema-import-text').dispatchEvent(new Event('input', { bubbles: true }));
+        importDialog().querySelector('button[type="submit"]').click();
+        await settle();
+        expect(importDialog().hasAttribute('open')).toBe(true);
+        expect($('#schema-import-result').textContent).toBe("Can't import: The file isn't valid JSON.");
+        importDialog().querySelector('[value="cancel"]').click();
+        await settle();
+
+        await importText(TWO_TABLES);
+        await importText('CREATE TABLE orders (id int, note text);');
+        expect(toast()).toBe('Schema imported: 0 tables added, 1 replaced.');
+        expect(app.schema.get('orders').columns.map(c => c.name)).toEqual(['id', 'note']);
+        expect(names()).toEqual(['customers', 'orders']);
+    });
+
+    test('import from a file, and replace asks first', async () => {
+        await importText(TWO_TABLES);
+        $('#schema-import-btn').click();
+        await settle();
+        $('#schema-import-file-btn').click();
+        expect($('#file-input').accept).toContain('.sql');
+        await chooseFile(JSON.stringify({ tables: [{ name: 'products', columns: ['sku'] }] }), 'schema.json');
+        expect($('#schema-import-text').value).toContain('products');
+        expect($('#schema-import-result').textContent).toContain('Found 1 table: products.');
+        importDialog().querySelector('input[value="replace"]').checked = true;
+        importDialog().querySelector('button[type="submit"]').click();
+        await settle();
+        expect($('#confirm-dialog').textContent).toContain('Your 2 tables will be deleted and replaced by the 1 imported table.');
+        await answerConfirm(false);
+        expect(names()).toEqual(['customers', 'orders']);
+
+        await importText('CREATE TABLE products (sku text)', 'replace');
+        await answerConfirm(true);
+        expect(names()).toEqual(['products']);
+    });
+
+    test('search filters by table or column name', async () => {
+        await importText(TWO_TABLES);
+        $('#schema-search').value = 'CUSTOMER_';
+        $('#schema-search').dispatchEvent(new Event('input', { bubbles: true }));
+        await settle();
+        expect(names()).toEqual(['orders']);
+        $('#schema-search').value = 'zzz';
+        $('#schema-search').dispatchEvent(new Event('input', { bubbles: true }));
+        await settle();
+        expect($('#schema-list').textContent).toBe('No tables or columns match “zzz”.');
+    });
+
+    test('export as JSON reads back the same; export as CREATE TABLE from the palette', async () => {
+        await importText(TWO_TABLES);
+        const json = await download(() => $('#schema-export-btn').click());
+        expect(json.name).toBe('sql-builder-schema.json');
+        expect(JSON.parse(json.text)).toMatchObject({ kind: 'schema', format: 'sql-builder-schema', version: 1 });
+        const before = app.schema.list();
+        boot();
+        await importText(json.text);
+        expect(app.schema.list()).toEqual(before);
+
+        vi.restoreAllMocks();
+        press('k', { ctrlKey: true });
+        await settle();
+        $('#palette-input').value = 'create table (.sql)';
+        $('#palette-input').dispatchEvent(new Event('input', { bubbles: true }));
+        const sqlFile = await download(() => press('Enter', {}, $('#palette-input')));
+        expect(sqlFile.name).toBe('schema.sql');
+        expect(sqlFile.text).toMatch(/^CREATE TABLE customers \(/);
+        expect(toast()).toBe('Exported 2 tables as CREATE TABLE statements.');
+    });
+
+    test('delete and clear ask first', async () => {
+        await importText(TWO_TABLES);
+        $('[aria-label="Delete table orders from the schema"]').click();
+        await answerConfirm(false);
+        expect(names()).toEqual(['customers', 'orders']);
+        $('[aria-label="Delete table orders from the schema"]').click();
+        await answerConfirm(true);
+        expect(names()).toEqual(['customers']);
+        expect(toast()).toBe('Removed orders from the schema.');
+
+        $('#schema-clear-btn').click();
+        await answerConfirm(true);
+        expect(app.schema.size).toBe(0);
+        expect(backend.getItem(`${STORAGE_PREFIX}schema`)).toBeNull();
+        expect($('#schema-clear-btn').disabled).toBe(true);
+    });
+
+    test('the schema is kept across reloads and removed by "delete all saved data"', async () => {
+        const storageBackend = createMemoryBackend();
+        boot(storageBackend);
+        await importText(TWO_TABLES);
+        boot(storageBackend);
+        expect(names()).toEqual(['customers', 'orders']);
+        $('#settings-btn').click();
+        $('#clear-data-btn').click();
+        await answerConfirm(true);
+        expect(app.schema.size).toBe(0);
+        expect(names()).toEqual([]);
+    });
+
+    test('the palette opens the Schema tab and the add dialog', async () => {
+        press('k', { ctrlKey: true });
+        await settle();
+        const labels = $$('#palette-list [role="option"] .palette-label').map(n => n.textContent);
+        expect(labels).toContain('Open schema');
+        expect(labels).toContain('Import schema…');
+        expect(labels).not.toContain('Export schema (.json)');
+        $('#palette-input').value = 'add a table';
+        $('#palette-input').dispatchEvent(new Event('input', { bubbles: true }));
+        press('Enter', {}, $('#palette-input'));
+        await settle();
+        expect(tableDialog().hasAttribute('open')).toBe(true);
+    });
+
+    test('a schema never changes the generated SQL', async () => {
+        await fillSimpleSelect('orders', 'total');
+        $('#generate-btn').click();
+        const before = sql();
+        await importText(TWO_TABLES);
+        $('#generate-btn').click();
+        await settle();
+        expect(sql()).toBe(before);
+    });
+});
+
+describe('full backup with a schema', () => {
+    async function exportBackup() {
+        let exported = null;
+        vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => { exported = blob; return 'blob:x'; });
+        vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        $('[data-command="export-backup"]').click();
+        await settle();
+        vi.restoreAllMocks();
+        return exported.text();
+    }
+    async function restore(text, mode) {
+        $('[data-command="import-backup"]').click();
+        await chooseFile(text, 'backup.json');
+        const dialog = $('#backup-dialog');
+        expect(dialog.hasAttribute('open')).toBe(true);
+        dialog.querySelector(`input[value="${mode}"]`).checked = true;
+        dialog.querySelector('[value="confirm"]').click();
+        await settle();
+    }
+    const seedSchema = (tables) => app.schema.apply(tables);
+
+    test('the backup carries the schema; merging keeps tables already here', async () => {
+        seedSchema([{ name: 'a', columns: ['id'] }, { name: 'b', columns: ['id'] }]);
+        const text = await exportBackup();
+        expect(toast()).toBe('Backed up 0 templates, 0 history entries, 2 schema tables and your settings.');
+        expect(JSON.parse(text).schema.tables).toEqual([{ name: 'a', columns: [{ name: 'id' }] }, { name: 'b', columns: [{ name: 'id' }] }]);
+
+        boot();
+        seedSchema([{ name: 'a', columns: ['mine'] }]);
+        $('[data-command="import-backup"]').click();
+        await chooseFile(text, 'backup.json');
+        expect($('#backup-summary').textContent).toContain('0 templates, 0 history entries, 2 schema tables and settings.');
+        $('#backup-dialog [value="confirm"]').click();
+        await settle();
+        expect(toast()).toBe('Backup restored: 0 templates added, 0 history entries added, 1 schema table added (1 already here). Your settings were kept.');
+        expect(app.schema.get('a').columns[0].name).toBe('mine');
+        expect(app.schema.list().map(t => t.name)).toEqual(['a', 'b']);
+    });
+
+    test('replace swaps the schema; a backup from before schemas keeps it', async () => {
+        seedSchema([{ name: 'from_backup', columns: ['id'] }]);
+        const text = await exportBackup();
+        boot();
+        seedSchema([{ name: 'local', columns: ['id'] }]);
+        await restore(text, 'replace');
+        expect($('#confirm-dialog').textContent).toContain('and 1 schema table will be deleted');
+        await answerConfirm(true);
+        expect(app.schema.list().map(t => t.name)).toEqual(['from_backup']);
+
+        const v1 = { ...JSON.parse(text), version: 1 };
+        delete v1.schema;
+        await restore(JSON.stringify(v1), 'replace');
+        await answerConfirm(true);
+        expect(app.schema.list().map(t => t.name)).toEqual(['from_backup']);
+        expect(toast()).toContain('your schema was kept because this backup was made before schemas existed');
+    });
+
+    test('a backup whose schema is damaged changes nothing', async () => {
+        const text = await exportBackup();
+        const data = JSON.parse(text);
+        data.schema.tables = [{ name: 't', columns: ['x', 'X'] }];
+        seedSchema([{ name: 'keep', columns: ['id'] }]);
+        $('[data-command="import-backup"]').click();
+        await chooseFile(JSON.stringify(data), 'backup.json');
+        expect(toast()).toBe("Restore failed: The backup's schema: t has two columns named X.");
+        expect(app.schema.list().map(t => t.name)).toEqual(['keep']);
     });
 });

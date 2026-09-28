@@ -13,13 +13,20 @@ import {
 import { MAX_NESTING_DEPTH } from './validation.js';
 import { sanitizeSettings } from './settings.js';
 import { DIALECTS } from './dialects.js';
+import { readTables, SchemaError } from './schema.js';
+import { readDdl } from './ddl.js';
 
 export const APP_ID = 'sql-query-builder-pro-lite';
 export const MAX_IMPORT_BYTES = 1024 * 1024;
 // A backup holds up to 200 templates and 50 history entries
 export const MAX_BACKUP_BYTES = 8 * 1024 * 1024;
 export const BACKUP_FORMAT = 'sql-builder-backup';
-export const BACKUP_VERSION = 1;
+// Version 2 added the schema; version 1 files are still read
+export const BACKUP_VERSION = 2;
+export const SCHEMA_FORMAT = 'sql-builder-schema';
+export const SCHEMA_VERSION = 1;
+// CREATE TABLE scripts (pg_dump, mysqldump, SSMS) can be long
+export const MAX_SCHEMA_IMPORT_BYTES = 4 * 1024 * 1024;
 const MAX_HISTORY_SQL = 100 * 1024;
 const MAX_STRING = 10000;
 const MAX_LIST = 200;
@@ -293,6 +300,9 @@ export function parseQueryFile(text) {
         if (isObject(data) && data.kind === 'backup') {
             throw new ImportError('This is a full backup. Use File, Restore from backup.');
         }
+        if (isObject(data) && data.kind === 'schema') {
+            throw new ImportError('This is a schema file. Import it from the Schema panel.');
+        }
         const payload = isObject(data) && data.app === APP_ID && data.kind === 'query' ? data.query : data;
         const dialect = isObject(data) && typeof data.dialect === 'string' ? data.dialect : undefined;
         return { ok: true, workspace: normalizeWorkspace(payload), ...(dialect ? { dialect } : {}) };
@@ -350,6 +360,9 @@ export function parseTemplatesFile(text) {
         if (isObject(data) && data.kind === 'backup') {
             throw new ImportError('This is a full backup. Use File, Restore from backup.');
         }
+        if (isObject(data) && data.kind === 'schema') {
+            throw new ImportError('This is a schema file. Import it from the Schema panel.');
+        }
         if (!isObject(data) || data.kind !== 'templates' || !Array.isArray(data.templates)) {
             throw new ImportError("This isn't a templates file exported from SQL Query Builder.");
         }
@@ -365,9 +378,9 @@ export function parseTemplatesFile(text) {
 // ---------------------------------------------------------------------------
 
 /**
- * @param {{ templates: any[], history: any[], settings: any }} data
+ * @param {{ templates: any[], history: any[], settings: any, schema?: any[] }} data
  */
-export function createBackup({ templates, history, settings }) {
+export function createBackup({ templates, history, settings, schema = [] }) {
     return {
         app: APP_ID,
         kind: 'backup',
@@ -377,7 +390,8 @@ export function createBackup({ templates, history, settings }) {
         exportedAt: new Date().toISOString(),
         settings: sanitizeSettings(settings),
         templates: templates.map(exportTemplate),
-        history: history.map(({ timestamp, type, dialect, sql, workspace }) => ({ timestamp, type, dialect, sql, workspace }))
+        history: history.map(({ timestamp, type, dialect, sql, workspace }) => ({ timestamp, type, dialect, sql, workspace })),
+        schema: { tables: schema.map(exportTable) }
     };
 }
 
@@ -402,12 +416,14 @@ function readHistoryEntry(e, i) {
 
 /**
  * Validates a backup file field by field. Nothing is stored here.
- * @returns {{ ok: true, exportedAt: string, settings: any, templates: any[], history: any[] } | { ok: false, error: string }}
+ * `schema` is null for a version 1 backup, which has none.
+ * @returns {{ ok: true, exportedAt: string, settings: any, templates: any[], history: any[], schema: any[] | null } | { ok: false, error: string }}
  */
 export function parseBackupFile(text) {
     try {
         const data = parseJson(text, MAX_BACKUP_BYTES);
         if (isObject(data) && data.kind === 'templates') throw new ImportError('This is a templates file. Import it from the Templates panel.');
+        if (isObject(data) && data.kind === 'schema') throw new ImportError('This is a schema file. Import it from the Schema panel.');
         if (!isObject(data) || data.kind !== 'backup' || data.format !== BACKUP_FORMAT) {
             throw new ImportError("This isn't a backup file from SQL Query Builder.");
         }
@@ -424,8 +440,73 @@ export function parseBackupFile(text) {
             exportedAt: typeof data.exportedAt === 'string' ? data.exportedAt.slice(0, 40) : '',
             settings: sanitizeSettings(data.settings),
             templates: templates.map((t, i) => readTemplate(t, i, { withDates: true })),
-            history: history.map(readHistoryEntry)
+            history: history.map(readHistoryEntry),
+            schema: data.schema === undefined ? null : readSchemaTables(isObject(data.schema) ? data.schema.tables : undefined, 'The backup\'s schema')
         };
+    } catch (error) {
+        return { ok: false, error: describeError(error) };
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Schema: a JSON file of tables, or CREATE TABLE statements
+// ---------------------------------------------------------------------------
+
+const exportTable = ({ name, columns, primaryKey, unique, foreignKeys }) => ({
+    name,
+    columns: columns.map(({ name: column, type, nullable }) => ({ name: column, ...(type ? { type } : {}), ...(nullable ? {} : { nullable: false }) })),
+    ...(primaryKey.length ? { primaryKey } : {}),
+    ...(unique.length ? { unique } : {}),
+    ...(foreignKeys.length ? { foreignKeys } : {})
+});
+
+export function createSchemaExport(tables) {
+    return {
+        app: APP_ID,
+        kind: 'schema',
+        format: SCHEMA_FORMAT,
+        version: SCHEMA_VERSION,
+        exportedAt: new Date().toISOString(),
+        tables: tables.map(exportTable)
+    };
+}
+
+function readSchemaTables(tables, where) {
+    try {
+        return readTables(tables);
+    } catch (error) {
+        if (error instanceof SchemaError) throw new ImportError(`${where}: ${error.message}`);
+        throw error;
+    }
+}
+
+/**
+ * Reads a schema from pasted text or a file: a schema JSON file, or SQL with
+ * CREATE TABLE statements. Nothing is stored here.
+ * @param {string} text
+ * @returns {{ ok: true, source: 'json' | 'sql', tables: any[], skipped: { label: string, count: number }[], problems: { message: string, line: number, col: number }[] }
+ *   | { ok: false, error: string }}
+ */
+export function readSchemaInput(text) {
+    try {
+        if (text.length > MAX_SCHEMA_IMPORT_BYTES) throw new ImportError(`The text is too long (limit ${MAX_SCHEMA_IMPORT_BYTES / 1024 / 1024} MB).`);
+        const trimmed = text.trim();
+        if (!trimmed) throw new ImportError('Paste CREATE TABLE statements or a schema file first.');
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            const data = parseJson(trimmed, MAX_SCHEMA_IMPORT_BYTES);
+            if (isObject(data) && data.kind === 'backup') throw new ImportError('This is a full backup. Use File, Restore from backup.');
+            if (isObject(data) && (data.kind === 'templates' || data.kind === 'query')) throw new ImportError(`This is a ${data.kind === 'query' ? 'query' : 'templates'} file, not a schema.`);
+            const tables = Array.isArray(data) ? data : isObject(data) ? data.tables : undefined;
+            if (!Array.isArray(tables)) throw new ImportError("This JSON isn't a schema: it needs a list of tables.");
+            return { ok: true, source: 'json', tables: readSchemaTables(tables, 'Schema'), skipped: [], problems: [] };
+        }
+        const result = readDdl(text);
+        if (!result.tables.length && !result.problems.length) {
+            throw new ImportError(result.skipped.length
+                ? 'No CREATE TABLE statements were found; only other statements.'
+                : 'No CREATE TABLE statements were found.');
+        }
+        return { ok: true, source: 'sql', ...result };
     } catch (error) {
         return { ok: false, error: describeError(error) };
     }

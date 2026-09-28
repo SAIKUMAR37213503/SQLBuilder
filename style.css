@@ -825,9 +825,16 @@ kbd {
     cursor: pointer;
 }
 .tabs [role="tab"][aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
-/* Very narrow phones (320px): the three tabs share the row instead of overflowing it */
-@media (max-width: 359px) {
-    .tabs [role="tab"] { flex: 1 1 auto; min-width: 0; padding-inline: 0.2rem; font-size: 0.9rem; }
+/* A narrow library panel (phones, tablets in two columns): the four tabs
+   share the row equally. Browsers without container queries scroll the row. */
+.library-panel { container: library / inline-size; }
+.tabs { overflow-x: auto; scrollbar-width: none; }
+@container library (max-width: 440px) {
+    .tabs { gap: 0; }
+    .tabs [role="tab"] { flex: 1 1 0; min-width: 0; padding-inline: 0.15rem; font-size: 0.85rem; }
+}
+@container library (max-width: 300px) {
+    .tabs [role="tab"] { font-size: 0.78rem; }
 }
 
 .tab-panel { display: grid; gap: 0.6rem; }
@@ -862,6 +869,19 @@ kbd {
     word-break: break-word;
 }
 .library-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+
+/* Schema panel */
+.schema-details > summary { cursor: pointer; color: var(--text-2); font-size: 0.8rem; width: fit-content; }
+.schema-columns { display: grid; gap: 0.2rem; margin: 0.4rem 0 0; padding: 0; list-style: none; }
+.schema-column { display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; align-items: baseline; font-size: 0.8rem; }
+.schema-column-name { font-family: var(--font-mono); color: var(--text); overflow-wrap: anywhere; }
+.schema-column-type { font-family: var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
+.schema-column-note { color: var(--text-muted); }
+.schema-key { border-color: var(--accent); color: var(--accent); }
+.schema-import-result { display: grid; gap: 0.35rem; font-size: 0.85rem; }
+.schema-import-result p { margin: 0; }
+.schema-import-problems { margin: 0; padding-left: 1.2rem; color: var(--danger); font-size: 0.8rem; }
+.textarea { min-height: 8rem; resize: vertical; line-height: 1.45; white-space: pre; overflow-wrap: normal; overflow-x: auto; }
 
 .type-badge {
     padding: 0.05rem 0.45rem;
