@@ -1,5 +1,11 @@
-// Built-in starter examples shown in the Templates panel. They are ordinary
-// workspaces built with the model factories, so they also exercise the model.
+// Built-in starter examples shown in the Examples panel. They are ordinary
+// workspaces built with the model factories, so the SQL they show always comes
+// from the generator of the selected dialect and can't drift from it.
+//
+// An example without `dialects` works in every dialect; one with `dialects`
+// is listed only for those (loading it elsewhere switches to the first).
+//
+// Each example has a level and a topic, used by the Examples panel filter.
 
 import {
     createWorkspace, createColumn, createCaseColumn, createWindowColumn, createCondition, createGroup, createJoin,
@@ -15,9 +21,17 @@ function workspace(type, fill) {
     return ws;
 }
 
+export const EXAMPLE_LEVELS = { beginner: 'Beginner', intermediate: 'Intermediate', advanced: 'Advanced' };
+export const EXAMPLE_TOPICS = [
+    'Filtering and sorting', 'Joins', 'Aggregation', 'Calculated columns',
+    'Subqueries and CTEs', 'Window functions', 'Combining results', 'Changing data'
+];
+
 export const EXAMPLES = [
     {
         id: 'filter-sort',
+        level: 'beginner',
+        topic: 'Filtering and sorting',
         name: 'Filter, sort and limit',
         description: 'Top 10 salaries above 50,000.',
         build: () => workspace('select', (q) => {
@@ -29,7 +43,23 @@ export const EXAMPLES = [
         })
     },
     {
+        id: 'page-results',
+        level: 'beginner',
+        topic: 'Filtering and sorting',
+        name: 'Page through results',
+        description: 'Rows 41–60 in a stable order: LIMIT and OFFSET, or OFFSET … FETCH on SQL Server.',
+        build: () => workspace('select', (q) => {
+            q.columns = [createColumn('id'), createColumn('name'), createColumn('email')];
+            q.from = createTableSource('customers');
+            q.orderBy = [{ expr: 'name', direction: 'ASC' }, { expr: 'id', direction: 'ASC' }];
+            q.limit = '20';
+            q.offset = '40';
+        })
+    },
+    {
         id: 'join-aggregate',
+        level: 'intermediate',
+        topic: 'Aggregation',
         name: 'Join with totals per customer',
         description: 'LEFT JOIN, COUNT/SUM, GROUP BY and HAVING.',
         build: () => workspace('select', (q) => {
@@ -49,7 +79,55 @@ export const EXAMPLES = [
         })
     },
     {
+        id: 'duplicates',
+        level: 'intermediate',
+        topic: 'Aggregation',
+        name: 'Find duplicate values',
+        description: 'Emails that appear more than once: GROUP BY with HAVING COUNT(*) > 1.',
+        build: () => workspace('select', (q) => {
+            q.columns = [createColumn('email'), createColumn('*', { aggregate: 'COUNT', alias: 'copies' })];
+            q.from = createTableSource('customers');
+            q.groupBy = [createGroupByItem('email')];
+            q.having = createGroup('AND', [cond('COUNT(*)', '>', '1')]);
+            q.orderBy = [{ expr: 'copies', direction: 'DESC' }];
+        })
+    },
+    {
+        id: 'conditional-aggregation',
+        level: 'intermediate',
+        topic: 'Aggregation',
+        name: 'Conditional totals',
+        description: 'SUM and COUNT over CASE: several totals per customer from one query.',
+        build: () => workspace('select', (q) => {
+            q.columns = [
+                createColumn('customer_id'),
+                createColumn("CASE WHEN status = 'paid' THEN total ELSE 0 END", { aggregate: 'SUM', alias: 'paid_total' }),
+                createColumn("CASE WHEN status = 'refunded' THEN 1 END", { aggregate: 'COUNT', alias: 'refunds' })
+            ];
+            q.from = createTableSource('orders');
+            q.groupBy = [createGroupByItem('customer_id')];
+        })
+    },
+    {
+        id: 'self-join',
+        level: 'intermediate',
+        topic: 'Joins',
+        name: 'Employees and their managers',
+        description: 'Join a table to itself using two aliases.',
+        build: () => workspace('select', (q) => {
+            q.columns = [createColumn('e.name', { alias: 'employee' }), createColumn('m.name', { alias: 'manager' })];
+            q.from = createTableSource('employees', 'e');
+            const join = createJoin('LEFT JOIN');
+            join.source = createTableSource('employees', 'm');
+            join.on = createGroup('AND', [colCond('e.manager_id', 'm.id')]);
+            q.joins = [join];
+            q.orderBy = [{ expr: 'manager', direction: 'ASC' }, { expr: 'employee', direction: 'ASC' }];
+        })
+    },
+    {
         id: 'not-exists',
+        level: 'intermediate',
+        topic: 'Subqueries and CTEs',
         name: 'Customers without orders',
         description: 'NOT EXISTS with a correlated subquery.',
         build: () => workspace('select', (q) => {
@@ -64,7 +142,25 @@ export const EXAMPLES = [
         })
     },
     {
+        id: 'anti-join',
+        level: 'intermediate',
+        topic: 'Joins',
+        name: 'Products never ordered',
+        description: 'LEFT JOIN, then keep the rows that found no match (IS NULL).',
+        build: () => workspace('select', (q) => {
+            q.columns = [createColumn('p.id'), createColumn('p.name')];
+            q.from = createTableSource('products', 'p');
+            const join = createJoin('LEFT JOIN');
+            join.source = createTableSource('order_items', 'oi');
+            join.on = createGroup('AND', [colCond('oi.product_id', 'p.id')]);
+            q.joins = [join];
+            q.where = createGroup('AND', [cond('oi.product_id', 'IS NULL')]);
+        })
+    },
+    {
         id: 'nested-conditions',
+        level: 'beginner',
+        topic: 'Filtering and sorting',
         name: 'Nested AND / OR conditions',
         description: 'IN list, BETWEEN and an OR group.',
         build: () => workspace('select', (q) => {
@@ -78,7 +174,22 @@ export const EXAMPLES = [
         })
     },
     {
+        id: 'date-range',
+        level: 'beginner',
+        topic: 'Filtering and sorting',
+        name: 'Rows in a date range',
+        description: 'January 2026: >= the first day and < the next month, so the whole last day is included.',
+        build: () => workspace('select', (q) => {
+            q.columns = ['id', 'customer_id', 'total', 'created_at'].map(c => createColumn(c));
+            q.from = createTableSource('orders');
+            q.where = createGroup('AND', [cond('created_at', '>=', '2026-01-01'), cond('created_at', '<', '2026-02-01')]);
+            q.orderBy = [{ expr: 'created_at', direction: 'ASC' }];
+        })
+    },
+    {
         id: 'cte',
+        level: 'intermediate',
+        topic: 'Subqueries and CTEs',
         name: 'CTE: departments above average',
         description: 'WITH clause reused by the main query.',
         build: () => workspace('select', (q) => {
@@ -98,6 +209,8 @@ export const EXAMPLES = [
     },
     {
         id: 'case',
+        level: 'beginner',
+        topic: 'Calculated columns',
         name: 'CASE: salary bands',
         description: 'Computed column with CASE WHEN.',
         build: () => workspace('select', (q) => {
@@ -111,6 +224,8 @@ export const EXAMPLES = [
     },
     {
         id: 'union',
+        level: 'beginner',
+        topic: 'Combining results',
         name: 'UNION of contacts',
         description: 'Combine two tables, then sort the result.',
         build: () => workspace('select', (q) => {
@@ -124,6 +239,8 @@ export const EXAMPLES = [
     },
     {
         id: 'window',
+        level: 'advanced',
+        topic: 'Window functions',
         name: 'Window functions: rank and running total',
         description: 'RANK per department and a running SUM ordered by date.',
         build: () => workspace('select', (q) => {
@@ -140,7 +257,33 @@ export const EXAMPLES = [
         })
     },
     {
+        id: 'top-n-per-group',
+        level: 'advanced',
+        topic: 'Window functions',
+        name: 'Top 3 per department',
+        description: 'ROW_NUMBER in a CTE, then keep the rows numbered 1 to 3.',
+        build: () => workspace('select', (q) => {
+            const cte = createCte();
+            cte.name = 'ranked';
+            const rowNumber = {
+                ...createWindowColumn(), func: 'ROW_NUMBER', alias: 'rn',
+                partitionBy: [{ expr: 'department' }], orderBy: [{ expr: 'salary', direction: 'DESC' }]
+            };
+            cte.query = createSelect({
+                columns: [createColumn('name'), createColumn('department'), createColumn('salary'), rowNumber],
+                from: createTableSource('employees')
+            });
+            q.ctes = [cte];
+            q.columns = [createColumn('name'), createColumn('department'), createColumn('salary')];
+            q.from = createTableSource('ranked');
+            q.where = createGroup('AND', [cond('rn', '<=', '3')]);
+            q.orderBy = [{ expr: 'department', direction: 'ASC' }, { expr: 'salary', direction: 'DESC' }];
+        })
+    },
+    {
         id: 'intersect',
+        level: 'intermediate',
+        topic: 'Combining results',
         name: 'INTERSECT: customers who are also suppliers',
         description: 'Rows present in both queries.',
         build: () => workspace('select', (q) => {
@@ -153,6 +296,8 @@ export const EXAMPLES = [
     },
     {
         id: 'insert-rows',
+        level: 'beginner',
+        topic: 'Changing data',
         name: 'Insert several rows',
         description: 'Multi-row INSERT.',
         build: () => workspace('insert', (q) => {
@@ -163,6 +308,8 @@ export const EXAMPLES = [
     },
     {
         id: 'insert-select',
+        level: 'intermediate',
+        topic: 'Changing data',
         name: 'Copy rows with INSERT … SELECT',
         description: 'Archive last year\'s orders into another table.',
         build: () => workspace('insert', (q) => {
@@ -178,6 +325,8 @@ export const EXAMPLES = [
     },
     {
         id: 'upsert',
+        level: 'advanced',
+        topic: 'Changing data',
         name: 'Upsert: insert or update',
         description: 'PostgreSQL ON CONFLICT / MySQL ON DUPLICATE KEY UPDATE.',
         dialects: ['postgresql', 'mysql'],
@@ -197,6 +346,8 @@ export const EXAMPLES = [
     },
     {
         id: 'parameters',
+        level: 'intermediate',
+        topic: 'Filtering and sorting',
         name: 'Parameters for application code',
         description: 'Placeholders written in each dialect\'s style ($1, ?, @name).',
         build: () => workspace('select', (q) => {
@@ -210,6 +361,8 @@ export const EXAMPLES = [
     },
     {
         id: 'update-safe',
+        level: 'beginner',
+        topic: 'Changing data',
         name: 'Update with a WHERE',
         description: 'Change one row safely.',
         build: () => workspace('update', (q) => {
@@ -223,6 +376,8 @@ export const EXAMPLES = [
     },
     {
         id: 'delete-old',
+        level: 'beginner',
+        topic: 'Changing data',
         name: 'Delete old log rows',
         description: 'DELETE with a date condition.',
         build: () => workspace('delete', (q) => {
@@ -231,3 +386,14 @@ export const EXAMPLES = [
         })
     }
 ];
+
+/**
+ * The examples that work in a dialect ('all' lists every example), optionally
+ * only those on one topic.
+ * @param {string} dialect
+ * @param {string} [topic] a topic from EXAMPLE_TOPICS, or 'all'
+ */
+export function examplesFor(dialect, topic = 'all') {
+    return EXAMPLES.filter(e => (dialect === 'all' || !e.dialects || e.dialects.includes(dialect))
+        && (topic === 'all' || e.topic === topic));
+}

@@ -61,6 +61,7 @@ A custom SQL condition that contains a top-level `AND`/`OR` is wrapped in parent
 - Formatted SQL (one clause per line, 4-space indentation) or a single line, with an optional Wrap toggle for long lines
 - Syntax highlighting (including parameter placeholders) and line numbers; the line numbers are never copied
 - Live preview while you type (can be switched off)
+- **Query structure**: a panel under the SQL that lists the parts of the query in the order a database works through them (for a SELECT: WITH, FROM, JOIN, WHERE, GROUP BY, HAVING, SELECT, UNION, ORDER BY, LIMIT/TOP), each with a one-line explanation. Selecting a step opens that part of the builder. It describes structure only; it says nothing about speed.
 - Copy, Select all, Download `.sql`. On Android, Download and Export open the share sheet so you can save to Files or Drive, or send to another app. A Share button shares the SQL text.
 
 **Checks:** the checks panel shows three kinds of message:
@@ -84,37 +85,56 @@ Messages are listed errors first, then warnings, then tips. On narrower screens 
 
 **Workspace**
 - **History** of generated queries: search, restore, copy, delete, clear. It keeps the last 50, and can be turned off.
-- **Templates**: save, load, rename, duplicate, delete, and import/export as JSON. A template remembers its dialect and switches to it when loaded (restoring history does the same).
-- **Examples**: fifteen starter queries.
-- Import/export of the current query as JSON (validated, never executed), and download of the SQL.
+- **Save** (button above the SQL, or Ctrl/⌘+S): the first save names the query as a template; after that, and after loading a template, Save updates that template in place. The template's name is shown above the SQL, with "unsaved changes" when the query or dialect differs from what was saved. Loading an example, restoring history, importing or Reset all start a new unsaved query.
+- **Templates**: save, load, rename, duplicate, delete, and import/export as JSON. Each template can have a description and a category, and the list can be searched (name, description, category, dialect), filtered by dialect and sorted by name or most recently updated. Pin a template to keep it at the top; the template you are editing is marked "Editing". Pins are kept in exports. A template remembers its dialect and switches to it when loaded (restoring history does the same).
+- **Examples**: twenty-two starter queries, each tagged Beginner, Intermediate or Advanced and with a topic (filtering, joins, aggregation, window functions and more). They are filtered to the selected dialect and can be filtered by topic (the upsert example only exists for PostgreSQL and MySQL). Each one shows a one-line preview of the SQL it produces in that dialect.
+- Import/export of the current query as JSON (validated, never executed), and download of the SQL. An exported query remembers its dialect, and importing it switches back to that dialect.
+- **Full backup** (File → Back up everything / Restore from backup…): one JSON file (`sql-builder-backup`, version 1) with all templates (including pins and dates), history and settings. Restoring validates every field first and asks how to restore: **Merge** (default) adds the templates and history that aren't here yet and skips exact copies, keeping your settings; **Replace** asks for confirmation, then swaps templates, history and settings for the backup's. History isn't restored while saving history is turned off. A backup never contains anything that leaves your device unless you move the file yourself.
 - Undo / redo of every change.
+- **Command palette** (Ctrl/⌘+K, or File → Commands… on touch screens): search and run commands such as Generate, Copy, Save, switching the query type, dialect, output format or theme, opening the library tabs, import/export and settings. It only lists commands that apply right now and runs the same actions as the buttons.
 - Unsaved work is restored when you come back; this can be turned off.
-- Settings: dialect, identifier quoting, live preview, history, session restore, theme, and delete all saved data.
+- Settings: dialect (also next to the SQL heading), identifier quoting, live preview, history, session restore, theme, and delete all saved data.
 - Light / Dark / System theme.
 
 ## SQL dialects
 
-Generic SQL is the default. Dialects change only what is listed here:
+Four dialects are supported: **Generic SQL** (the default), **Microsoft SQL Server**, **PostgreSQL** and **MySQL** (8.0.31 or later is assumed). Pick one with the **Dialect** menu next to the SQL heading, above the generated SQL (or in Settings). The query itself is kept when you switch: only the generated SQL and the checks change, and a message says how many parts of the query the new dialect can't express.
 
-| | Generic | PostgreSQL | MySQL | SQL Server |
+All four dialects share one query model, generator and validator. Everything that differs is described once per dialect in `src/dialects.js` as settings and capability flags (for example `supports.fullJoin` or `restrictions.rankingNeedsOrderBy`), and a test makes sure the generator, validator and UI never check which dialect is selected.
+
+When a dialect can't express something, the builder keeps it rather than deleting it:
+- menu options it lacks stay visible, labelled for example "FULL JOIN (not in MySQL)";
+- choosing one is reported in Checks as an error, and no SQL is generated until it's changed;
+- the row-limit field is called **TOP** on SQL Server, and on Generic and SQL Server the INSERT builder shows a short note instead of the upsert options (an upsert that is already set up stays visible, with its error).
+
+What changes per dialect:
+
+| | Generic | SQL Server | PostgreSQL | MySQL |
 |---|---|---|---|---|
-| Quoted identifiers (optional setting) | `"name"` | `"name"` | `` `name` `` | `[name]` |
-| Text values | `'it''s'` | `'it''s'` | `'it''s'`, backslashes doubled | `'it''s'` |
-| Booleans | `TRUE` / `FALSE` | `TRUE` / `FALSE` | `TRUE` / `FALSE` | `1` / `0` |
-| LIMIT n | `LIMIT n` | `LIMIT n` | `LIMIT n` | `SELECT TOP n` |
-| LIMIT n OFFSET m | `LIMIT n OFFSET m` | same | same | `OFFSET m ROWS FETCH NEXT n ROWS ONLY` (adds `ORDER BY (SELECT NULL)` if there is no ORDER BY) |
-| OFFSET only | `OFFSET m` | `OFFSET m` | `LIMIT 18446744073709551615 OFFSET m` | `OFFSET m ROWS` |
-| FULL JOIN | ✓ | ✓ | reported as an error | ✓ |
-| INTERSECT / EXCEPT | ✓ (+ `ALL`) | ✓ (+ `ALL`) | ✓ (+ `ALL`), tip: needs 8.0.31+ | ✓ (no `ALL` variants) |
-| NTH_VALUE | ✓ | ✓ | ✓ | reported as an error |
-| Ranking functions without ORDER BY | warning | warning | warning | error (required) |
-| Parameter placeholders | `:name`, or `?` if unnamed | `$1`, `$2`, … (names ignored, tip shown) | `?` (names ignored, tip shown) | `@name`, or `@p1`, `@p2`, … |
-| Upsert | reported as an error | `ON CONFLICT (…) DO NOTHING` / `DO UPDATE SET …`, inserted value `EXCLUDED.col` | `ON DUPLICATE KEY UPDATE …`, inserted value `VALUES(col)` (tip: deprecated in 8.0.20+) | reported as an error (`MERGE` not supported yet) |
-| ORDER BY in a subquery | tip | tip | tip | error unless LIMIT or OFFSET is set |
-| LIMIT in an `IN` subquery | ✓ | ✓ | reported as an error | ✓ (`TOP`) |
-| SELECT alias in HAVING | warning | warning | accepted | warning |
+| Quoted identifiers (optional setting) | `"name"` | `[name]` | `"name"` | `` `name` `` |
+| Text values | `'it''s'` | `'it''s'` | `'it''s'` | `'it''s'`, backslashes doubled |
+| Booleans (Value fields) | `TRUE` / `FALSE` | `1` / `0` | `TRUE` / `FALSE` | `TRUE` / `FALSE` |
+| `TRUE` / `FALSE` typed into an expression | ✓ | warning: write `1` / `0` | ✓ | ✓ |
+| Row limit only | `LIMIT n` | `SELECT TOP n` | `LIMIT n` | `LIMIT n` |
+| Limit and offset | `LIMIT n OFFSET m` | `OFFSET m ROWS FETCH NEXT n ROWS ONLY` | `LIMIT n OFFSET m` | `LIMIT n OFFSET m` |
+| Offset only | `OFFSET m` | `OFFSET m ROWS` | `OFFSET m` | `LIMIT 18446744073709551615 OFFSET m` |
+| Limit with UNION / INTERSECT / EXCEPT | `LIMIT n` | `OFFSET 0 ROWS FETCH NEXT n ROWS ONLY` | `LIMIT n` | `LIMIT n` |
+| OFFSET without ORDER BY | tip | `ORDER BY (SELECT NULL)` is added, with a note | tip | tip |
+| FULL JOIN | ✓ | ✓ | ✓ | error |
+| UNION / INTERSECT / EXCEPT | ✓ (+ `ALL`) | ✓ (no `INTERSECT ALL` / `EXCEPT ALL`) | ✓ (+ `ALL`) | ✓ (+ `ALL`); INTERSECT / EXCEPT need 8.0.31 (tip) |
+| NTH_VALUE | ✓ | error | ✓ | ✓ |
+| Ranking, LAG / LEAD, NTILE without ORDER BY in OVER | warning | error | warning | warning |
+| FIRST_VALUE / LAST_VALUE without ORDER BY in OVER | allowed | error | allowed | allowed |
+| Window frame without ORDER BY in OVER | warning | error | warning | warning |
+| Parameter placeholders | `:name`, or `?` if unnamed | `@name`, or `@p1`, `@p2`, … | `$1`, `$2`, … (names ignored, tip shown) | `?` (names ignored, tip shown) |
+| Upsert | not available | not available (`MERGE` isn't generated) | `ON CONFLICT (…) DO NOTHING` / `DO UPDATE SET …`, inserted value `EXCLUDED.col` | `ON DUPLICATE KEY UPDATE …`, inserted value `VALUES(col)` (tip: deprecated from 8.0.20) |
+| ORDER BY in a subquery or CTE | tip | error unless TOP or OFFSET is set | tip | tip |
+| LIMIT in an `IN (subquery)` | ✓ | ✓ (`TOP`) | ✓ | error |
+| SELECT alias in HAVING | warning | warning | warning | accepted |
 
-Not dialect-aware (yet): date/time functions, `RETURNING`/`OUTPUT`, `MERGE`. Expressions you type are passed through unchanged.
+Everything else (joins, WHERE, GROUP BY, CTEs, CASE, INSERT … SELECT, UPDATE, DELETE, the other window functions and frames) is written the same way in every dialect.
+
+Not built for any dialect yet: `RETURNING` / `OUTPUT`, `MERGE` and recursive CTEs. Functions and data types you type (date/time functions, casts, …) are not translated between dialects: expressions are passed through unchanged, and the only check on them is the `TRUE` / `FALSE` warning on SQL Server. The app never connects to a database, so it can't check a specific server version or schema.
 
 ## Example
 
@@ -136,6 +156,8 @@ A single column stays on the `SELECT` line (`SELECT * FROM …`); two or more ar
 |---|---|
 | `Ctrl`/`⌘` + `Enter` | Generate SQL (and add it to history) |
 | `Ctrl`/`⌘` + `Shift` + `C` | Copy SQL. Some browsers reserve this shortcut for their developer tools; the Copy button always works. |
+| `Ctrl`/`⌘` + `S` | Save the query (updates the template it was loaded from, or asks for a name) |
+| `Ctrl`/`⌘` + `K` | Command palette: type to find any command (also File → Commands…) |
 | `Ctrl`/`⌘` + `Z` | Undo, when focus is not in a text field (text fields keep the browser's own undo) |
 | `Ctrl`/`⌘` + `Shift` + `Z` (or `Ctrl` + `Y`) | Redo, outside text fields |
 | `?` | Show shortcuts |
@@ -186,8 +208,9 @@ Source is plain ES modules in `src/`. The committed `dist/sqlbuilder.js` is what
 src/
 ├── model.js          Query model: plain JSON objects + factories + path helpers
 ├── generator.js      model → SQL (formatted or one line), no string post-processing
-├── dialects.js       Everything dialect-specific (quoting, booleans, pagination, FULL JOIN)
+├── dialects.js       Every dialect difference: writing rules plus supports/restrictions flags
 ├── validation.js     model → issues { level, category, message, path }
+├── structure.js      model → the query's steps in processing order, with explanations
 ├── sql-utils.js      Quote/paren-aware splitting and balance checks (not a SQL parser)
 ├── tokenizer.js      Highlighting tokens (no HTML)
 ├── serialization.js  JSON import/export; rebuilds untrusted input field by field
@@ -202,6 +225,7 @@ src/
     ├── output.js     SQL view with tokens and line numbers
     ├── library.js    History / Templates / Examples lists
     ├── dialogs.js    Native <dialog> helpers
+    ├── palette.js    Command palette (filtering + combobox dialog)
     ├── theme.js, shortcuts.js, dom.js (safe element builder)
 ```
 
@@ -274,7 +298,7 @@ Fabric_Sync/                                      ← unrelated Power BI content
 - CTEs are only allowed on the main query, and recursive CTEs aren't supported.
 - INSERT values are SQL expressions: write text in quotes. A warning flags likely unquoted text.
 - GROUP BY checking is a heuristic: it compares expressions textually and can't know about functional dependencies.
-- Dialect support covers only the differences listed above.
+- Dialect support covers only the differences listed in [SQL dialects](#sql-dialects).
 - Reserved-word warnings use a short curated list, not each database's full keyword list.
 - Upserts cover PostgreSQL and MySQL only; SQL Server `MERGE` is not generated.
 - MySQL's backslash handling inside `LIKE` patterns is not special-cased.

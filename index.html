@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=02c6d86a96df">
+    <link rel="stylesheet" href="style.css?v=3f839b5d77f0">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -27,9 +27,12 @@
                 <details class="menu" id="file-menu">
                     <summary class="btn btn-ghost">File</summary>
                     <div class="menu-panel">
+                        <button type="button" class="menu-item" data-command="palette" aria-keyshortcuts="Control+K Meta+K">Commands…</button>
                         <button type="button" class="menu-item" data-command="export-query">Export query (.json)</button>
                         <button type="button" class="menu-item" data-command="import-query">Import query (.json)…</button>
                         <button type="button" class="menu-item" data-command="download-sql">Download SQL (.sql)</button>
+                        <button type="button" class="menu-item" data-command="export-backup">Back up everything (.json)</button>
+                        <button type="button" class="menu-item" data-command="import-backup">Restore from backup…</button>
                     </div>
                 </details>
                 <button type="button" class="btn btn-ghost" id="theme-btn">Theme</button>
@@ -62,7 +65,14 @@
             <div class="side">
                 <section class="panel output-panel" id="output-panel" tabindex="-1" aria-labelledby="output-heading">
                     <div class="panel-header">
-                        <h2 id="output-heading">SQL <span class="dialect-badge" id="dialect-badge"></span></h2>
+                        <div class="panel-title">
+                            <h2 id="output-heading">SQL</h2>
+                            <label class="dialect-picker">
+                                <span class="dialect-picker-label">Dialect</span>
+                                <select id="dialect-select" class="dialect-select" aria-describedby="dialect-picker-note"></select>
+                            </label>
+                            <span class="visually-hidden" id="dialect-picker-note">Changes the SQL that is generated and the checks. Your query is kept.</span>
+                        </div>
                         <div class="output-actions">
                             <div class="segmented" role="group" aria-label="SQL layout">
                                 <button type="button" class="segment" data-output-mode="formatted" aria-pressed="true">Formatted</button>
@@ -76,9 +86,18 @@
                         </div>
                     </div>
 
+                    <div class="query-name-bar">
+                        <p class="query-name" id="query-name"></p>
+                        <button type="button" class="btn btn-secondary btn-sm" id="save-btn" aria-keyshortcuts="Control+S Meta+S">Save…</button>
+                    </div>
                     <div id="output-state" class="output-state" aria-live="polite"></div>
                     <pre id="sql-output" class="sql-output" tabindex="0" aria-label="Generated SQL" aria-describedby="output-state"><code id="sql-code"></code></pre>
-                    <p class="complexity" id="complexity"></p>
+                    <details class="structure" id="structure" hidden>
+                        <summary class="structure-summary"><span class="structure-title">Query structure</span> <span class="complexity" id="complexity"></span></summary>
+                        <p class="structure-intro">The order a database works through this query, which differs from the order it is written. Select a step to edit it.</p>
+                        <ol class="structure-steps" id="structure-steps"></ol>
+                        <p class="structure-notes" id="structure-notes"></p>
+                    </details>
 
                     <div class="issues" aria-labelledby="issues-heading">
                         <h3 id="issues-heading" class="issues-heading">Checks <span id="issues-summary" class="issues-summary" aria-live="polite"></span></h3>
@@ -113,10 +132,35 @@
                             <button type="button" class="btn btn-ghost btn-sm" id="template-import-btn">Import…</button>
                             <button type="button" class="btn btn-ghost btn-sm" id="template-export-btn">Export all</button>
                         </div>
+                        <div class="library-toolbar library-toolbar-filters">
+                            <label class="visually-hidden" for="template-search">Search templates</label>
+                            <input type="search" id="template-search" class="input" placeholder="Search templates…" autocomplete="off">
+                            <label class="library-filter">
+                                <span>Dialect</span>
+                                <select id="template-filter" class="select select-sm"></select>
+                            </label>
+                            <label class="library-filter library-sort">
+                                <span>Sort</span>
+                                <select id="template-sort" class="select select-sm">
+                                    <option value="name">Name</option>
+                                    <option value="recent">Recently updated</option>
+                                </select>
+                            </label>
+                        </div>
                         <ul class="library-list" id="template-list"></ul>
                     </div>
 
                     <div role="tabpanel" id="panel-examples" aria-labelledby="tab-examples" class="tab-panel" hidden>
+                        <div class="library-toolbar library-toolbar-filters">
+                            <label class="library-filter">
+                                <span>Examples for</span>
+                                <select id="example-filter" class="select select-sm"></select>
+                            </label>
+                            <label class="library-filter">
+                                <span>Topic</span>
+                                <select id="example-topic" class="select select-sm"></select>
+                            </label>
+                        </div>
                         <ul class="library-list" id="example-list"></ul>
                     </div>
                 </section>
@@ -189,6 +233,46 @@
         </form>
     </dialog>
 
+    <dialog id="template-dialog" class="dialog dialog-sm" aria-labelledby="template-dialog-title">
+        <form method="dialog" class="dialog-body">
+            <h2 id="template-dialog-title" class="dialog-title">Save as template</h2>
+            <div class="field">
+                <label class="field-label" for="template-name">Name</label>
+                <input type="text" id="template-name" class="input" maxlength="80" autocomplete="off" required>
+            </div>
+            <div class="field">
+                <label class="field-label" for="template-description">Description <span class="field-optional">(optional)</span></label>
+                <input type="text" id="template-description" class="input" maxlength="200" autocomplete="off">
+            </div>
+            <div class="field">
+                <label class="field-label" for="template-category">Category <span class="field-optional">(optional)</span></label>
+                <input type="text" id="template-category" class="input" maxlength="40" autocomplete="off" list="template-categories" placeholder="e.g. Reports">
+                <datalist id="template-categories"></datalist>
+            </div>
+            <p class="field-hint" id="template-dialect-note"></p>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary" value="confirm">Save</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="backup-dialog" class="dialog dialog-sm" aria-labelledby="backup-title" aria-describedby="backup-summary">
+        <form method="dialog" class="dialog-body">
+            <h2 id="backup-title" class="dialog-title">Restore from backup</h2>
+            <p id="backup-summary" class="dialog-message"></p>
+            <fieldset class="fieldset">
+                <legend>How to restore</legend>
+                <label class="check check-block"><input type="radio" name="backup-mode" value="merge" checked> <span><strong>Merge</strong> (recommended): add the templates and history that aren't here yet. Your settings stay as they are.</span></label>
+                <label class="check check-block"><input type="radio" name="backup-mode" value="replace"> <span><strong>Replace</strong>: delete your current templates and history, then use the backup's, including its settings.</span></label>
+            </fieldset>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary" value="confirm">Restore</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="confirm-dialog" class="dialog dialog-sm" aria-labelledby="confirm-title" aria-describedby="confirm-message">
         <form method="dialog" class="dialog-body">
             <h2 id="confirm-title" class="dialog-title">Are you sure?</h2>
@@ -214,7 +298,17 @@
         </form>
     </dialog>
 
+    <dialog id="palette-dialog" class="dialog palette" aria-labelledby="palette-title">
+        <div class="dialog-body palette-body">
+            <h2 id="palette-title" class="visually-hidden">Commands</h2>
+            <input type="text" id="palette-input" class="input" role="combobox" aria-label="Search commands" aria-controls="palette-list" aria-expanded="true" aria-autocomplete="list" placeholder="Type a command…" autocomplete="off" spellcheck="false">
+            <ul id="palette-list" class="palette-list" role="listbox" aria-label="Commands"></ul>
+            <p class="palette-empty" hidden>No commands match.</p>
+            <p class="field-hint palette-hint"><kbd>↑</kbd> <kbd>↓</kbd> to move, <kbd>Enter</kbd> to run, <kbd>Esc</kbd> to close</p>
+        </div>
+    </dialog>
+
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=4507ca0aa514" defer></script>
+    <script src="dist/sqlbuilder.js?v=8f9e8df709e8" defer></script>
 </body>
 </html>

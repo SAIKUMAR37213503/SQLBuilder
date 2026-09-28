@@ -1,4 +1,4 @@
-// Import / export of queries and templates as JSON.
+// Import / export of queries, templates and full backups as JSON.
 //
 // Imported files are untrusted. They are parsed with JSON.parse (never
 // evaluated) and every value is rebuilt field-by-field into a fresh model:
@@ -11,9 +11,16 @@ import {
     UPSERT_VALUE_TYPES, INSERT_SOURCES, UPSERT_MODES, createWorkspace, createSelect, createUpsert
 } from './model.js';
 import { MAX_NESTING_DEPTH } from './validation.js';
+import { sanitizeSettings } from './settings.js';
+import { DIALECTS } from './dialects.js';
 
 export const APP_ID = 'sql-query-builder-pro-lite';
 export const MAX_IMPORT_BYTES = 1024 * 1024;
+// A backup holds up to 200 templates and 50 history entries
+export const MAX_BACKUP_BYTES = 8 * 1024 * 1024;
+export const BACKUP_FORMAT = 'sql-builder-backup';
+export const BACKUP_VERSION = 1;
+const MAX_HISTORY_SQL = 100 * 1024;
 const MAX_STRING = 10000;
 const MAX_LIST = 200;
 const MAX_DEPTH = MAX_NESTING_DEPTH + 1;
@@ -262,9 +269,9 @@ export function normalizeWorkspace(data) {
 // Files
 // ---------------------------------------------------------------------------
 
-function parseJson(text) {
+function parseJson(text, maxBytes = MAX_IMPORT_BYTES) {
     if (typeof text !== 'string') throw new ImportError('The file could not be read as text.');
-    if (text.length > MAX_IMPORT_BYTES) throw new ImportError('The file is too large (limit 1 MB).');
+    if (text.length > maxBytes) throw new ImportError(`The file is too large (limit ${maxBytes / 1024 / 1024} MB).`);
     try {
         return JSON.parse(text);
     } catch {
@@ -283,6 +290,9 @@ export function parseQueryFile(text) {
         if (isObject(data) && data.kind === 'templates') {
             throw new ImportError('This is a templates file. Import it from the Templates panel.');
         }
+        if (isObject(data) && data.kind === 'backup') {
+            throw new ImportError('This is a full backup. Use File, Restore from backup.');
+        }
         const payload = isObject(data) && data.app === APP_ID && data.kind === 'query' ? data.query : data;
         const dialect = isObject(data) && typeof data.dialect === 'string' ? data.dialect : undefined;
         return { ok: true, workspace: normalizeWorkspace(payload), ...(dialect ? { dialect } : {}) };
@@ -291,37 +301,131 @@ export function parseQueryFile(text) {
     }
 }
 
+const exportTemplate = ({ name, dialect, description, category, pinned, workspace, createdAt, updatedAt }) => ({
+    name,
+    ...(dialect ? { dialect } : {}),
+    ...(description ? { description } : {}),
+    ...(category ? { category } : {}),
+    ...(pinned ? { pinned: true } : {}),
+    workspace, createdAt, updatedAt
+});
+
 export function createTemplatesExport(templates) {
     return {
         app: APP_ID,
         kind: 'templates',
         version: MODEL_VERSION,
         exportedAt: new Date().toISOString(),
-        templates: templates.map(({ name, dialect, workspace, createdAt, updatedAt }) => ({ name, ...(dialect ? { dialect } : {}), workspace, createdAt, updatedAt }))
+        templates: templates.map(exportTemplate)
     };
 }
 
-/** @returns {{ ok: true, templates: { name: string, dialect?: string, workspace: any }[] } | { ok: false, error: string }} */
+const time = (value) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined);
+
+function readTemplate(t, i, { withDates = false } = {}) {
+    if (!isObject(t)) throw new ImportError(`Template ${i + 1} is not an object.`);
+    const name = str(t, 'name', `templates[${i}]`).trim().slice(0, 80);
+    if (!name) throw new ImportError(`Template ${i + 1} has no name.`);
+    // Unknown dialects, and over-long descriptions / categories, are cleaned by the template store
+    const optional = (key) => (typeof t[key] === 'string' && t[key].trim() ? { [key]: t[key] } : {});
+    const dates = withDates
+        ? { ...(time(t.createdAt) ? { createdAt: t.createdAt } : {}), ...(time(t.updatedAt) ? { updatedAt: t.updatedAt } : {}) }
+        : {};
+    try {
+        return {
+            name, ...optional('dialect'), ...optional('description'), ...optional('category'),
+            ...(t.pinned === true ? { pinned: true } : {}),
+            ...dates,
+            workspace: normalizeWorkspace(t.workspace)
+        };
+    } catch (error) {
+        throw new ImportError(`Template “${name}”: ${describeError(error)}`);
+    }
+}
+
+/** @returns {{ ok: true, templates: { name: string, dialect?: string, description?: string, category?: string, pinned?: boolean, workspace: any }[] } | { ok: false, error: string }} */
 export function parseTemplatesFile(text) {
     try {
         const data = parseJson(text);
+        if (isObject(data) && data.kind === 'backup') {
+            throw new ImportError('This is a full backup. Use File, Restore from backup.');
+        }
         if (!isObject(data) || data.kind !== 'templates' || !Array.isArray(data.templates)) {
             throw new ImportError("This isn't a templates file exported from SQL Query Builder.");
         }
         if (data.templates.length > MAX_LIST) throw new ImportError('The file contains too many templates.');
-        const templates = data.templates.map((t, i) => {
-            if (!isObject(t)) throw new ImportError(`Template ${i + 1} is not an object.`);
-            const name = str(t, 'name', `templates[${i}]`).trim().slice(0, 80);
-            if (!name) throw new ImportError(`Template ${i + 1} has no name.`);
-            // Unknown dialects are dropped by the template store
-            const dialect = typeof t.dialect === 'string' ? t.dialect : undefined;
-            try {
-                return { name, ...(dialect ? { dialect } : {}), workspace: normalizeWorkspace(t.workspace) };
-            } catch (error) {
-                throw new ImportError(`Template “${name}”: ${describeError(error)}`);
-            }
-        });
-        return { ok: true, templates };
+        return { ok: true, templates: data.templates.map((t, i) => readTemplate(t, i)) };
+    } catch (error) {
+        return { ok: false, error: describeError(error) };
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Full backup: templates, history and settings in one file
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {{ templates: any[], history: any[], settings: any }} data
+ */
+export function createBackup({ templates, history, settings }) {
+    return {
+        app: APP_ID,
+        kind: 'backup',
+        format: BACKUP_FORMAT,
+        version: BACKUP_VERSION,
+        modelVersion: MODEL_VERSION,
+        exportedAt: new Date().toISOString(),
+        settings: sanitizeSettings(settings),
+        templates: templates.map(exportTemplate),
+        history: history.map(({ timestamp, type, dialect, sql, workspace }) => ({ timestamp, type, dialect, sql, workspace }))
+    };
+}
+
+function readHistoryEntry(e, i) {
+    const where = `history[${i}]`;
+    if (!isObject(e)) throw new ImportError(`History entry ${i + 1} is not an object.`);
+    if (typeof e.sql !== 'string' || !e.sql.trim()) throw new ImportError(`History entry ${i + 1} has no SQL.`);
+    if (e.sql.length > MAX_HISTORY_SQL) throw new ImportError(`History entry ${i + 1} is too long.`);
+    try {
+        const workspace = normalizeWorkspace(e.workspace);
+        return {
+            timestamp: time(e.timestamp) || 0,
+            type: workspace.type,
+            dialect: typeof e.dialect === 'string' && Object.hasOwn(DIALECTS, e.dialect) ? e.dialect : 'generic',
+            sql: e.sql,
+            workspace
+        };
+    } catch (error) {
+        throw new ImportError(`${where}: ${describeError(error)}`);
+    }
+}
+
+/**
+ * Validates a backup file field by field. Nothing is stored here.
+ * @returns {{ ok: true, exportedAt: string, settings: any, templates: any[], history: any[] } | { ok: false, error: string }}
+ */
+export function parseBackupFile(text) {
+    try {
+        const data = parseJson(text, MAX_BACKUP_BYTES);
+        if (isObject(data) && data.kind === 'templates') throw new ImportError('This is a templates file. Import it from the Templates panel.');
+        if (!isObject(data) || data.kind !== 'backup' || data.format !== BACKUP_FORMAT) {
+            throw new ImportError("This isn't a backup file from SQL Query Builder.");
+        }
+        if (typeof data.version !== 'number' || data.version > BACKUP_VERSION) {
+            throw new ImportError('This backup was made by a newer version of the app. Update the app, then try again.');
+        }
+        const templates = data.templates === undefined ? [] : data.templates;
+        const history = data.history === undefined ? [] : data.history;
+        if (!Array.isArray(templates) || !Array.isArray(history)) throw new ImportError('The backup is damaged: templates and history must be lists.');
+        if (templates.length > MAX_LIST) throw new ImportError('The backup contains too many templates.');
+        if (history.length > MAX_LIST) throw new ImportError('The backup contains too many history entries.');
+        return {
+            ok: true,
+            exportedAt: typeof data.exportedAt === 'string' ? data.exportedAt.slice(0, 40) : '',
+            settings: sanitizeSettings(data.settings),
+            templates: templates.map((t, i) => readTemplate(t, i, { withDates: true })),
+            history: history.map(readHistoryEntry)
+        };
     } catch (error) {
         return { ok: false, error: describeError(error) };
     }

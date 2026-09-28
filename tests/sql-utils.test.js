@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
     splitTopLevel, findSyntaxProblem, countColumns, containsAggregateCall, normalizeExpr,
-    isIdentifier, isQualifiedName, isColumnReference
+    isIdentifier, isQualifiedName, isColumnReference, findBareWord
 } from '../src/sql-utils.js';
 import { tokenize } from '../src/tokenizer.js';
 
@@ -138,5 +138,14 @@ describe('tokenize: new syntax', () => {
         expect(types('INSERT INTO t (a) VALUES (LOWER(x))')).toEqual([
             'keyword:INSERT INTO', 'punct:(', 'punct:)', 'keyword:VALUES', 'punct:(', 'func:LOWER', 'punct:(', 'punct:)', 'punct:)'
         ]);
+    });
+});
+
+describe('findBareWord', () => {
+    test('finds words outside quotes and quoted identifiers, in any case', () => {
+        expect(findBareWord('is_active = false', ['TRUE', 'FALSE'])).toBe('false');
+        expect(findBareWord('COALESCE(flag, TRUE)', ['TRUE', 'FALSE'])).toBe('TRUE');
+        expect(findBareWord("status = 'true' AND [false] = 1 AND \"true\" = `false`", ['TRUE', 'FALSE'])).toBe('');
+        expect(findBareWord('untrue_flag = 1', ['TRUE'])).toBe('');
     });
 });

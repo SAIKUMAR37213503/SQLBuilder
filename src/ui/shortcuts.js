@@ -6,6 +6,8 @@ import { isTextEntry } from './dom.js';
 export const SHORTCUTS = [
     { keys: ['Mod', 'Enter'], description: 'Generate SQL (and save it to history)' },
     { keys: ['Mod', 'Shift', 'C'], description: 'Copy SQL' },
+    { keys: ['Mod', 'S'], description: 'Save the query (updates the template it was loaded from)' },
+    { keys: ['Mod', 'K'], description: 'Open the command palette' },
     { keys: ['Mod', 'Z'], description: 'Undo (outside text fields)' },
     { keys: ['Mod', 'Shift', 'Z'], description: 'Redo (outside text fields)' },
     { keys: ['?'], description: 'Show keyboard shortcuts' },
@@ -23,7 +25,7 @@ export function modLabel() {
 /**
  * @param {EventTarget} target
  * @param {AbortSignal} signal removes the listener when aborted
- * @param {{ generate: () => void, copy: () => void, undo: () => void, redo: () => void, help: () => void, escape: () => void }} handlers
+ * @param {{ generate: () => void, copy: () => void, save: () => void, palette: () => void, undo: () => void, redo: () => void, help: () => void, escape: () => void }} handlers
  */
 export function bindShortcuts(target, signal, handlers) {
     target.addEventListener('keydown', (/** @type {any} */ event) => {
@@ -36,6 +38,13 @@ export function bindShortcuts(target, signal, handlers) {
         } else if (mod && event.shiftKey && key === 'c') {
             event.preventDefault();
             handlers.copy();
+        } else if (mod && !event.shiftKey && !event.altKey && key === 's') {
+            // Replaces the browser's "Save page", which has no use here
+            event.preventDefault();
+            handlers.save();
+        } else if (mod && !event.shiftKey && !event.altKey && key === 'k') {
+            event.preventDefault();
+            handlers.palette();
         } else if (mod && !event.altKey && (key === 'z' || key === 'y')) {
             if (isTextEntry(event.target)) return; // native text undo
             const redo = key === 'y' || event.shiftKey;

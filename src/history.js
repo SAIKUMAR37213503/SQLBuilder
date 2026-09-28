@@ -66,6 +66,36 @@ export function createHistory(storage, { limit = HISTORY_LIMIT, now = () => Date
 
         get: (id) => entries.find(e => e.id === id) || null,
 
+        /**
+         * Restores entries from a backup (already validated). Merge adds the
+         * ones that aren't here yet; replace swaps the list. Newest first,
+         * up to the history limit.
+         * @param {any[]} items
+         * @param {{ replace?: boolean }} [options]
+         * @returns {{ added: number, skipped: number, dropped: number }}
+         */
+        restore(items, { replace = false } = {}) {
+            const key = (e) => `${e.timestamp}|${e.dialect}|${e.sql}`;
+            const base = replace ? [] : entries;
+            const seen = new Set(base.map(key));
+            const fresh = [];
+            let skipped = 0;
+            for (const item of items) {
+                if (seen.has(key(item))) {
+                    skipped++;
+                    continue;
+                }
+                seen.add(key(item));
+                fresh.push({ id: createId(), timestamp: item.timestamp, type: item.type, dialect: item.dialect, sql: item.sql, workspace: structuredClone(item.workspace) });
+            }
+            const combined = [...base, ...fresh].sort((a, b) => b.timestamp - a.timestamp);
+            entries = combined.slice(0, limit);
+            if (entries.length) persist(); // may keep fewer when storage is nearly full
+            else storage.remove(HISTORY_KEY);
+            const keptIds = new Set(entries.map(e => e.id));
+            return { added: fresh.filter(e => keptIds.has(e.id)).length, skipped, dropped: combined.length - entries.length };
+        },
+
         remove(id) {
             entries = entries.filter(e => e.id !== id);
             persist();

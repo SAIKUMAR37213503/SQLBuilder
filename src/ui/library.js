@@ -3,6 +3,7 @@
 
 import { h, formatTime } from './dom.js';
 import { getDialect } from '../dialects.js';
+import { EXAMPLE_LEVELS } from '../examples.js';
 
 /**
  * @param {string} text
@@ -46,20 +47,37 @@ export function renderHistoryList(list, entries, { enabled, filtered }) {
     }));
 }
 
-export function renderTemplateList(list, templates) {
+/**
+ * @param {any} list
+ * @param {any[]} templates the templates to show (already filtered and sorted)
+ * @param {{ total?: number, filterLabel?: string, query?: string, currentId?: string | null }} [options]
+ *   total saved, the dialect filter's label ('' = all), the search text, and
+ *   the template being edited
+ */
+export function renderTemplateList(list, templates, { total = templates.length, filterLabel = '', query = '', currentId = null } = {}) {
     if (templates.length === 0) {
-        list.replaceChildren(h('li', { class: 'empty-state' }, 'No saved templates yet. Build a query, then choose “Save current query”.'));
+        let message = 'No saved templates yet. Build a query, then choose “Save current query”.';
+        if (total > 0 && query) message = `No templates match “${query}”${filterLabel ? ` for ${filterLabel}` : ''}.`;
+        else if (total > 0 && filterLabel) message = `No templates for ${filterLabel}. Choose “All dialects” to see all ${total}.`;
+        list.replaceChildren(h('li', { class: 'empty-state' }, message));
         return;
     }
-    list.replaceChildren(...templates.map(t => h('li', { class: 'library-item' },
+    list.replaceChildren(...templates.map(t => h('li', { class: `library-item${t.pinned ? ' pinned' : ''}` },
         h('div', { class: 'library-meta' },
             h('span', { class: `type-badge type-${t.workspace.type}` }, t.workspace.type.toUpperCase()),
             h('strong', { class: 'library-name' }, t.name),
-            t.dialect ? h('span', {}, getDialect(t.dialect).label) : null
+            t.pinned ? h('span', { class: 'library-chip library-pin' }, 'Pinned') : null,
+            t.id === currentId ? h('span', { class: 'library-chip library-current' }, 'Editing') : null,
+            h('span', {}, t.dialect ? getDialect(t.dialect).label : 'Any dialect'),
+            t.category ? h('span', { class: 'library-chip' }, t.category) : null
         ),
+        t.description ? h('p', { class: 'library-detail' }, t.description) : null,
         h('p', { class: 'library-detail' }, `Updated ${formatTime(t.updatedAt)}`),
         h('div', { class: 'library-actions' },
             action('Load', 'template-load', t.id, { label: `Load template ${t.name}`, variant: 'secondary' }),
+            t.pinned
+                ? action('Unpin', 'template-unpin', t.id, { label: `Unpin template ${t.name}` })
+                : action('Pin', 'template-pin', t.id, { label: `Pin template ${t.name} to the top` }),
             action('Rename', 'template-rename', t.id, { label: `Rename template ${t.name}` }),
             action('Duplicate', 'template-duplicate', t.id, { label: `Duplicate template ${t.name}` }),
             action('Delete', 'template-delete', t.id, { label: `Delete template ${t.name}`, variant: 'danger-ghost' })
@@ -67,15 +85,30 @@ export function renderTemplateList(list, templates) {
     )));
 }
 
-export function renderExampleList(list, examples) {
+/**
+ * @param {any} list
+ * @param {any[]} examples the examples to show (already filtered by dialect and topic)
+ * @param {(workspace: any) => string} preview generated SQL for a workspace in the shown dialect
+ */
+export function renderExampleList(list, examples, preview) {
+    if (examples.length === 0) {
+        list.replaceChildren(h('li', { class: 'empty-state' }, 'No examples on this topic for this dialect. Choose “All topics” to see the rest.'));
+        return;
+    }
     list.replaceChildren(...examples.map(example => {
-        const type = example.build().type;
+        const workspace = example.build();
+        const type = workspace.type;
+        const sql = preview(workspace);
         return h('li', { class: 'library-item' },
             h('div', { class: 'library-meta' },
                 h('span', { class: `type-badge type-${type}` }, type.toUpperCase()),
-                h('strong', { class: 'library-name' }, example.name)
+                h('strong', { class: 'library-name' }, example.name),
+                h('span', { class: `library-chip level-${example.level}` }, EXAMPLE_LEVELS[example.level]),
+                h('span', {}, example.topic)
             ),
             h('p', { class: 'library-detail' }, example.description),
+            // One-line SQL, clamped to a few lines by CSS
+            sql ? h('pre', { class: 'library-snippet example-sql' }, sql) : null,
             h('div', { class: 'library-actions' },
                 action('Load example', 'example-load', example.id, { label: `Load example: ${example.name}`, variant: 'secondary' }))
         );

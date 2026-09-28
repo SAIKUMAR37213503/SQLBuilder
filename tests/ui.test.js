@@ -51,6 +51,11 @@ function press(key, options = {}, target = document) {
 }
 
 const settle = () => vi.advanceTimersByTimeAsync(1000);
+function pickDialect(id) {
+    const picker = $('#dialect-select');
+    picker.value = id;
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+}
 const sql = () => $$('#sql-code .line').map(line => line.textContent.replace(/\n$/, '')).join('\n');
 const issues = () => $$('#issues-list .issue-message').map(n => n.textContent);
 const toast = () => $('#toast').textContent;
@@ -66,6 +71,17 @@ async function answerPrompt(value) {
     const dialog = $('#prompt-dialog');
     expect(dialog.hasAttribute('open')).toBe(true);
     $('#prompt-input').value = value;
+    dialog.querySelector('[value="confirm"]').click();
+    await settle();
+}
+
+async function answerTemplate(name, { description = '', category = '' } = {}) {
+    await settle();
+    const dialog = $('#template-dialog');
+    expect(dialog.hasAttribute('open')).toBe(true);
+    $('#template-name').value = name;
+    $('#template-description').value = description;
+    $('#template-category').value = category;
     dialog.querySelector('[value="confirm"]').click();
     await settle();
 }
@@ -574,7 +590,7 @@ describe('templates', () => {
     test('save, rename, duplicate, load, delete', async () => {
         await fillSimpleSelect('customers');
         $('#template-save-btn').click();
-        await answerPrompt('My customers');
+        await answerTemplate('My customers');
         expect($('#tab-templates').getAttribute('aria-selected')).toBe('true');
         expect($('#template-list').textContent).toContain('My customers');
 
@@ -600,7 +616,7 @@ describe('templates', () => {
         await fillSimpleSelect('customers');
         app.state.settings.dialect = 'postgresql';
         $('#template-save-btn').click();
-        await answerPrompt('Pg customers');
+        await answerTemplate('Pg customers');
         expect(app.templates.list()[0].dialect).toBe('postgresql');
         expect($('#template-list').textContent).toContain('PostgreSQL');
 
@@ -615,7 +631,7 @@ describe('templates', () => {
         await fillSimpleSelect();
         $('#template-save-btn').click();
         await settle();
-        $('#prompt-dialog [value="cancel"]').click();
+        $('#template-dialog [value="cancel"]').click();
         await settle();
         expect(app.templates.list()).toHaveLength(0);
     });
@@ -623,7 +639,7 @@ describe('templates', () => {
     test('export and import templates; malformed files are rejected', async () => {
         await fillSimpleSelect('customers');
         $('#template-save-btn').click();
-        await answerPrompt('Customers');
+        await answerTemplate('Customers');
 
         let exported = null;
         vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => { exported = blob; return 'blob:x'; });
@@ -644,6 +660,150 @@ describe('templates', () => {
     });
 });
 
+describe('full backup', () => {
+    async function exportBackup() {
+        let exported = null;
+        vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => { exported = blob; return 'blob:x'; });
+        vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        $('[data-command="export-backup"]').click();
+        await settle();
+        return exported.text();
+    }
+    async function restore(text, mode) {
+        $('[data-command="import-backup"]').click();
+        const input = $('#file-input');
+        Object.defineProperty(input, 'files', { value: [new File([text], 'backup.json', { type: 'application/json' })], configurable: true });
+        input.dispatchEvent(new Event('change'));
+        await settle();
+        const dialog = $('#backup-dialog');
+        expect(dialog.hasAttribute('open')).toBe(true);
+        if (!mode) {
+            dialog.querySelector('[value="cancel"]').click();
+        } else {
+            dialog.querySelector(`input[value="${mode}"]`).checked = true;
+            dialog.querySelector('[value="confirm"]').click();
+        }
+        await settle();
+    }
+    async function seed() {
+        await fillSimpleSelect('orders');
+        $('#generate-btn').click();
+        $('#template-save-btn').click();
+        await answerTemplate('Orders');
+    }
+
+    test('back up, then merge into another browser: adds what is missing and keeps settings', async () => {
+        await seed();
+        pickDialect('postgresql');
+        const text = await exportBackup();
+        expect(toast()).toBe('Backed up 1 template, 1 history entry and your settings.');
+        const data = JSON.parse(text);
+        expect(data).toMatchObject({ kind: 'backup', format: 'sql-builder-backup', version: 1 });
+        expect(data.settings.dialect).toBe('postgresql');
+
+        boot();
+        await restore(text, 'merge');
+        expect($('#backup-summary').textContent).toMatch(/^This backup from .+ has 1 template, 1 history entry and settings\./);
+        expect(app.templates.list().map(t => t.name)).toEqual(['Orders']);
+        expect($$('#history-list .library-item')).toHaveLength(1);
+        expect($('#dialect-select').value).toBe('generic');
+        expect(toast()).toBe('Backup restored: 1 template added, 1 history entry added. Your settings were kept.');
+
+        // Merging the same file again adds nothing
+        await restore(text, 'merge');
+        expect(toast()).toBe('Backup restored: 0 templates added (1 already here), 0 history entries added (1 already here). Your settings were kept.');
+        expect(app.templates.list()).toHaveLength(1);
+    });
+
+    test('replace asks first, then swaps templates, history and settings', async () => {
+        await seed();
+        const text = await exportBackup();
+        $('#template-save-btn').click();
+        await answerTemplate('Local only');
+        pickDialect('mysql');
+
+        await restore(text, 'replace');
+        const confirm = $('#confirm-dialog');
+        expect(confirm.hasAttribute('open')).toBe(true);
+        expect(confirm.textContent).toContain('Your 2 templates and 1 history entry will be deleted');
+        confirm.querySelector('[value="cancel"]').click();
+        await settle();
+        expect(app.templates.list()).toHaveLength(2);
+
+        await restore(text, 'replace');
+        await answerConfirm(true);
+        expect(app.templates.list().map(t => t.name)).toEqual(['Orders']);
+        expect($('#dialect-select').value).toBe('generic');
+        expect(toast()).toContain('Settings restored from the backup.');
+        // The loaded template no longer exists, so the query is unsaved again
+        expect($('#query-name').textContent).toBe('Unsaved query');
+    });
+
+    test('integrity: merging into the same browser adds nothing, and replace then back up gives the same data', async () => {
+        // A query built through the editor, not from a factory
+        await fillSimpleSelect('orders', 'id');
+        add('select.where.items', 'condition');
+        type('select.where.items.0.left', 'status');
+        type('select.where.items.0.value', 'paid');
+        await settle();
+        $('#generate-btn').click();
+        $('#template-save-btn').click();
+        await answerTemplate('Paid orders', { description: 'Only paid', category: 'Sales' });
+        $('[aria-label="Pin template Paid orders to the top"]').click();
+        type('select.from.table', 'refunds');
+        await settle();
+        $('#generate-btn').click();
+        await settle();
+        const first = JSON.parse(await exportBackup());
+        expect(first.templates).toHaveLength(1);
+        expect(first.history).toHaveLength(2);
+
+        await restore(JSON.stringify(first), 'merge');
+        expect(toast()).toBe('Backup restored: 0 templates added (1 already here), 0 history entries added (2 already here). Your settings were kept.');
+
+        await restore(JSON.stringify(first), 'replace');
+        await answerConfirm(true);
+        const second = JSON.parse(await exportBackup());
+        const strip = (b) => ({ ...b, exportedAt: '' });
+        expect(strip(second)).toEqual(strip(first));
+    });
+
+    test('replace removes the current history even when the backup has history turned off', async () => {
+        await seed();
+        const text = await exportBackup();
+        const data = JSON.parse(text);
+        data.settings.saveHistory = false;
+        await restore(JSON.stringify(data), 'replace');
+        await answerConfirm(true);
+        expect(app.history.list()).toEqual([]);
+        expect(toast()).toContain('history not restored because saving history is turned off');
+    });
+
+    test('cancelling or a bad file changes nothing; history stays off when turned off', async () => {
+        await seed();
+        const text = await exportBackup();
+        boot();
+        await restore(text, null);
+        expect(app.templates.list()).toEqual([]);
+
+        $('[data-command="import-backup"]').click();
+        await chooseFile('{"kind":"templates","templates":[]}');
+        expect(toast()).toBe('Restore failed: This is a templates file. Import it from the Templates panel.');
+        expect($('#backup-dialog').hasAttribute('open')).toBe(false);
+
+        $('#settings-btn').click();
+        const saveHistory = $('[data-setting="saveHistory"]');
+        saveHistory.checked = false;
+        saveHistory.dispatchEvent(new Event('change', { bubbles: true }));
+        $('#settings-dialog [value="close"]').click();
+        await settle();
+        await restore(text, 'merge');
+        expect(toast()).toBe('Backup restored: 1 template added, history not restored because saving history is turned off. Your settings were kept.');
+        expect($$('#history-list .library-item')).toHaveLength(0);
+    });
+});
+
 describe('query import / export', () => {
     test('export then import restores the query and dialect', async () => {
         await fillSimpleSelect('orders');
@@ -659,6 +819,23 @@ describe('query import / export', () => {
         await chooseFile(text);
         expect(field('select.from.table').value).toBe('orders');
         expect(toast()).toContain('Query imported');
+    });
+
+    test('importing a query saved for another dialect switches to it and says so', async () => {
+        pickDialect('mysql');
+        await fillSimpleSelect('orders');
+        let exported = null;
+        vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => { exported = blob; return 'blob:x'; });
+        vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        $('[data-command="export-query"]').click();
+        const text = await exported.text();
+
+        pickDialect('generic');
+        $('[data-command="import-query"]').click();
+        await chooseFile(text);
+        expect($('#dialect-select').value).toBe('mysql');
+        expect(toast()).toBe('Query imported (dialect switched to MySQL). Undo restores your previous query.');
     });
 
     test('malformed imports leave the workspace untouched', async () => {
@@ -686,7 +863,7 @@ describe('settings, theme, persistence', () => {
         quote.dispatchEvent(new Event('change', { bubbles: true }));
         await settle();
         expect(sql()).toBe('SELECT TOP 10 [name]\nFROM [users];');
-        expect($('#dialect-badge').textContent).toBe('SQL Server');
+        expect($('#dialect-select').value).toBe('sqlserver');
     });
 
     test('with live preview off, SQL appears only after Generate and goes stale', async () => {
@@ -742,7 +919,7 @@ describe('settings, theme, persistence', () => {
         await fillSimpleSelect();
         $('#generate-btn').click();
         $('#template-save-btn').click();
-        await answerPrompt('T');
+        await answerTemplate('T');
         $('#settings-btn').click();
         $('#clear-data-btn').click();
         await answerConfirm(true);
@@ -844,6 +1021,7 @@ describe('keyboard and accessibility', () => {
     });
 
     test('INSERT … SELECT and upsert controls have accessible names', async () => {
+        pickDialect('postgresql');
         const radio = $('input[name="query-type"][value="insert"]');
         radio.checked = true;
         radio.dispatchEvent(new Event('change', { bubbles: true }));
@@ -951,5 +1129,437 @@ describe('INTERSECT / EXCEPT and window functions in the UI', () => {
         await settle();
         expect(sql()).toContain('RANK() OVER (PARTITION BY department ORDER BY salary DESC) AS dept_rank');
         expect(sql()).toContain('SUM(salary) OVER (ORDER BY hired_on ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_payroll');
+    });
+});
+
+describe('saving the current query', () => {
+    const name = () => $('#query-name').textContent;
+    const saveKey = () => press('s', { ctrlKey: true });
+
+    test('Save names a new query once, then Ctrl+S updates it in place', async () => {
+        await fillSimpleSelect('orders');
+        expect(name()).toBe('Unsaved query');
+        expect($('#save-btn').textContent).toBe('Save…');
+        $('#save-btn').click();
+        await answerTemplate('Monthly revenue');
+        expect(name()).toBe('Monthly revenuesaved');
+        expect($('#save-btn').textContent).toBe('Save');
+
+        type('select.from.table', 'invoices');
+        await settle();
+        expect($('.query-name-state').textContent).toBe('unsaved changes');
+        const event = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true });
+        document.dispatchEvent(event);
+        await settle();
+        expect(event.defaultPrevented).toBe(true);
+        expect(toast()).toBe('Saved “Monthly revenue”.');
+        expect($('.query-name-state').textContent).toBe('saved');
+        expect($$('#template-list .library-item')).toHaveLength(1);
+        const stored = JSON.parse(backend.getItem(`${STORAGE_PREFIX}templates`));
+        expect(stored[0].workspace.select.from.table).toBe('invoices');
+    });
+
+    test('a changed dialect counts as an unsaved change', async () => {
+        await fillSimpleSelect('orders');
+        saveKey();
+        await answerTemplate('Orders');
+        pickDialect('mysql');
+        await settle();
+        expect($('.query-name-state').textContent).toBe('unsaved changes');
+        saveKey();
+        await settle();
+        expect(JSON.parse(backend.getItem(`${STORAGE_PREFIX}templates`))[0].dialect).toBe('mysql');
+    });
+
+    test('loading a template edits it; examples, history and imports start an unsaved query', async () => {
+        await fillSimpleSelect('orders');
+        saveKey();
+        await answerTemplate('Orders');
+        $('[data-action="example-load"][data-id="join-aggregate"]').click();
+        await settle();
+        expect(name()).toBe('Unsaved query');
+        $('#template-list [data-action="template-load"]').click();
+        await settle();
+        expect(name()).toBe('Orderssaved');
+        $('#reset-btn').click();
+        await settle();
+        expect(name()).toBe('Unsaved query');
+    });
+
+    test('the template being edited is remembered across a reload, and forgotten when deleted', async () => {
+        await fillSimpleSelect('orders');
+        saveKey();
+        await answerTemplate('Orders');
+        await settle();
+        boot(backend);
+        await settle();
+        expect(name()).toBe('Orderssaved');
+        $('#template-list [data-action="template-delete"]').click();
+        await answerConfirm();
+        expect(name()).toBe('Unsaved query');
+        saveKey();
+        await settle();
+        expect($('#template-dialog').hasAttribute('open')).toBe(true);
+    });
+
+    test('the shortcut is listed', () => {
+        expect($('#shortcut-rows').textContent).toContain('Save the query');
+    });
+});
+
+describe('command palette', () => {
+    const palette = () => $('#palette-dialog');
+    const options = () => $$('#palette-list [role="option"] .palette-label').map(n => n.textContent);
+    const search = (text) => {
+        $('#palette-input').value = text;
+        $('#palette-input').dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const active = () => $(`#${$('#palette-input').getAttribute('aria-activedescendant')} .palette-label`).textContent;
+
+    test('Ctrl/⌘+K opens it with focus in the search field and every command listed', async () => {
+        press('k', { ctrlKey: true });
+        await settle();
+        expect(palette().hasAttribute('open')).toBe(true);
+        expect(document.activeElement).toBe($('#palette-input'));
+        expect(options()).toContain('Generate SQL');
+        expect(options()).toContain('Use PostgreSQL');
+        // Only commands that make sense now: nothing to undo, SELECT is current
+        expect(options()).not.toContain('Undo');
+        expect(options()).not.toContain('Switch to SELECT');
+        expect(active()).toBe('Generate SQL');
+        expect($('#palette-list [aria-selected="true"]')).not.toBeNull();
+    });
+
+    test('typing filters, arrows move the active option and Enter runs it', async () => {
+        await fillSimpleSelect();
+        press('k', { metaKey: true });
+        await settle();
+        search('switch to');
+        expect(options()).toEqual(['Switch to INSERT', 'Switch to UPDATE', 'Switch to DELETE', expect.stringMatching(/^Switch theme to /)]);
+        press('ArrowDown', {}, $('#palette-input'));
+        expect(active()).toBe('Switch to UPDATE');
+        press('ArrowUp', {}, $('#palette-input'));
+        press('ArrowUp', {}, $('#palette-input'));
+        expect(active()).toBe(options().at(-1));
+        press('ArrowDown', {}, $('#palette-input'));
+        press('Enter', {}, $('#palette-input'));
+        await settle();
+        expect(palette().hasAttribute('open')).toBe(false);
+        expect($('input[name="query-type"][value="insert"]').checked).toBe(true);
+        expect(field('insert.table')).not.toBeNull();
+    });
+
+    test('no matches shows a message; Escape closes without running anything', async () => {
+        press('k', { ctrlKey: true });
+        await settle();
+        search('zzzz');
+        expect($('#palette-list').hidden).toBe(true);
+        expect($('.palette-empty').hidden).toBe(false);
+        expect($('#palette-input').getAttribute('aria-expanded')).toBe('false');
+        press('Enter', {}, $('#palette-input'));
+        press('Escape', {}, palette());
+        await settle();
+        expect(palette().hasAttribute('open')).toBe(false);
+    });
+
+    test('commands reuse the app actions: dialect, output mode and clicking an option', async () => {
+        press('k', { ctrlKey: true });
+        await settle();
+        search('mysql');
+        press('Enter', {}, $('#palette-input'));
+        await settle();
+        expect($('#dialect-select').value).toBe('mysql');
+
+        $('[data-command="palette"]').click();
+        await settle();
+        expect(palette().hasAttribute('open')).toBe(true);
+        search('one line');
+        $('#palette-list [role="option"]').click();
+        await settle();
+        expect($('[data-output-mode="compact"]').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    test('Ctrl/⌘+S and Ctrl/⌘+K do nothing while another dialog is open', async () => {
+        await fillSimpleSelect();
+        $('#settings-btn').click();
+        await settle();
+        const save = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true });
+        document.dispatchEvent(save);
+        await settle();
+        expect(save.defaultPrevented).toBe(true);
+        expect($('#template-dialog').hasAttribute('open')).toBe(false);
+        press('k', { ctrlKey: true });
+        await settle();
+        expect($$('dialog[open]').map(d => d.id)).toEqual(['settings-dialog']);
+    });
+
+    test('it does not open over another dialog', async () => {
+        $('#settings-btn').click();
+        await settle();
+        press('k', { ctrlKey: true });
+        await settle();
+        expect(palette().hasAttribute('open')).toBe(false);
+    });
+});
+
+describe('template library', () => {
+    const names = () => $$('#template-list .library-name').map(n => n.textContent);
+    async function saveAs(table, name, category = '') {
+        type('select.from.table', table);
+        type('select.columns.0.expr', 'id');
+        await settle();
+        $('#template-save-btn').click();
+        await answerTemplate(name, { category });
+    }
+    const search = (text) => {
+        $('#template-search').value = text;
+        $('#template-search').dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const sortBy = (value) => {
+        $('#template-sort').value = value;
+        $('#template-sort').dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    test('search matches name, category and description; sort by name or recent', async () => {
+        await saveAs('b', 'Beta report', 'Finance');
+        await vi.advanceTimersByTimeAsync(60_000);
+        await saveAs('a', 'Alpha list');
+        expect(names()).toEqual(['Alpha list', 'Beta report']);
+        sortBy('recent');
+        expect(names()).toEqual(['Alpha list', 'Beta report']);
+        search('finance');
+        expect(names()).toEqual(['Beta report']);
+        search('nothing like this');
+        expect($('#template-list').textContent).toBe('No templates match “nothing like this”.');
+        search('');
+        expect(names()).toHaveLength(2);
+    });
+
+    test('Pin moves a template to the top and keeps focus on it', async () => {
+        await saveAs('a', 'Alpha');
+        await saveAs('b', 'Beta');
+        expect(names()).toEqual(['Alpha', 'Beta']);
+        $('[aria-label="Pin template Beta to the top"]').click();
+        await settle();
+        expect(names()).toEqual(['Beta', 'Alpha']);
+        expect($('#template-list .library-item').textContent).toContain('Pinned');
+        expect(document.activeElement).toBe($('[aria-label="Unpin template Beta"]'));
+        expect(JSON.parse(backend.getItem(`${STORAGE_PREFIX}templates`)).find(t => t.name === 'Beta').pinned).toBe(true);
+        $('[aria-label="Unpin template Beta"]').click();
+        await settle();
+        expect(names()).toEqual(['Alpha', 'Beta']);
+    });
+
+    test('the template being edited is marked', async () => {
+        await saveAs('a', 'Alpha');
+        expect($('#template-list .library-current').textContent).toBe('Editing');
+        $('#reset-btn').click();
+        await settle();
+        $('[data-action="template-load"]').click();
+        await settle();
+        expect($('#template-list .library-current')).not.toBeNull();
+    });
+});
+
+describe('query structure panel', () => {
+    const loadExample = async (id) => {
+        $(`#example-list [data-action="example-load"][data-id="${id}"]`).click();
+        await settle();
+    };
+    const steps = () => $$('#structure-steps .structure-clause').map(n => n.textContent);
+
+    test('is hidden for an empty query and lists the steps in processing order', async () => {
+        expect($('#structure').hidden).toBe(true);
+        await loadExample('join-aggregate');
+        expect($('#structure').hidden).toBe(false);
+        expect($('#complexity').textContent).toBe('· 1 join · 1 condition');
+        expect(steps()).toEqual(['FROM', 'JOIN', 'GROUP BY', 'HAVING', 'SELECT', 'ORDER BY']);
+        expect($$('#structure-steps .structure-jump').every(b => b.type === 'button')).toBe(true);
+    });
+
+    test('follows the dialect and query type', async () => {
+        await loadExample('page-results');
+        expect(steps().at(-1)).toBe('LIMIT');
+        pickDialect('sqlserver');
+        await settle();
+        expect(steps().at(-1)).toBe('TOP');
+        $('input[name="query-type"][value="delete"]').click();
+        type('delete.table', 'audit_log');
+        await settle();
+        expect(steps()).toEqual(['DELETE FROM', 'No WHERE']);
+    });
+
+    test('a step opens its builder section and moves focus there', async () => {
+        await loadExample('join-aggregate');
+        const grouping = $('details[data-section="select:grouping"]');
+        grouping.open = false;
+        $$('#structure-steps .structure-jump').find(b => b.textContent.includes('HAVING')).click();
+        expect(grouping.open).toBe(true);
+        expect(document.activeElement).toBe(grouping.querySelector('summary'));
+        // The open state survives the next re-render of the builder
+        add('select.orderBy', 'orderBy');
+        await settle();
+        expect($('details[data-section="select:grouping"]').open).toBe(true);
+    });
+
+    test('a DML step moves focus to its field', async () => {
+        $('input[name="query-type"][value="delete"]').click();
+        type('delete.table', 'audit_log');
+        await settle();
+        $$('#structure-steps .structure-jump').find(b => b.textContent.includes('No WHERE')).click();
+        expect($('[data-path="delete.where"]').contains(document.activeElement)).toBe(true);
+    });
+});
+
+describe('dialects in the UI', () => {
+    const optionText = (path, value) => field(path).querySelector(`option[value="${value}"]`).textContent;
+
+    test('the picker next to the SQL heading changes the SQL and settings, and keeps the query', async () => {
+        await fillSimpleSelect();
+        type('select.limit', '5');
+        await settle();
+        const before = JSON.stringify(app.state.workspace);
+        expect($('#output-panel #dialect-select')).not.toBeNull();
+        expect($('.builder-panel #dialect-select')).toBeNull();
+        expect($('#dialect-select').value).toBe('generic');
+        expect($$('#dialect-select option').map(o => o.textContent)).toEqual(['Generic SQL', 'Microsoft SQL Server', 'PostgreSQL', 'MySQL']);
+
+        pickDialect('sqlserver');
+        await settle();
+        expect(sql()).toBe('SELECT TOP 5 name\nFROM users;');
+        expect(app.state.settings.dialect).toBe('sqlserver');
+        expect(JSON.parse(backend.getItem(`${STORAGE_PREFIX}settings`)).dialect).toBe('sqlserver');
+        expect(JSON.stringify(app.state.workspace)).toBe(before);
+        expect(toast()).toBe('Dialect: Microsoft SQL Server.');
+
+        // The Settings select stays in sync
+        $('#settings-btn').click();
+        expect($('[data-setting="dialect"]').value).toBe('sqlserver');
+    });
+
+    test('switching to a dialect that can\'t express part of the query keeps it and says so', async () => {
+        await fillSimpleSelect();
+        add('select.joins', 'join');
+        choose('select.joins.0.type', 'FULL JOIN');
+        type('select.joins.0.source.table', 'teams');
+        type('select.joins.0.on.items.0.left', 'users.team_id');
+        type('select.joins.0.on.items.0.value', 'teams.id');
+        await settle();
+        pickDialect('mysql');
+        await settle();
+        expect(app.state.workspace.select.joins[0].type).toBe('FULL JOIN');
+        expect(toast()).toBe('Dialect: MySQL. 1 part of this query isn\'t supported there; see Checks.');
+        expect(issues().join()).toContain('MySQL doesn\'t support FULL JOIN');
+        expect($('#sql-output').hidden).toBe(true);
+        pickDialect('postgresql');
+        await settle();
+        expect(sql()).toContain('FULL JOIN teams');
+    });
+
+    test('options a dialect can\'t use stay available, labelled', async () => {
+        await fillSimpleSelect();
+        add('select.joins', 'join');
+        add('select.setOps', 'setOp');
+        expect(optionText('select.joins.0.type', 'FULL JOIN')).toBe('FULL JOIN');
+        pickDialect('mysql');
+        expect(optionText('select.joins.0.type', 'FULL JOIN')).toBe('FULL JOIN (not in MySQL)');
+        pickDialect('sqlserver');
+        expect(optionText('select.setOps.0.op', 'INTERSECT ALL')).toBe('INTERSECT ALL — rows in both, keep duplicates (not in SQL Server)');
+        expect(optionText('select.setOps.0.op', 'INTERSECT')).toBe('INTERSECT — rows in both queries');
+        add('select.columns', 'window');
+        expect(optionText('select.columns.1.func', 'NTH_VALUE')).toBe('NTH_VALUE() (not in SQL Server)');
+    });
+
+    test('the row-limit field is called TOP on SQL Server', () => {
+        pickDialect('sqlserver');
+        expect($(`label[for="${field('select.limit').id}"]`).textContent).toBe('TOP');
+        expect($('[data-section="select:sorting"] summary').textContent).toContain('ORDER BY, TOP & OFFSET');
+        pickDialect('postgresql');
+        expect($(`label[for="${field('select.limit').id}"]`).textContent).toBe('LIMIT');
+    });
+
+    test('upsert controls appear only where the dialect supports them, unless already used', async () => {
+        const radio = $('input[name="query-type"][value="insert"]');
+        radio.checked = true;
+        radio.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(field('insert.upsert.mode')).toBeNull();
+        expect($('.dialect-note').textContent).toBe('Conflict handling (upsert) is available for PostgreSQL and MySQL, not Generic SQL.');
+        pickDialect('postgresql');
+        choose('insert.upsert.mode', 'nothing');
+        pickDialect('sqlserver');
+        // Kept visible so the user can see and change what Checks reports
+        expect(field('insert.upsert.mode').value).toBe('nothing');
+        pickDialect('mysql');
+        expect(optionText('insert.upsert.mode', 'nothing')).toBe('Skip the row (DO NOTHING) (not in MySQL)');
+    });
+
+    test('examples follow the dialect and preview its SQL', () => {
+        const names = () => $$('#example-list .library-name').map(n => n.textContent);
+        const preview = (name) => $$('#example-list .library-item').find(li => li.textContent.includes(name)).querySelector('.library-snippet').textContent;
+        expect($('#example-filter').value).toBe('generic');
+        expect(names()).not.toContain('Upsert: insert or update');
+        expect(preview('Filter, sort and limit')).toBe('SELECT Name, Salary FROM Employees WHERE Salary > 50000 ORDER BY Salary DESC LIMIT 10;');
+        pickDialect('sqlserver');
+        expect($('#example-filter').value).toBe('sqlserver');
+        expect(preview('Filter, sort and limit')).toBe('SELECT TOP 10 Name, Salary FROM Employees WHERE Salary > 50000 ORDER BY Salary DESC;');
+        pickDialect('postgresql');
+        expect(names()).toContain('Upsert: insert or update');
+        const filter = $('#example-filter');
+        filter.value = 'all';
+        filter.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(names()).toHaveLength(22);
+    });
+
+    test('examples show their level and topic and can be filtered by topic', () => {
+        const names = () => $$('#example-list .library-name').map(n => n.textContent);
+        $('#tab-examples').click();
+        const topic = $('#example-topic');
+        expect(topic.options[0].textContent).toBe('All topics');
+        topic.value = 'Joins';
+        topic.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(names()).toEqual(['Employees and their managers', 'Products never ordered']);
+        const first = $('#example-list .library-item');
+        expect(first.querySelector('.library-chip').textContent).toBe('Intermediate');
+        expect(first.querySelector('.library-meta').textContent).toContain('Joins');
+        // The topic filter combines with the dialect filter
+        topic.value = 'Changing data';
+        topic.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(names()).not.toContain('Upsert: insert or update');
+        pickDialect('mysql');
+        expect(names()).toContain('Upsert: insert or update');
+    });
+
+    test('templates keep a description and category, and can be filtered by dialect', async () => {
+        await fillSimpleSelect();
+        $('#template-save-btn').click();
+        await answerTemplate('Users', { description: 'All user names', category: 'Reports' });
+        pickDialect('mysql');
+        $('#template-save-btn').click();
+        await settle();
+        expect($('#template-dialect-note').textContent).toBe('Saved for MySQL; loading it switches back to that dialect.');
+        expect($$('#template-categories option').map(o => o.value)).toEqual(['Reports']);
+        $('#template-name').value = 'Users MySQL';
+        $('#template-dialog [value="confirm"]').click();
+        await settle();
+
+        const first = app.templates.list().find(t => t.name === 'Users');
+        expect(first).toMatchObject({ dialect: 'generic', description: 'All user names', category: 'Reports' });
+        const item = $$('#template-list .library-item').find(li => li.textContent.includes('All user names'));
+        expect(item.textContent).toContain('Reports');
+        expect(item.textContent).toContain('Generic SQL');
+
+        const filter = $('#template-filter');
+        filter.value = 'mysql';
+        filter.dispatchEvent(new Event('change', { bubbles: true }));
+        expect($$('#template-list .library-name').map(n => n.textContent)).toEqual(['Users MySQL']);
+        filter.value = 'postgresql';
+        filter.dispatchEvent(new Event('change', { bubbles: true }));
+        expect($('#template-list').textContent).toBe('No templates for PostgreSQL. Choose “All dialects” to see all 2.');
+    });
+
+    test('the dialect picker has an accessible name and description', () => {
+        const picker = $('#dialect-select');
+        expect(picker.closest('label').textContent).toContain('Dialect');
+        expect($(`#${picker.getAttribute('aria-describedby')}`).textContent).toContain('Your query is kept');
     });
 });

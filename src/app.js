@@ -8,6 +8,7 @@ import {
     isPristine, describeComplexity
 } from './model.js';
 import { generateSQL } from './generator.js';
+import { describeStructure } from './structure.js';
 import { validateWorkspace, hasErrors, summarize } from './validation.js';
 import { listDialects, getDialect } from './dialects.js';
 import { createStorage } from './storage.js';
@@ -17,19 +18,23 @@ import { createHistory } from './history.js';
 import { createTemplateStore, TemplateError } from './templates.js';
 import { UndoStack } from './undo.js';
 import {
-    normalizeWorkspace, parseQueryFile, parseTemplatesFile, createQueryExport, createTemplatesExport, MAX_IMPORT_BYTES
+    normalizeWorkspace, parseQueryFile, parseTemplatesFile, createQueryExport, createTemplatesExport, MAX_IMPORT_BYTES,
+    createBackup, parseBackupFile, MAX_BACKUP_BYTES
 } from './serialization.js';
-import { EXAMPLES } from './examples.js';
-import { h, byPath, debounce, cssEscape } from './ui/dom.js';
+import { EXAMPLES, EXAMPLE_TOPICS, examplesFor } from './examples.js';
+import { h, byPath, debounce, cssEscape, formatTime } from './ui/dom.js';
 import { renderEditor } from './ui/builder.js';
 import { renderSqlCode, selectContents } from './ui/output.js';
 import { renderHistoryList, renderTemplateList, renderExampleList } from './ui/library.js';
-import { promptDialog, confirmDialog, showDialog, closeDialog, enhanceDialog } from './ui/dialogs.js';
+import { promptDialog, templateDialog, confirmDialog, showDialog, closeDialog, enhanceDialog } from './ui/dialogs.js';
 import { applyTheme, nextTheme, effectiveTheme, THEME_LABELS } from './ui/theme.js';
 import { bindShortcuts, SHORTCUTS, modLabel } from './ui/shortcuts.js';
+import { openPalette } from './ui/palette.js';
 import { createWebPlatform } from './platform/web.js';
 
 const DRAFT_KEY = 'draft';
+// The saved template the current query was loaded from (restored with the draft)
+const SOURCE_KEY = 'draft-source';
 
 // New items for "add-item" buttons (data-arg)
 const ITEM_FACTORIES = {
@@ -80,8 +85,18 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         selectAll: $('select-all-btn'),
         modeButtons: $$('[data-output-mode]'),
         wrap: $('wrap-btn'),
-        dialectBadge: $('dialect-badge'),
+        dialectSelect: $('dialect-select'),
+        templateFilter: $('template-filter'),
+        templateSearch: $('template-search'),
+        templateSort: $('template-sort'),
+        exampleFilter: $('example-filter'),
+        exampleTopic: $('example-topic'),
         complexity: $('complexity'),
+        structure: $('structure'),
+        queryName: $('query-name'),
+        save: $('save-btn'),
+        structureSteps: $('structure-steps'),
+        structureNotes: $('structure-notes'),
         issuesSummary: $('issues-summary'),
         issuesList: $('issues-list'),
         issues: /** @type {any} */ (doc.querySelector('.issues')),
@@ -100,8 +115,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         storageNote: $('storage-note'),
         settingsDialog: $('settings-dialog'),
         promptDialog: $('prompt-dialog'),
+        templateDialog: $('template-dialog'),
         confirmDialog: $('confirm-dialog'),
         shortcutsDialog: $('shortcuts-dialog'),
+        paletteDialog: $('palette-dialog'),
+        backupDialog: $('backup-dialog'),
         clearData: $('clear-data-btn'),
         viewSql: $('view-sql-btn'),
         statusBadge: $('status-badge')
@@ -124,8 +142,18 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         attempted: false,                // Generate was pressed: show all field errors
         touched: new Set(),              // field paths the user has left
         openSections: new Map(),
-        libraryTab: 'history'
+        sourceId: /** @type {string | null} */ (null),   // template being edited
+        libraryTab: 'history',
+        templateFilter: 'all',           // dialect id or 'all'
+        templateSearch: '',
+        templateSort: 'name',            // 'name' or 'recent'
+        exampleFilter: /** @type {string | null} */ (null), // null: follow the selected dialect
+        exampleTopic: 'all'
     };
+    if (state.settings.restoreSession) {
+        const sourceId = storage.get(SOURCE_KEY);
+        if (typeof sourceId === 'string' && templates.get(sourceId)) state.sourceId = sourceId;
+    }
     undoStack.reset(state.workspace);
 
     function restoreDraft() {
@@ -165,7 +193,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     // --------------------------------------------------------------- rendering
 
     const ui = {
-        isOpen: (key, fallback) => (state.openSections.has(key) ? state.openSections.get(key) : fallback)
+        isOpen: (key, fallback) => (state.openSections.has(key) ? state.openSections.get(key) : fallback),
+        dialect: () => getDialect(state.settings.dialect)
     };
 
     function renderBuilder(focus = null) {
@@ -219,10 +248,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         renderOutput(valid);
         renderIssues();
         markFields();
-        renderComplexity();
+        renderStructure();
+        renderQueryName();
         el.undo.disabled = !undoStack.canUndo;
         el.redo.disabled = !undoStack.canRedo;
-        el.dialectBadge.textContent = getDialect(state.settings.dialect).label;
         saveDraft();
     }
 
@@ -336,23 +365,58 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         });
     }
 
-    function renderComplexity() {
-        if (state.workspace.type !== 'select' || pristine()) {
-            el.complexity.textContent = '';
+    /** The "Query structure" panel: counts in its summary, steps when opened. */
+    function renderStructure() {
+        el.structure.hidden = pristine();
+        if (el.structure.hidden) return;
+        const parts = [];
+        if (state.workspace.type === 'select') {
+            const { subqueries, joins, conditions } = describeComplexity(state.workspace.select);
+            const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+            if (joins) parts.push(plural(joins, 'join'));
+            if (subqueries) parts.push(subqueries === 1 ? '1 subquery' : `${subqueries} subqueries`);
+            if (conditions) parts.push(plural(conditions, 'condition'));
+        }
+        el.complexity.textContent = parts.length ? `· ${parts.join(' · ')}` : '';
+
+        const { steps, notes } = describeStructure(state.workspace, getDialect(state.settings.dialect));
+        el.structureSteps.replaceChildren(...steps.map((step, i) =>
+            h('li', { class: 'structure-step' },
+                h('button', {
+                    type: 'button',
+                    class: 'structure-jump',
+                    dataset: { action: 'structure-jump', section: step.target.section || null, path: step.target.path || null }
+                },
+                h('span', { class: 'structure-index', 'aria-hidden': 'true' }, String(i + 1)),
+                h('span', { class: 'structure-clause' }, step.clause),
+                h('span', { class: 'structure-detail' }, step.detail)),
+                h('p', { class: 'structure-explain' }, step.explanation))));
+        el.structureNotes.textContent = notes.join(' ');
+    }
+
+    /** Opens a builder section (or finds a field) and moves focus to it. */
+    function jumpTo({ section, path }) {
+        const details = section ? el.builder.querySelector(`details[data-section="${cssEscape(section)}"]`) : null;
+        if (!details) {
+            if (path) goToField(path);
             return;
         }
-        const { subqueries, joins, conditions } = describeComplexity(state.workspace.select);
-        const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-        const parts = [];
-        if (joins) parts.push(plural(joins, 'join'));
-        if (subqueries) parts.push(subqueries === 1 ? '1 subquery' : `${subqueries} subqueries`);
-        if (conditions) parts.push(plural(conditions, 'condition'));
-        el.complexity.textContent = parts.length ? `Query size: ${parts.join(' · ')}` : '';
+        details.open = true;
+        state.openSections.set(section, true);
+        const summary = details.querySelector('summary');
+        summary.focus();
+        if (typeof summary.scrollIntoView === 'function') summary.scrollIntoView({ block: 'start', behavior: 'smooth' });
     }
 
     const saveDraft = debounce(() => {
-        if (state.settings.restoreSession) storage.set(DRAFT_KEY, state.workspace);
-        else storage.remove(DRAFT_KEY);
+        if (state.settings.restoreSession) {
+            storage.set(DRAFT_KEY, state.workspace);
+            if (state.sourceId) storage.set(SOURCE_KEY, state.sourceId);
+            else storage.remove(SOURCE_KEY);
+        } else {
+            storage.remove(DRAFT_KEY);
+            storage.remove(SOURCE_KEY);
+        }
     }, 400);
 
     // ------------------------------------------------------------ model edits
@@ -372,9 +436,14 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         scheduleRefresh.flush();
     }
 
-    function replaceWorkspace(workspace, message) {
+    /**
+     * Replaces the whole query. `sourceId` is the template it came from, if
+     * any: Save then updates that template instead of creating a new one.
+     */
+    function replaceWorkspace(workspace, message, sourceId = null) {
         commitSoon.flush();
         state.workspace = workspace;
+        state.sourceId = sourceId;
         state.attempted = false;
         state.touched.clear();
         undoStack.push(state.workspace);
@@ -624,8 +693,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     async function onFileChosen() {
         const file = el.fileInput.files && el.fileInput.files[0];
         if (!file) return;
-        if (file.size > MAX_IMPORT_BYTES) {
-            toast('That file is too large to import (limit 1 MB).', 'error');
+        const mode = el.fileInput.dataset.mode;
+        const limit = mode === 'backup' ? MAX_BACKUP_BYTES : MAX_IMPORT_BYTES;
+        if (file.size > limit) {
+            toast(`That file is too large to import (limit ${limit / 1024 / 1024} MB).`, 'error');
             return;
         }
         let text;
@@ -635,7 +706,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             toast('The file could not be read.', 'error');
             return;
         }
-        if (el.fileInput.dataset.mode === 'templates') importTemplates(text);
+        if (mode === 'templates') importTemplates(text);
+        else if (mode === 'backup') await restoreBackup(text);
         else importQuery(text);
     }
 
@@ -645,10 +717,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             toast(`Import failed: ${result.error}`, 'error');
             return;
         }
-        if (result.dialect && listDialects().some(d => d.id === result.dialect)) {
-            updateSettings({ dialect: result.dialect });
-        }
-        replaceWorkspace(result.workspace, 'Query imported. Undo restores your previous query.');
+        const switched = switchDialect(result.dialect);
+        replaceWorkspace(result.workspace, `Query imported${switched}. Undo restores your previous query.`);
     }
 
     function importTemplates(text) {
@@ -664,6 +734,74 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         } catch (error) {
             toast(error instanceof TemplateError ? error.message : 'Templates could not be imported.', 'error');
         }
+    }
+
+    // ----------------------------------------------------------------- backup
+
+    const count = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+    async function exportBackup() {
+        const backup = createBackup({ templates: templates.list(), history: history.list(), settings: state.settings });
+        const date = new Date().toISOString().slice(0, 10);
+        await downloadFile(`sql-builder-backup-${date}.json`, JSON.stringify(backup, null, 2), 'application/json',
+            `Backed up ${count(backup.templates.length, 'template')}, ${count(backup.history.length, 'history entry', 'history entries')} and your settings.`);
+    }
+
+    /** Asks how to restore. Resolves 'merge', 'replace' or null. */
+    async function askRestoreMode(backup) {
+        const dialog = el.backupDialog;
+        const when = Date.parse(backup.exportedAt);
+        dialog.querySelector('#backup-summary').textContent = `This backup${Number.isNaN(when) ? '' : ` from ${formatTime(when)}`} has ${count(backup.templates.length, 'template')}, ${count(backup.history.length, 'history entry', 'history entries')} and settings. Nothing changes until you choose Restore.`;
+        const merge = dialog.querySelector('input[value="merge"]');
+        merge.checked = true;
+        const result = await showDialog(dialog, () => merge.focus());
+        if (result !== 'confirm') return null;
+        return dialog.querySelector('input[name="backup-mode"]:checked').value === 'replace' ? 'replace' : 'merge';
+    }
+
+    async function restoreBackup(text) {
+        const backup = parseBackupFile(text);
+        if ('error' in backup) {
+            toast(`Restore failed: ${backup.error}`, 'error');
+            return;
+        }
+        const mode = await askRestoreMode(backup);
+        if (!mode) return;
+        const replace = mode === 'replace';
+        if (replace) {
+            const ok = await confirmDialog(el.confirmDialog, {
+                title: 'Replace your saved data?',
+                message: `Your ${count(templates.list().length, 'template')} and ${count(history.list().length, 'history entry', 'history entries')} will be deleted and replaced by the backup's, and your settings will change to the backup's. This cannot be undone.`,
+                confirmText: 'Replace'
+            });
+            if (!ok) return;
+        }
+        let added;
+        try {
+            added = templates.restore(backup.templates, { replace });
+        } catch (error) {
+            toast(error instanceof TemplateError ? `Restore failed: ${error.message}` : 'The backup could not be restored.', 'error');
+            return;
+        }
+        if (replace) updateSettings(backup.settings);
+        const parts = [`${count(added.added, 'template')} added${added.skipped ? ` (${added.skipped} already here)` : ''}`];
+        // History stays off when the person turned it off
+        if (state.settings.saveHistory) {
+            const restored = history.restore(backup.history, { replace });
+            parts.push(`${count(restored.added, 'history entry', 'history entries')} added${restored.skipped ? ` (${restored.skipped} already here)` : ''}${restored.dropped ? `, keeping the newest ${history.list().length}` : ''}`);
+        } else {
+            // Replace promised to remove the current history, even when the backup's is not restored
+            if (replace) history.clear();
+            if (backup.history.length) parts.push('history not restored because saving history is turned off');
+        }
+        if (state.sourceId && !templates.get(state.sourceId)) {
+            state.sourceId = null;
+            saveDraft();
+        }
+        renderTemplates();
+        renderHistory();
+        renderQueryName();
+        toast(`Backup restored: ${parts.join(', ')}. ${replace ? 'Settings restored from the backup.' : 'Your settings were kept.'}`, 'success');
     }
 
     function clearCurrent() {
@@ -741,9 +879,56 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         el.historyClear.disabled = history.list().length === 0;
     }
 
+    // Pinned first, then by name or most recently updated; filtered by dialect and search text
     function renderTemplates() {
-        renderTemplateList(el.templateList, templates.list());
-        el.templateExport.disabled = templates.list().length === 0;
+        const all = templates.list();
+        const filter = state.templateFilter;
+        const query = state.templateSearch.trim();
+        const needle = query.toLowerCase();
+        // Templates saved without a dialect (older versions) are shown for every dialect
+        const shown = all
+            .filter(t => filter === 'all' || !t.dialect || t.dialect === filter)
+            .filter(t => !needle || [t.name, t.description, t.category, t.dialect && getDialect(t.dialect).label, t.workspace.type]
+                .some(text => text && text.toLowerCase().includes(needle)))
+            .sort((a, b) => (Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)))
+                || (state.templateSort === 'recent' ? b.updatedAt - a.updatedAt : a.name.localeCompare(b.name)));
+        renderTemplateList(el.templateList, shown, {
+            total: all.length,
+            filterLabel: filter === 'all' ? '' : getDialect(filter).label,
+            query,
+            currentId: state.sourceId
+        });
+        el.templateExport.disabled = all.length === 0;
+    }
+
+    // Examples that work in the chosen dialect, with SQL previewed in that dialect
+    function renderExamples() {
+        const filter = state.exampleFilter ?? state.settings.dialect;
+        el.exampleFilter.value = filter;
+        const shown = examplesFor(filter, state.exampleTopic);
+        const dialect = filter === 'all' ? state.settings.dialect : filter;
+        renderExampleList(el.exampleList, shown, (workspace) => {
+            try {
+                return generateSQL(workspace, { dialect, quoteIdentifiers: false, pretty: false });
+            } catch {
+                return '';
+            }
+        });
+    }
+
+    function dialectOptions(withAll) {
+        return [...(withAll ? [h('option', { value: 'all' }, 'All dialects')] : []), ...listDialects().map(d => h('option', { value: d.id }, d.label))];
+    }
+
+    // After the user picks a dialect: say what changed, including parts of the
+    // query the new dialect can't express (they stay in the query, see Checks)
+    function announceDialect() {
+        const dialect = getDialect(state.settings.dialect);
+        const blocked = state.issues.filter(i => i.category === 'dialect' && i.level === 'error').length;
+        toast(blocked === 0
+            ? `Dialect: ${dialect.label}.`
+            : `Dialect: ${dialect.label}. ${blocked === 1 ? '1 part' : `${blocked} parts`} of this query ${blocked === 1 ? 'isn\'t' : 'aren\'t'} supported there; see Checks.`,
+        blocked === 0 ? 'info' : 'error');
     }
 
     /**
@@ -784,7 +969,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     const template = templates.get(id);
                     if (!template) return;
                     const switched = switchDialect(template.dialect);
-                    replaceWorkspace(structuredClone(template.workspace), `Loaded “${template.name}”${switched}. Undo restores your previous query.`);
+                    replaceWorkspace(structuredClone(template.workspace), `Loaded “${template.name}”${switched}. Undo restores your previous query.`, template.id);
+                    renderTemplates();
                     break;
                 }
                 case 'template-rename': {
@@ -794,7 +980,17 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     if (name === null) return;
                     const renamed = templates.rename(id, name);
                     renderTemplates();
+                    renderQueryName();
                     toast(`Renamed to “${renamed.name}”.`, 'success');
+                    break;
+                }
+                case 'template-pin':
+                case 'template-unpin': {
+                    const pinned = templates.setPinned(id, action === 'template-pin');
+                    renderTemplates();
+                    // Keep focus on the same template's pin button after the list is rebuilt
+                    el.templateList.querySelector(`[data-id="${cssEscape(id)}"][data-action^="template-${pinned.pinned ? 'unpin' : 'pin'}"]`)?.focus();
+                    toast(pinned.pinned ? `Pinned “${pinned.name}” to the top.` : `Unpinned “${pinned.name}”.`);
                     break;
                 }
                 case 'template-duplicate': {
@@ -809,7 +1005,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     const ok = await confirmDialog(el.confirmDialog, { title: 'Delete template?', message: `“${template.name}” will be deleted from this browser.`, confirmText: 'Delete' });
                     if (!ok) return;
                     templates.remove(id);
+                    if (state.sourceId === id) state.sourceId = null;
                     renderTemplates();
+                    renderQueryName();
                     el.templateSave.focus();
                     toast('Template deleted.');
                     break;
@@ -835,16 +1033,57 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         const suggestion = state.workspace.type === 'select' && state.workspace.select.from.kind === 'table' && state.workspace.select.from.table
             ? `${state.workspace.select.from.table} query`
             : `${state.workspace.type.toUpperCase()} query`;
-        const name = await promptDialog(el.promptDialog, { title: 'Save as template', label: 'Template name', value: suggestion });
-        if (name === null) return;
+        const details = await templateDialog(el.templateDialog, {
+            name: suggestion,
+            categories: templates.categories(),
+            note: `Saved for ${getDialect(state.settings.dialect).label}; loading it switches back to that dialect.`
+        });
+        if (details === null) return;
         try {
-            const template = templates.create(name, state.workspace, { dialect: state.settings.dialect });
+            const template = templates.create(details.name, state.workspace, { ...details, dialect: state.settings.dialect });
+            state.sourceId = template.id;
             renderTemplates();
+            renderQueryName();
+            saveDraft();
             selectTab('templates');
             toast(`Saved template “${template.name}”.`, 'success');
         } catch (error) {
             toast(error instanceof TemplateError ? error.message : 'The template could not be saved.', 'error');
         }
+    }
+
+    /** Save (Ctrl/⌘+S): updates the template being edited, or saves a new one. */
+    async function saveQuery() {
+        commitSoon.flush();
+        const current = state.sourceId ? templates.get(state.sourceId) : null;
+        if (!current) {
+            await saveTemplate();
+            return;
+        }
+        try {
+            const saved = templates.update(current.id, state.workspace, { dialect: state.settings.dialect });
+            renderTemplates();
+            renderQueryName();
+            toast(`Saved “${saved.name}”.`, 'success');
+        } catch (error) {
+            toast(error instanceof TemplateError ? error.message : 'The query could not be saved.', 'error');
+        }
+    }
+
+    /** "Unsaved query", or the template being edited and whether it has changed. */
+    function renderQueryName() {
+        const current = state.sourceId ? templates.get(state.sourceId) : null;
+        if (!current) {
+            el.queryName.replaceChildren(h('span', { class: 'query-name-text muted' }, 'Unsaved query'));
+            el.save.textContent = 'Save…';
+            return;
+        }
+        const changed = JSON.stringify(current.workspace) !== JSON.stringify(state.workspace)
+            || (current.dialect || state.settings.dialect) !== state.settings.dialect;
+        el.queryName.replaceChildren(
+            h('span', { class: 'query-name-text' }, current.name),
+            h('span', { class: `query-name-state${changed ? ' changed' : ''}` }, changed ? 'unsaved changes' : 'saved'));
+        el.save.textContent = 'Save';
     }
 
     async function exportTemplates() {
@@ -867,7 +1106,13 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (patch.saveHistory !== undefined) renderHistory();
         if (patch.restoreSession === false) storage.remove(DRAFT_KEY);
         if (patch.outputMode !== undefined || patch.wrapOutput !== undefined) renderModeButtons();
-        if (patch.dialect !== undefined && patch.dialect !== before.dialect) renderDialectNotes();
+        if (patch.dialect !== undefined && patch.dialect !== before.dialect) {
+            renderDialectNotes();
+            el.dialectSelect.value = state.settings.dialect;
+            state.exampleFilter = null;
+            renderBuilder();
+            renderExamples();
+        }
         if (state.generated && (patch.dialect !== undefined || patch.quoteIdentifiers !== undefined || patch.outputMode !== undefined)) {
             // Keep a manually generated query in sync with output preferences
             if (!hasErrors(validateWorkspace(state.workspace, validationOptions()))) {
@@ -888,7 +1133,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     // Android back button: close the top-most overlay. Returns false when there
     // is nothing to close, so the platform can apply its default behaviour.
     function handleBack() {
-        const dialogs = [el.confirmDialog, el.promptDialog, el.shortcutsDialog, el.settingsDialog];
+        const dialogs = [el.confirmDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
         const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
         if (open) {
             closeDialog(open, 'cancel');
@@ -939,6 +1184,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (!key) return;
         if (input.type === 'radio' && !input.checked) return;
         updateSettings({ [key]: input.type === 'checkbox' ? input.checked : input.value });
+        if (key === 'dialect') announceDialect();
     }
 
     async function clearAllData() {
@@ -956,10 +1202,82 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         commitSoon.cancel();
         saveDraft.cancel();
         storage.remove(DRAFT_KEY);
+        storage.remove(SOURCE_KEY);
         syncSettingsForm();
         renderHistory();
         renderTemplates();
         toast('All saved data was deleted from this browser.', 'success');
+    }
+
+    // ------------------------------------------------------- command palette
+
+    function openLibraryTab(name) {
+        selectTab(name, true);
+        doc.getElementById(`tab-${name}`).scrollIntoView({ block: 'nearest' });
+    }
+
+    /** The commands that make sense right now, reusing the buttons' own handlers. */
+    function paletteCommands() {
+        const { type } = state.workspace;
+        const { settings } = state;
+        return [
+            { id: 'generate', group: 'SQL', label: 'Generate SQL', keys: ['Mod', 'Enter'], keywords: 'run build', run: generate },
+            { id: 'copy', group: 'SQL', label: 'Copy SQL', keys: ['Mod', 'Shift', 'C'], keywords: 'clipboard', run: copySql },
+            { id: 'download', group: 'SQL', label: 'Download SQL (.sql)', keywords: 'file save', run: downloadSql },
+            { id: 'save', group: 'Query', label: state.sourceId ? 'Save query' : 'Save query as a template…', keys: ['Mod', 'S'], keywords: 'template', run: saveQuery },
+            state.sourceId && { id: 'save-new', group: 'Templates', label: 'Save as a new template…', keywords: 'copy', run: saveTemplate },
+            undoStack.canUndo && { id: 'undo', group: 'Edit', label: 'Undo', keys: ['Mod', 'Z'], run: undo },
+            undoStack.canRedo && { id: 'redo', group: 'Edit', label: 'Redo', keys: ['Mod', 'Shift', 'Z'], run: redo },
+            ...['select', 'insert', 'update', 'delete'].filter(t => t !== type).map(t => ({
+                id: `type-${t}`, group: 'Query', label: `Switch to ${t.toUpperCase()}`, keywords: 'query type statement', run: () => {
+                    setType(t);
+                    syncTypeTabs();
+                }
+            })),
+            ...listDialects().filter(d => d.id !== settings.dialect).map(d => ({
+                id: `dialect-${d.id}`, group: 'Dialect', label: `Use ${d.label}`, keywords: 'dialect database', run: () => {
+                    updateSettings({ dialect: d.id });
+                    announceDialect();
+                }
+            })),
+            {
+                id: 'output-mode', group: 'Output', keywords: 'format compact one line',
+                label: settings.outputMode === 'formatted' ? 'Show SQL on one line' : 'Show formatted SQL',
+                run: () => updateSettings({ outputMode: settings.outputMode === 'formatted' ? 'compact' : 'formatted' })
+            },
+            {
+                id: 'wrap', group: 'Output', label: settings.wrapOutput ? 'Stop wrapping long lines' : 'Wrap long lines',
+                run: () => updateSettings({ wrapOutput: !settings.wrapOutput })
+            },
+            {
+                id: 'theme', group: 'View', label: `Switch theme to ${THEME_LABELS[nextTheme(settings.theme)]}`, keywords: 'dark light appearance',
+                run: () => updateSettings({ theme: nextTheme(settings.theme) })
+            },
+            { id: 'open-history', group: 'Library', label: 'Open history', run: () => openLibraryTab('history') },
+            { id: 'open-templates', group: 'Library', label: 'Open templates', run: () => openLibraryTab('templates') },
+            { id: 'open-examples', group: 'Library', label: 'Open examples', run: () => openLibraryTab('examples') },
+            { id: 'export-query', group: 'File', label: 'Export query (.json)', run: exportQuery },
+            { id: 'import-query', group: 'File', label: 'Import query (.json)…', run: () => chooseFile('query') },
+            { id: 'export-backup', group: 'File', label: 'Back up everything (.json)', keywords: 'backup export templates history settings', run: exportBackup },
+            { id: 'import-backup', group: 'File', label: 'Restore from backup…', keywords: 'backup import templates history settings', run: () => chooseFile('backup') },
+            templates.list().length > 0 && { id: 'export-templates', group: 'Templates', label: 'Export all templates', run: exportTemplates },
+            { id: 'import-templates', group: 'Templates', label: 'Import templates…', run: () => chooseFile('templates') },
+            { id: 'shortcuts', group: 'Help', label: 'Show keyboard shortcuts', keys: ['?'], run: () => showDialog(el.shortcutsDialog) },
+            { id: 'settings', group: 'Settings', label: 'Open settings', keywords: 'preferences options', run: openSettings },
+            { id: 'clear', group: 'Query', label: `Clear the ${type.toUpperCase()} query`, run: clearCurrent },
+            { id: 'reset', group: 'Query', label: 'Reset all', keywords: 'new start over', run: resetAll }
+        ].filter(Boolean);
+    }
+
+    async function showPalette() {
+        // One dialog at a time: the palette doesn't open over another one
+        if (doc.querySelector('dialog[open]')) return;
+        // Opened from the File menu: focus returns to the menu's button
+        if (el.fileMenu.contains(doc.activeElement)) el.fileMenu.querySelector('summary').focus();
+        el.fileMenu.open = false;
+        commitSoon.flush();
+        const command = await openPalette(el.paletteDialog, paletteCommands(), (key) => (key === 'Mod' ? modLabel() : key));
+        if (command) command.run();
     }
 
     function renderShortcuts() {
@@ -988,6 +1306,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.undo.addEventListener('click', undo);
     el.redo.addEventListener('click', redo);
     el.copy.addEventListener('click', copySql);
+    el.save.addEventListener('click', saveQuery);
     el.share.hidden = !platform.canShare;
     el.share.addEventListener('click', shareSql);
     el.download.addEventListener('click', downloadSql);
@@ -1004,6 +1323,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (btn) goToField(btn.dataset.goto);
     });
     el.outputState.addEventListener('click', onLibraryClick);
+    el.structureSteps.addEventListener('click', (event) => {
+        const btn = event.target.closest('button[data-action="structure-jump"]');
+        if (btn) jumpTo({ section: btn.dataset.section, path: btn.dataset.path });
+    });
 
     doc.addEventListener('click', (event) => {
         const cmd = /** @type {any} */ (event.target).closest('[data-command]');
@@ -1013,6 +1336,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             'export-query': exportQuery,
             'import-query': () => chooseFile('query'),
             'download-sql': downloadSql,
+            'export-backup': exportBackup,
+            'import-backup': () => chooseFile('backup'),
+            palette: showPalette,
             generate,
             copy: copySql
         };
@@ -1042,16 +1368,43 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         toast('History cleared.');
     });
     el.libraryPanel.addEventListener('click', onLibraryClick);
+    el.dialectSelect.addEventListener('change', () => {
+        updateSettings({ dialect: el.dialectSelect.value });
+        announceDialect();
+    });
+    el.templateSearch.addEventListener('input', () => {
+        state.templateSearch = el.templateSearch.value;
+        renderTemplates();
+    });
+    el.templateSort.addEventListener('change', () => {
+        state.templateSort = el.templateSort.value === 'recent' ? 'recent' : 'name';
+        renderTemplates();
+    });
+    el.templateFilter.addEventListener('change', () => {
+        state.templateFilter = el.templateFilter.value;
+        renderTemplates();
+    });
+    el.exampleFilter.addEventListener('change', () => {
+        state.exampleFilter = el.exampleFilter.value;
+        renderExamples();
+    });
+    el.exampleTopic.addEventListener('change', () => {
+        state.exampleTopic = EXAMPLE_TOPICS.includes(el.exampleTopic.value) ? el.exampleTopic.value : 'all';
+        renderExamples();
+    });
     el.templateSave.addEventListener('click', saveTemplate);
     el.templateImport.addEventListener('click', () => chooseFile('templates'));
     el.templateExport.addEventListener('click', exportTemplates);
     el.fileInput.addEventListener('change', onFileChosen);
 
-    [el.settingsDialog, el.promptDialog, el.confirmDialog, el.shortcutsDialog].forEach(enhanceDialog);
+    [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog, el.paletteDialog, el.backupDialog].forEach(enhanceDialog);
 
     bindShortcuts(doc, signal, {
         generate,
         copy: copySql,
+        // Not over another dialog: saving can open the template dialog
+        save: () => { if (!doc.querySelector('dialog[open]')) saveQuery(); },
+        palette: showPalette,
         undo,
         redo,
         help: () => showDialog(el.shortcutsDialog),
@@ -1079,11 +1432,16 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.storageNote.textContent = storage.available
         ? `history, templates and settings are stored only ${where}`
         : 'browser storage is unavailable, so history and templates won\'t be kept';
+    el.dialectSelect.replaceChildren(...dialectOptions(false));
+    el.dialectSelect.value = state.settings.dialect;
+    el.templateFilter.replaceChildren(...dialectOptions(true));
+    el.exampleFilter.replaceChildren(...dialectOptions(true));
+    el.exampleTopic.replaceChildren(h('option', { value: 'all' }, 'All topics'), ...EXAMPLE_TOPICS.map(t => h('option', { value: t }, t)));
     syncTypeTabs();
     renderBuilder();
     renderHistory();
     renderTemplates();
-    renderExampleList(el.exampleList, EXAMPLES);
+    renderExamples();
     selectTab('history');
     refresh();
     platform.onBack(handleBack);

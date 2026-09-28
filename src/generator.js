@@ -395,9 +395,9 @@ function renderAssignments(opening, assignments) {
 
 // ON CONFLICT … (PostgreSQL) / ON DUPLICATE KEY UPDATE … (MySQL)
 function renderUpsert(upsert, ctx) {
-    if (!upsert || !upsert.mode || !ctx.dialect.upsert) return [];
+    if (!upsert || !upsert.mode || !ctx.dialect.supports.upsert) return [];
     const assignments = upsert.set.map(a => `${expr(a.column, ctx)} = ${rhs(a.value, a.valueType, ctx, a.column)}`);
-    if (ctx.dialect.upsert === 'on-duplicate-key') {
+    if (ctx.dialect.supports.upsert === 'on-duplicate-key') {
         return renderAssignments('ON DUPLICATE KEY UPDATE', assignments);
     }
     const target = splitTopLevel(String(upsert.conflict)).filter(Boolean).map(c => expr(c, ctx));

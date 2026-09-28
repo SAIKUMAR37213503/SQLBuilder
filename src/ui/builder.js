@@ -9,6 +9,7 @@
 // Only this module decides what the editor looks like; it never mutates the model.
 
 import { h } from './dom.js';
+import { getDialect } from '../dialects.js';
 import { OPERATORS, JOIN_TYPES, SET_OPERATORS, AGGREGATES, WINDOW_FUNCTIONS, joinPath } from '../model.js';
 
 const SET_OPERATOR_LABELS = {
@@ -165,7 +166,7 @@ function addBar(...buttons) {
 
 /**
  * @param {any} workspace
- * @param {{ isOpen: (key: string, fallback: boolean) => boolean }} ui
+ * @param {{ isOpen: (key: string, fallback: boolean) => boolean, dialect?: () => any }} ui
  */
 export function renderEditor(workspace, ui) {
     const type = workspace.type;
@@ -183,6 +184,14 @@ export function renderEditor(workspace, ui) {
 class Renderer {
     constructor(ui) {
         this.ui = ui;
+        // The selected dialect: options it can't express stay available (the
+        // query model is never changed behind the user's back) but say so
+        this.dialect = ui.dialect ? ui.dialect() : getDialect();
+    }
+
+    /** An option label, marked when the selected dialect doesn't support it. */
+    option(text, supported) {
+        return supported ? text : `${text} (not in ${this.dialect.shortLabel})`;
     }
 
     section(key, title, options, ...content) {
@@ -209,7 +218,7 @@ class Renderer {
                 this.group(q.where, joinPath(path, 'where'), ctx, { clause: 'WHERE', root: true })),
             this.section(`${path}:grouping`, 'GROUP BY & HAVING', { open: hasGrouping, count: q.groupBy.length + q.having.items.length },
                 this.grouping(q, path, ctx)),
-            ctx.branch ? null : this.section(`${path}:sorting`, 'ORDER BY, LIMIT & OFFSET', { open: hasSorting, count: q.orderBy.length },
+            ctx.branch ? null : this.section(`${path}:sorting`, `ORDER BY, ${this.dialect.ui.limitLabel} & OFFSET`, { open: hasSorting, count: q.orderBy.length },
                 this.sorting(q, path)),
             ctx.branch ? null : this.section(`${path}:setops`, 'UNION / INTERSECT / EXCEPT', {
                 open: q.setOps.length > 0, count: q.setOps.length,
@@ -300,7 +309,8 @@ class Renderer {
             'aria-label': `${n} window function`,
             dataset: { path: joinPath(cPath, 'func'), bind: 'select', rerender: true }
         }, WINDOW_GROUPS.map(([groupLabel, funcs]) => h('optgroup', { label: groupLabel },
-            funcs.map(f => h('option', { value: f, selected: f === col.func }, `${f}()`)))));
+            funcs.map(f => h('option', { value: f, selected: f === col.func },
+                this.option(`${f}()`, f !== 'NTH_VALUE' || this.dialect.supports.nthValue))))));
 
         return h('li', { class: 'card', dataset: { path: cPath } },
             h('div', { class: 'row' },
@@ -310,7 +320,8 @@ class Renderer {
                     label: `${n} function arguments`, hidden: true, className: 'grow',
                     placeholder: col.func === 'COUNT' ? 'column (empty = all rows)' : WINDOW_ARG_PLACEHOLDERS[spec.args]
                 }),
-                textInput(joinPath(cPath, 'alias'), col.alias, { label: `${n} alias`, hidden: true, placeholder: 'AS alias', className: 'alias' }),
+                // Window aliases tend to be long (running_total, dept_rank)
+                textInput(joinPath(cPath, 'alias'), col.alias, { label: `${n} alias`, hidden: true, placeholder: 'AS alias', className: 'alias alias-wide' }),
                 rowTools(cPath, i, count, 'column')
             ),
             h('div', { class: 'window-over' },
@@ -377,7 +388,7 @@ class Renderer {
                 const jPath = joinPath(path, 'joins', i);
                 return h('li', { class: 'card', dataset: { path: jPath } },
                     h('div', { class: 'card-header' },
-                        select(joinPath(jPath, 'type'), join.type, JOIN_TYPES.map(t => [t, t]), { label: `Join ${i + 1} type`, rerender: true }),
+                        select(joinPath(jPath, 'type'), join.type, JOIN_TYPES.map(t => [t, this.option(t, t !== 'FULL JOIN' || this.dialect.supports.fullJoin)]), { label: `Join ${i + 1} type`, rerender: true }),
                         rowTools(jPath, i, q.joins.length, 'join')),
                     this.source(join.source, joinPath(jPath, 'source'), ctx, `JOIN ${i + 1}`),
                     join.type === 'CROSS JOIN'
@@ -417,7 +428,7 @@ class Renderer {
             })),
             addBar(button('+ ORDER BY', 'add-item', joinPath(path, 'orderBy'), { arg: 'orderBy' })),
             h('div', { class: 'field-row' },
-                field(joinPath(path, 'limit'), q.limit, { label: 'LIMIT', placeholder: 'e.g. 10', numeric: true }),
+                field(joinPath(path, 'limit'), q.limit, { label: this.dialect.ui.limitLabel, placeholder: 'e.g. 10', numeric: true, hint: this.dialect.ui.limitHint || undefined }),
                 field(joinPath(path, 'offset'), q.offset, { label: 'OFFSET', placeholder: 'e.g. 20', numeric: true })
             )
         ];
@@ -429,7 +440,7 @@ class Renderer {
                 const sPath = joinPath(path, 'setOps', i);
                 return h('li', { class: 'card', dataset: { path: sPath } },
                     h('div', { class: 'card-header' },
-                        select(joinPath(sPath, 'op'), setOp.op, SET_OPERATORS.map(o => [o, SET_OPERATOR_LABELS[o]]), { label: `Set operation ${i + 1}` }),
+                        select(joinPath(sPath, 'op'), setOp.op, SET_OPERATORS.map(o => [o, this.option(SET_OPERATOR_LABELS[o], this.dialect.supports.setOperators.includes(o))]), { label: `Set operation ${i + 1}` }),
                         rowTools(sPath, i, q.setOps.length, 'UNION query')),
                     this.select(setOp.query, joinPath(sPath, 'query'), { depth: ctx.depth + 1, top: false, branch: true })
                 );
@@ -559,19 +570,28 @@ class Renderer {
     // ON CONFLICT (PostgreSQL) / ON DUPLICATE KEY UPDATE (MySQL)
     upsert(u, path) {
         const modePath = joinPath(path, 'mode');
+        const variant = this.dialect.supports.upsert;
+        // Only shown where the dialect can write it, or when the query already
+        // uses it (then Checks explains why it can't be generated)
+        if (!variant && !u.mode) {
+            return h('p', { class: 'dialect-note', dataset: { path } },
+                `Conflict handling (upsert) is available for PostgreSQL and MySQL, not ${this.dialect.shortLabel}.`);
+        }
         return h('fieldset', { class: 'fieldset', dataset: { path } },
             h('legend', {}, 'On conflict (upsert)'),
             h('div', { class: 'row' },
                 h('label', { class: 'field-label', for: fieldId(modePath) }, 'When a row already exists'),
                 select(modePath, u.mode, [
                     ['', 'Fail (default)'],
-                    ['nothing', 'Skip the row (DO NOTHING)'],
+                    ['nothing', this.option('Skip the row (DO NOTHING)', variant !== 'on-duplicate-key')],
                     ['update', 'Update the existing row']
                 ], { rerender: true })
             ),
             u.mode ? field(joinPath(path, 'conflict'), u.conflict, {
                 label: 'Conflict columns', placeholder: 'e.g. email',
-                hint: 'The unique key that detects an existing row (PostgreSQL). MySQL uses every unique key.'
+                hint: variant === 'on-duplicate-key'
+                    ? 'MySQL checks every unique key, so these columns are not written into the SQL.'
+                    : 'The unique key that detects an existing row, e.g. email.'
             }) : null,
             u.mode === 'update' ? [
                 h('h4', { class: 'sub-heading' }, 'Update'),
