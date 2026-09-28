@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=769f5f1d17bb">
+    <link rel="stylesheet" href="style.css?v=32d6dc12a6ea">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -83,6 +83,10 @@
                         </div>
                     </div>
 
+                    <div class="query-name-bar">
+                        <p class="query-name" id="query-name"></p>
+                        <button type="button" class="btn btn-secondary btn-sm" id="save-btn" aria-keyshortcuts="Control+S Meta+S">Save…</button>
+                    </div>
                     <div id="output-state" class="output-state" aria-live="polite"></div>
                     <pre id="sql-output" class="sql-output" tabindex="0" aria-label="Generated SQL" aria-describedby="output-state"><code id="sql-code"></code></pre>
                     <details class="structure" id="structure" hidden>
@@ -261,6 +265,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=8b5ec3fd9985" defer></script>
+    <script src="dist/sqlbuilder.js?v=8b7414d2bfe9" defer></script>
 </body>
 </html>

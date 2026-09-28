@@ -200,6 +200,21 @@ describe('template dialects', () => {
         expect(parsed.ok && parsed.templates.find(t => t.name === 'Pg').dialect).toBe('postgresql');
     });
 
+    test('update replaces the query and dialect but keeps name, description and category', () => {
+        const storage = memoryStorage();
+        let clock = 1;
+        const store = createTemplateStore(storage, { now: () => clock });
+        const a = store.create('Report', w, { dialect: 'postgresql', description: 'Monthly', category: 'Finance' });
+        const changed = createWorkspace('delete');
+        clock = 5;
+        const updated = store.update(a.id, changed, { dialect: 'mysql' });
+        expect(updated).toMatchObject({ id: a.id, name: 'Report', description: 'Monthly', category: 'Finance', dialect: 'mysql', createdAt: 1, updatedAt: 5 });
+        expect(updated.workspace).toEqual(changed);
+        expect(updated.workspace).not.toBe(changed);
+        expect(createTemplateStore(storage).get(a.id).workspace.type).toBe('delete');
+        expect(() => store.update('missing', w)).toThrow('no longer exists');
+    });
+
     test('templates saved by earlier versions (no dialect) still load', () => {
         const storage = memoryStorage();
         storage.set('templates', [{ id: 'x', name: 'Old', createdAt: 1, updatedAt: 1, workspace: w }]);

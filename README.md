@@ -85,6 +85,7 @@ Messages are listed errors first, then warnings, then tips. On narrower screens 
 
 **Workspace**
 - **History** of generated queries: search, restore, copy, delete, clear. It keeps the last 50, and can be turned off.
+- **Save** (button above the SQL, or Ctrl/⌘+S): the first save names the query as a template; after that, and after loading a template, Save updates that template in place. The template's name is shown above the SQL, with "unsaved changes" when the query or dialect differs from what was saved. Loading an example, restoring history, importing or Reset all start a new unsaved query.
 - **Templates**: save, load, rename, duplicate, delete, and import/export as JSON. Each template can have a description and a category, and the list can be filtered by dialect. A template remembers its dialect and switches to it when loaded (restoring history does the same).
 - **Examples**: sixteen starter queries, filtered to the selected dialect (the upsert example only exists for PostgreSQL and MySQL). Each one shows a one-line preview of the SQL it produces in that dialect.
 - Import/export of the current query as JSON (validated, never executed), and download of the SQL. An exported query remembers its dialect, and importing it switches back to that dialect.
@@ -153,6 +154,7 @@ A single column stays on the `SELECT` line (`SELECT * FROM …`); two or more ar
 |---|---|
 | `Ctrl`/`⌘` + `Enter` | Generate SQL (and add it to history) |
 | `Ctrl`/`⌘` + `Shift` + `C` | Copy SQL. Some browsers reserve this shortcut for their developer tools; the Copy button always works. |
+| `Ctrl`/`⌘` + `S` | Save the query (updates the template it was loaded from, or asks for a name) |
 | `Ctrl`/`⌘` + `Z` | Undo, when focus is not in a text field (text fields keep the browser's own undo) |
 | `Ctrl`/`⌘` + `Shift` + `Z` (or `Ctrl` + `Y`) | Redo, outside text fields |
 | `?` | Show shortcuts |

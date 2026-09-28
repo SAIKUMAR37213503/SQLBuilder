@@ -706,6 +706,14 @@ kbd {
 .empty-title { color: var(--text); font-weight: 650; }
 .empty-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: center; margin-top: 0.25rem; }
 
+/* The saved template being edited, and Save */
+.query-name-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+.query-name { display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; align-items: baseline; min-width: 0; font-size: 0.85rem; }
+.query-name-text { font-weight: 650; overflow-wrap: anywhere; }
+.query-name-text.muted { color: var(--text-muted); font-weight: 500; }
+.query-name-state { color: var(--success); font-size: 0.8rem; }
+.query-name-state.changed { color: var(--warning); }
+
 /* Query structure: the clauses in processing order, each a jump into the builder */
 .structure { margin-top: 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); }
 .structure-summary {

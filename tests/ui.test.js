@@ -988,6 +988,81 @@ describe('INTERSECT / EXCEPT and window functions in the UI', () => {
     });
 });
 
+describe('saving the current query', () => {
+    const name = () => $('#query-name').textContent;
+    const saveKey = () => press('s', { ctrlKey: true });
+
+    test('Save names a new query once, then Ctrl+S updates it in place', async () => {
+        await fillSimpleSelect('orders');
+        expect(name()).toBe('Unsaved query');
+        expect($('#save-btn').textContent).toBe('Save…');
+        $('#save-btn').click();
+        await answerTemplate('Monthly revenue');
+        expect(name()).toBe('Monthly revenuesaved');
+        expect($('#save-btn').textContent).toBe('Save');
+
+        type('select.from.table', 'invoices');
+        await settle();
+        expect($('.query-name-state').textContent).toBe('unsaved changes');
+        const event = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true });
+        document.dispatchEvent(event);
+        await settle();
+        expect(event.defaultPrevented).toBe(true);
+        expect(toast()).toBe('Saved “Monthly revenue”.');
+        expect($('.query-name-state').textContent).toBe('saved');
+        expect($$('#template-list .library-item')).toHaveLength(1);
+        const stored = JSON.parse(backend.getItem(`${STORAGE_PREFIX}templates`));
+        expect(stored[0].workspace.select.from.table).toBe('invoices');
+    });
+
+    test('a changed dialect counts as an unsaved change', async () => {
+        await fillSimpleSelect('orders');
+        saveKey();
+        await answerTemplate('Orders');
+        pickDialect('mysql');
+        await settle();
+        expect($('.query-name-state').textContent).toBe('unsaved changes');
+        saveKey();
+        await settle();
+        expect(JSON.parse(backend.getItem(`${STORAGE_PREFIX}templates`))[0].dialect).toBe('mysql');
+    });
+
+    test('loading a template edits it; examples, history and imports start an unsaved query', async () => {
+        await fillSimpleSelect('orders');
+        saveKey();
+        await answerTemplate('Orders');
+        $('[data-action="example-load"][data-id="join-aggregate"]').click();
+        await settle();
+        expect(name()).toBe('Unsaved query');
+        $('#template-list [data-action="template-load"]').click();
+        await settle();
+        expect(name()).toBe('Orderssaved');
+        $('#reset-btn').click();
+        await settle();
+        expect(name()).toBe('Unsaved query');
+    });
+
+    test('the template being edited is remembered across a reload, and forgotten when deleted', async () => {
+        await fillSimpleSelect('orders');
+        saveKey();
+        await answerTemplate('Orders');
+        await settle();
+        boot(backend);
+        await settle();
+        expect(name()).toBe('Orderssaved');
+        $('#template-list [data-action="template-delete"]').click();
+        await answerConfirm();
+        expect(name()).toBe('Unsaved query');
+        saveKey();
+        await settle();
+        expect($('#template-dialog').hasAttribute('open')).toBe(true);
+    });
+
+    test('the shortcut is listed', () => {
+        expect($('#shortcut-rows').textContent).toContain('Save the query');
+    });
+});
+
 describe('query structure panel', () => {
     const loadExample = async (id) => {
         $(`#example-list [data-action="example-load"][data-id="${id}"]`).click();

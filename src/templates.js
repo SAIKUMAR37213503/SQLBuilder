@@ -121,6 +121,27 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
             return template;
         },
 
+        /**
+         * Replaces a template's query (Save on a loaded template). The name,
+         * description and category are kept; the dialect becomes the current one.
+         * @param {string} id
+         * @param {any} workspace
+         * @param {{ dialect?: string }} [details]
+         */
+        update(id, workspace, { dialect } = {}) {
+            const existing = find(id);
+            const updated = {
+                ...existing,
+                ...templateDetails({ dialect }),
+                updatedAt: now(),
+                workspace: structuredClone(workspace)
+            };
+            withTransaction(() => {
+                templates = templates.map(t => (t.id === id ? updated : t));
+            });
+            return updated;
+        },
+
         /** Categories in use, for suggestions when saving. */
         categories: () => [...new Set(templates.map(t => t.category).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
 

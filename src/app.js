@@ -31,6 +31,8 @@ import { bindShortcuts, SHORTCUTS, modLabel } from './ui/shortcuts.js';
 import { createWebPlatform } from './platform/web.js';
 
 const DRAFT_KEY = 'draft';
+// The saved template the current query was loaded from (restored with the draft)
+const SOURCE_KEY = 'draft-source';
 
 // New items for "add-item" buttons (data-arg)
 const ITEM_FACTORIES = {
@@ -86,6 +88,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         exampleFilter: $('example-filter'),
         complexity: $('complexity'),
         structure: $('structure'),
+        queryName: $('query-name'),
+        save: $('save-btn'),
         structureSteps: $('structure-steps'),
         structureNotes: $('structure-notes'),
         issuesSummary: $('issues-summary'),
@@ -131,10 +135,15 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         attempted: false,                // Generate was pressed: show all field errors
         touched: new Set(),              // field paths the user has left
         openSections: new Map(),
+        sourceId: /** @type {string | null} */ (null),   // template being edited
         libraryTab: 'history',
         templateFilter: 'all',           // dialect id or 'all'
         exampleFilter: /** @type {string | null} */ (null) // null: follow the selected dialect
     };
+    if (state.settings.restoreSession) {
+        const sourceId = storage.get(SOURCE_KEY);
+        if (typeof sourceId === 'string' && templates.get(sourceId)) state.sourceId = sourceId;
+    }
     undoStack.reset(state.workspace);
 
     function restoreDraft() {
@@ -230,6 +239,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         renderIssues();
         markFields();
         renderStructure();
+        renderQueryName();
         el.undo.disabled = !undoStack.canUndo;
         el.redo.disabled = !undoStack.canRedo;
         saveDraft();
@@ -389,8 +399,14 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     }
 
     const saveDraft = debounce(() => {
-        if (state.settings.restoreSession) storage.set(DRAFT_KEY, state.workspace);
-        else storage.remove(DRAFT_KEY);
+        if (state.settings.restoreSession) {
+            storage.set(DRAFT_KEY, state.workspace);
+            if (state.sourceId) storage.set(SOURCE_KEY, state.sourceId);
+            else storage.remove(SOURCE_KEY);
+        } else {
+            storage.remove(DRAFT_KEY);
+            storage.remove(SOURCE_KEY);
+        }
     }, 400);
 
     // ------------------------------------------------------------ model edits
@@ -410,9 +426,14 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         scheduleRefresh.flush();
     }
 
-    function replaceWorkspace(workspace, message) {
+    /**
+     * Replaces the whole query. `sourceId` is the template it came from, if
+     * any: Save then updates that template instead of creating a new one.
+     */
+    function replaceWorkspace(workspace, message, sourceId = null) {
         commitSoon.flush();
         state.workspace = workspace;
+        state.sourceId = sourceId;
         state.attempted = false;
         state.touched.clear();
         undoStack.push(state.workspace);
@@ -854,7 +875,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     const template = templates.get(id);
                     if (!template) return;
                     const switched = switchDialect(template.dialect);
-                    replaceWorkspace(structuredClone(template.workspace), `Loaded “${template.name}”${switched}. Undo restores your previous query.`);
+                    replaceWorkspace(structuredClone(template.workspace), `Loaded “${template.name}”${switched}. Undo restores your previous query.`, template.id);
                     break;
                 }
                 case 'template-rename': {
@@ -864,6 +885,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     if (name === null) return;
                     const renamed = templates.rename(id, name);
                     renderTemplates();
+                    renderQueryName();
                     toast(`Renamed to “${renamed.name}”.`, 'success');
                     break;
                 }
@@ -879,7 +901,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     const ok = await confirmDialog(el.confirmDialog, { title: 'Delete template?', message: `“${template.name}” will be deleted from this browser.`, confirmText: 'Delete' });
                     if (!ok) return;
                     templates.remove(id);
+                    if (state.sourceId === id) state.sourceId = null;
                     renderTemplates();
+                    renderQueryName();
                     el.templateSave.focus();
                     toast('Template deleted.');
                     break;
@@ -913,12 +937,49 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (details === null) return;
         try {
             const template = templates.create(details.name, state.workspace, { ...details, dialect: state.settings.dialect });
+            state.sourceId = template.id;
             renderTemplates();
+            renderQueryName();
+            saveDraft();
             selectTab('templates');
             toast(`Saved template “${template.name}”.`, 'success');
         } catch (error) {
             toast(error instanceof TemplateError ? error.message : 'The template could not be saved.', 'error');
         }
+    }
+
+    /** Save (Ctrl/⌘+S): updates the template being edited, or saves a new one. */
+    async function saveQuery() {
+        commitSoon.flush();
+        const current = state.sourceId ? templates.get(state.sourceId) : null;
+        if (!current) {
+            await saveTemplate();
+            return;
+        }
+        try {
+            const saved = templates.update(current.id, state.workspace, { dialect: state.settings.dialect });
+            renderTemplates();
+            renderQueryName();
+            toast(`Saved “${saved.name}”.`, 'success');
+        } catch (error) {
+            toast(error instanceof TemplateError ? error.message : 'The query could not be saved.', 'error');
+        }
+    }
+
+    /** "Unsaved query", or the template being edited and whether it has changed. */
+    function renderQueryName() {
+        const current = state.sourceId ? templates.get(state.sourceId) : null;
+        if (!current) {
+            el.queryName.replaceChildren(h('span', { class: 'query-name-text muted' }, 'Unsaved query'));
+            el.save.textContent = 'Save…';
+            return;
+        }
+        const changed = JSON.stringify(current.workspace) !== JSON.stringify(state.workspace)
+            || (current.dialect || state.settings.dialect) !== state.settings.dialect;
+        el.queryName.replaceChildren(
+            h('span', { class: 'query-name-text' }, current.name),
+            h('span', { class: `query-name-state${changed ? ' changed' : ''}` }, changed ? 'unsaved changes' : 'saved'));
+        el.save.textContent = 'Save';
     }
 
     async function exportTemplates() {
@@ -1037,6 +1098,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         commitSoon.cancel();
         saveDraft.cancel();
         storage.remove(DRAFT_KEY);
+        storage.remove(SOURCE_KEY);
         syncSettingsForm();
         renderHistory();
         renderTemplates();
@@ -1069,6 +1131,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.undo.addEventListener('click', undo);
     el.redo.addEventListener('click', redo);
     el.copy.addEventListener('click', copySql);
+    el.save.addEventListener('click', saveQuery);
     el.share.hidden = !platform.canShare;
     el.share.addEventListener('click', shareSql);
     el.download.addEventListener('click', downloadSql);
@@ -1149,6 +1212,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     bindShortcuts(doc, signal, {
         generate,
         copy: copySql,
+        save: saveQuery,
         undo,
         redo,
         help: () => showDialog(el.shortcutsDialog),
