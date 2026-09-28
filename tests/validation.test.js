@@ -34,6 +34,14 @@ describe('SELECT basics', () => {
         expect(find(issues, 'Alias “my alias”')).toBeTruthy();
     });
 
+    test('comma-separated tables get a pointer to Joins instead of a generic name error', () => {
+        const issues = validateQuery(select({ from: createTableSource('customers, sales.orders') }));
+        expect(find(issues, 'Enter one table here. To combine tables, add a JOIN under Joins')).toMatchObject({ level: 'error', path: expect.stringMatching(/from\.table$/) });
+        expect(find(issues, "isn't a valid table name")).toBeFalsy();
+        // A comma next to something that isn't a table name keeps the general message
+        expect(find(validateQuery(select({ from: createTableSource('a, b; DROP') })), "isn't a valid table name")).toBeTruthy();
+    });
+
     test('quoted and schema-qualified table names are accepted', () => {
         expect(validateQuery(select({ from: createTableSource('"Order Details"') }))).toEqual([]);
         expect(validateQuery(select({ from: createTableSource('sales.orders', 'o') }))).toEqual([]);

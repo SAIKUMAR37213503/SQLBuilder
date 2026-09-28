@@ -3,6 +3,7 @@
 
 import { h, formatTime } from './dom.js';
 import { getDialect } from '../dialects.js';
+import { EXAMPLE_LEVELS } from '../examples.js';
 
 /**
  * @param {string} text
@@ -86,10 +87,14 @@ export function renderTemplateList(list, templates, { total = templates.length, 
 
 /**
  * @param {any} list
- * @param {any[]} examples the examples to show (already filtered by dialect)
+ * @param {any[]} examples the examples to show (already filtered by dialect and topic)
  * @param {(workspace: any) => string} preview generated SQL for a workspace in the shown dialect
  */
 export function renderExampleList(list, examples, preview) {
+    if (examples.length === 0) {
+        list.replaceChildren(h('li', { class: 'empty-state' }, 'No examples on this topic for this dialect. Choose “All topics” to see the rest.'));
+        return;
+    }
     list.replaceChildren(...examples.map(example => {
         const workspace = example.build();
         const type = workspace.type;
@@ -97,7 +102,9 @@ export function renderExampleList(list, examples, preview) {
         return h('li', { class: 'library-item' },
             h('div', { class: 'library-meta' },
                 h('span', { class: `type-badge type-${type}` }, type.toUpperCase()),
-                h('strong', { class: 'library-name' }, example.name)
+                h('strong', { class: 'library-name' }, example.name),
+                h('span', { class: `library-chip level-${example.level}` }, EXAMPLE_LEVELS[example.level]),
+                h('span', {}, example.topic)
             ),
             h('p', { class: 'library-detail' }, example.description),
             // One-line SQL, clamped to a few lines by CSS

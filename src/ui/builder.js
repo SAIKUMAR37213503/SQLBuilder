@@ -320,7 +320,8 @@ class Renderer {
                     label: `${n} function arguments`, hidden: true, className: 'grow',
                     placeholder: col.func === 'COUNT' ? 'column (empty = all rows)' : WINDOW_ARG_PLACEHOLDERS[spec.args]
                 }),
-                textInput(joinPath(cPath, 'alias'), col.alias, { label: `${n} alias`, hidden: true, placeholder: 'AS alias', className: 'alias' }),
+                // Window aliases tend to be long (running_total, dept_rank)
+                textInput(joinPath(cPath, 'alias'), col.alias, { label: `${n} alias`, hidden: true, placeholder: 'AS alias', className: 'alias alias-wide' }),
                 rowTools(cPath, i, count, 'column')
             ),
             h('div', { class: 'window-over' },

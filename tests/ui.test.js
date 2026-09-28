@@ -1453,7 +1453,26 @@ describe('dialects in the UI', () => {
         const filter = $('#example-filter');
         filter.value = 'all';
         filter.dispatchEvent(new Event('change', { bubbles: true }));
-        expect(names()).toHaveLength(16);
+        expect(names()).toHaveLength(22);
+    });
+
+    test('examples show their level and topic and can be filtered by topic', () => {
+        const names = () => $$('#example-list .library-name').map(n => n.textContent);
+        $('#tab-examples').click();
+        const topic = $('#example-topic');
+        expect(topic.options[0].textContent).toBe('All topics');
+        topic.value = 'Joins';
+        topic.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(names()).toEqual(['Employees and their managers', 'Products never ordered']);
+        const first = $('#example-list .library-item');
+        expect(first.querySelector('.library-chip').textContent).toBe('Intermediate');
+        expect(first.querySelector('.library-meta').textContent).toContain('Joins');
+        // The topic filter combines with the dialect filter
+        topic.value = 'Changing data';
+        topic.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(names()).not.toContain('Upsert: insert or update');
+        pickDialect('mysql');
+        expect(names()).toContain('Upsert: insert or update');
     });
 
     test('templates keep a description and category, and can be filtered by dialect', async () => {

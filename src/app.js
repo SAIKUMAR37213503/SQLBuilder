@@ -21,7 +21,7 @@ import {
     normalizeWorkspace, parseQueryFile, parseTemplatesFile, createQueryExport, createTemplatesExport, MAX_IMPORT_BYTES,
     createBackup, parseBackupFile, MAX_BACKUP_BYTES
 } from './serialization.js';
-import { EXAMPLES, examplesFor } from './examples.js';
+import { EXAMPLES, EXAMPLE_TOPICS, examplesFor } from './examples.js';
 import { h, byPath, debounce, cssEscape, formatTime } from './ui/dom.js';
 import { renderEditor } from './ui/builder.js';
 import { renderSqlCode, selectContents } from './ui/output.js';
@@ -90,6 +90,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         templateSearch: $('template-search'),
         templateSort: $('template-sort'),
         exampleFilter: $('example-filter'),
+        exampleTopic: $('example-topic'),
         complexity: $('complexity'),
         structure: $('structure'),
         queryName: $('query-name'),
@@ -146,7 +147,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         templateFilter: 'all',           // dialect id or 'all'
         templateSearch: '',
         templateSort: 'name',            // 'name' or 'recent'
-        exampleFilter: /** @type {string | null} */ (null) // null: follow the selected dialect
+        exampleFilter: /** @type {string | null} */ (null), // null: follow the selected dialect
+        exampleTopic: 'all'
     };
     if (state.settings.restoreSession) {
         const sourceId = storage.get(SOURCE_KEY);
@@ -901,7 +903,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     function renderExamples() {
         const filter = state.exampleFilter ?? state.settings.dialect;
         el.exampleFilter.value = filter;
-        const shown = examplesFor(filter);
+        const shown = examplesFor(filter, state.exampleTopic);
         const dialect = filter === 'all' ? state.settings.dialect : filter;
         renderExampleList(el.exampleList, shown, (workspace) => {
             try {
@@ -1384,6 +1386,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         state.exampleFilter = el.exampleFilter.value;
         renderExamples();
     });
+    el.exampleTopic.addEventListener('change', () => {
+        state.exampleTopic = EXAMPLE_TOPICS.includes(el.exampleTopic.value) ? el.exampleTopic.value : 'all';
+        renderExamples();
+    });
     el.templateSave.addEventListener('click', saveTemplate);
     el.templateImport.addEventListener('click', () => chooseFile('templates'));
     el.templateExport.addEventListener('click', exportTemplates);
@@ -1427,6 +1433,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.dialectSelect.value = state.settings.dialect;
     el.templateFilter.replaceChildren(...dialectOptions(true));
     el.exampleFilter.replaceChildren(...dialectOptions(true));
+    el.exampleTopic.replaceChildren(h('option', { value: 'all' }, 'All topics'), ...EXAMPLE_TOPICS.map(t => h('option', { value: t }, t)));
     syncTypeTabs();
     renderBuilder();
     renderHistory();

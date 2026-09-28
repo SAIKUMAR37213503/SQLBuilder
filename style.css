@@ -227,7 +227,8 @@ kbd {
 
 .side { display: grid; gap: 1rem; min-width: 0; }
 
-@media (min-width: 1100px) {
+/* Two columns from tablet width, so the SQL sits beside the builder */
+@media (min-width: 760px) {
     .workspace { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
     .side {
         position: sticky;
@@ -424,6 +425,7 @@ kbd {
 
 .row .grow { flex: 1 1 7rem; min-width: 0; }
 .row .alias { flex: 0 1 7.5rem; min-width: 5rem; }
+.row .alias-wide { flex: 1 1 9rem; }
 
 .row-tools { display: flex; flex-wrap: nowrap; gap: 0.1rem; margin-left: auto; }
 .row-tools .btn-icon { width: 2rem; }
@@ -571,8 +573,8 @@ kbd {
 }
 .builder-actions .btn-primary { flex: 1 1 12rem; min-height: 2.6rem; font-size: 1rem; }
 
-/* Wide screens: Generate stays in view at the bottom of a long builder */
-@media (min-width: 1100px) {
+/* Two-column layout: Generate stays in view at the bottom of a long builder */
+@media (min-width: 760px) {
     .builder-actions {
         position: sticky;
         bottom: 0;
@@ -632,6 +634,7 @@ kbd {
     background: var(--surface-2);
 }
 .segment {
+    min-height: 2rem;
     padding: 0.3rem 0.6rem;
     border: 0;
     border-radius: 5px;
@@ -954,9 +957,9 @@ kbd {
 
 .output-panel:focus { outline: none; }
 
-/* Below the two-column layout the SQL sits under the builder, so phones,
-   tablets and narrow windows get a fixed bar with the main actions. */
-@media (max-width: 1099px) {
+/* Below the two-column layout the SQL sits under the builder, so phones
+   and narrow windows get a fixed bar with the main actions. */
+@media (max-width: 759px) {
     .app { padding-bottom: calc(6rem + var(--safe-bottom)); }
     .toast { bottom: calc(5.5rem + var(--safe-bottom)); }
     .output-panel { scroll-margin-top: calc(0.75rem + var(--safe-top)); }

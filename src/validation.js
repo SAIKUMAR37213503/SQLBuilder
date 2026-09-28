@@ -162,6 +162,11 @@ class Validator {
     tableName(name, path, scope, label = 'a table name') {
         if (blank(name)) {
             this.add('error', 'builder', `Enter ${label}.`, path, scope);
+        } else if (name.includes(',') && name.split(',').every(part => isQualifiedName(part.trim()))) {
+            // "a, b" is an old-style implicit join: steer to an explicit JOIN
+            this.add('error', 'builder',
+                'Enter one table here. To combine tables, add a JOIN under Joins with an ON condition; tables separated by commas pair every row with every row unless WHERE links them.',
+                path, scope);
         } else if (!isQualifiedName(name.trim())) {
             this.add('error', 'builder',
                 `${quote(name)} isn't a valid table name. Use letters, numbers and _ (optionally schema.table), or wrap the name in quotes.`,

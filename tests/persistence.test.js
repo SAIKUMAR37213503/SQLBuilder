@@ -8,7 +8,7 @@ import {
     normalizeWorkspace, parseQueryFile, createQueryExport, parseTemplatesFile, createTemplatesExport, ImportError, APP_ID,
     createBackup, parseBackupFile, BACKUP_FORMAT, BACKUP_VERSION
 } from '../src/serialization.js';
-import { EXAMPLES } from '../src/examples.js';
+import { EXAMPLES, EXAMPLE_LEVELS, EXAMPLE_TOPICS, examplesFor } from '../src/examples.js';
 import { createWorkspace, createCondition, createGroup } from '../src/model.js';
 import { generateSQL } from '../src/generator.js';
 import { validateWorkspace, hasErrors } from '../src/validation.js';
@@ -465,6 +465,16 @@ describe('examples', () => {
             expect(hasErrors(issues), JSON.stringify(issues)).toBe(false);
             expect(generateSQL(ws, { dialect })).toMatch(/;$/);
         }
+    });
+
+    test('every example has a level and a topic, and every topic has examples', () => {
+        for (const example of EXAMPLES) {
+            expect(Object.keys(EXAMPLE_LEVELS), example.id).toContain(example.level);
+            expect(EXAMPLE_TOPICS, example.id).toContain(example.topic);
+        }
+        for (const topic of EXAMPLE_TOPICS) expect(examplesFor('all', topic).length, topic).toBeGreaterThan(0);
+        expect(new Set(EXAMPLES.map(e => e.id)).size).toBe(EXAMPLES.length);
+        expect(examplesFor('generic', 'Changing data').map(e => e.id)).not.toContain('upsert');
     });
 
     test('the documented example output', () => {

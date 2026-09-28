@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=ec667dbb61e9">
+    <link rel="stylesheet" href="style.css?v=8e9f0c6577aa">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -151,10 +151,14 @@
                     </div>
 
                     <div role="tabpanel" id="panel-examples" aria-labelledby="tab-examples" class="tab-panel" hidden>
-                        <div class="library-toolbar">
+                        <div class="library-toolbar library-toolbar-filters">
                             <label class="library-filter">
                                 <span>Examples for</span>
                                 <select id="example-filter" class="select select-sm"></select>
+                            </label>
+                            <label class="library-filter">
+                                <span>Topic</span>
+                                <select id="example-topic" class="select select-sm"></select>
                             </label>
                         </div>
                         <ul class="library-list" id="example-list"></ul>
@@ -305,6 +309,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=f0eb3382d96b" defer></script>
+    <script src="dist/sqlbuilder.js?v=3ce29751bf8a" defer></script>
 </body>
 </html>
