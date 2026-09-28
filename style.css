@@ -881,6 +881,30 @@ kbd {
 .dialog-message { color: var(--text-2); }
 .dialog-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: flex-end; }
 
+/* Command palette: sits near the top like other palettes, list scrolls */
+.palette { margin-top: max(8vh, calc(1rem + var(--safe-top))); }
+.palette-body { gap: 0.6rem; padding: 0.9rem; }
+.palette-list { display: grid; gap: 1px; max-height: min(22rem, 55vh); margin: 0; padding: 0; overflow: auto; list-style: none; }
+.palette-option {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    min-height: 2.5rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+.palette-option:hover { background: var(--surface-2); }
+.palette-option[aria-selected="true"] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.palette-label { flex: 1; min-width: 0; font-weight: 600; }
+.palette-group { color: var(--text-muted); font-size: 0.8rem; }
+.palette-keys { display: flex; gap: 0.2rem; }
+.palette-empty { padding: 0.6rem; color: var(--text-muted); }
+.palette-hint { margin: 0; }
+@media (max-width: 480px) {
+    .palette-keys, .palette-hint { display: none; }
+}
+
 .shortcut-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .shortcut-table th, .shortcut-table td { padding: 0.4rem 0.25rem; border-bottom: 1px solid var(--border); text-align: left; }
 .shortcut-table th { color: var(--text-muted); font-size: 0.8rem; font-weight: 600; }

@@ -1063,6 +1063,87 @@ describe('saving the current query', () => {
     });
 });
 
+describe('command palette', () => {
+    const palette = () => $('#palette-dialog');
+    const options = () => $$('#palette-list [role="option"] .palette-label').map(n => n.textContent);
+    const search = (text) => {
+        $('#palette-input').value = text;
+        $('#palette-input').dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const active = () => $(`#${$('#palette-input').getAttribute('aria-activedescendant')} .palette-label`).textContent;
+
+    test('Ctrl/⌘+K opens it with focus in the search field and every command listed', async () => {
+        press('k', { ctrlKey: true });
+        await settle();
+        expect(palette().hasAttribute('open')).toBe(true);
+        expect(document.activeElement).toBe($('#palette-input'));
+        expect(options()).toContain('Generate SQL');
+        expect(options()).toContain('Use PostgreSQL');
+        // Only commands that make sense now: nothing to undo, SELECT is current
+        expect(options()).not.toContain('Undo');
+        expect(options()).not.toContain('Switch to SELECT');
+        expect(active()).toBe('Generate SQL');
+        expect($('#palette-list [aria-selected="true"]')).not.toBeNull();
+    });
+
+    test('typing filters, arrows move the active option and Enter runs it', async () => {
+        await fillSimpleSelect();
+        press('k', { metaKey: true });
+        await settle();
+        search('switch to');
+        expect(options()).toEqual(['Switch to INSERT', 'Switch to UPDATE', 'Switch to DELETE', expect.stringMatching(/^Switch theme to /)]);
+        press('ArrowDown', {}, $('#palette-input'));
+        expect(active()).toBe('Switch to UPDATE');
+        press('ArrowUp', {}, $('#palette-input'));
+        press('ArrowUp', {}, $('#palette-input'));
+        expect(active()).toBe(options().at(-1));
+        press('ArrowDown', {}, $('#palette-input'));
+        press('Enter', {}, $('#palette-input'));
+        await settle();
+        expect(palette().hasAttribute('open')).toBe(false);
+        expect($('input[name="query-type"][value="insert"]').checked).toBe(true);
+        expect(field('insert.table')).not.toBeNull();
+    });
+
+    test('no matches shows a message; Escape closes without running anything', async () => {
+        press('k', { ctrlKey: true });
+        await settle();
+        search('zzzz');
+        expect($('#palette-list').hidden).toBe(true);
+        expect($('.palette-empty').hidden).toBe(false);
+        expect($('#palette-input').getAttribute('aria-expanded')).toBe('false');
+        press('Enter', {}, $('#palette-input'));
+        press('Escape', {}, palette());
+        await settle();
+        expect(palette().hasAttribute('open')).toBe(false);
+    });
+
+    test('commands reuse the app actions: dialect, output mode and clicking an option', async () => {
+        press('k', { ctrlKey: true });
+        await settle();
+        search('mysql');
+        press('Enter', {}, $('#palette-input'));
+        await settle();
+        expect($('#dialect-select').value).toBe('mysql');
+
+        $('[data-command="palette"]').click();
+        await settle();
+        expect(palette().hasAttribute('open')).toBe(true);
+        search('one line');
+        $('#palette-list [role="option"]').click();
+        await settle();
+        expect($('[data-output-mode="compact"]').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    test('it does not open over another dialog', async () => {
+        $('#settings-btn').click();
+        await settle();
+        press('k', { ctrlKey: true });
+        await settle();
+        expect(palette().hasAttribute('open')).toBe(false);
+    });
+});
+
 describe('template library', () => {
     const names = () => $$('#template-list .library-name').map(n => n.textContent);
     async function saveAs(table, name, category = '') {

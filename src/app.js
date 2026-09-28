@@ -28,6 +28,7 @@ import { renderHistoryList, renderTemplateList, renderExampleList } from './ui/l
 import { promptDialog, templateDialog, confirmDialog, showDialog, closeDialog, enhanceDialog } from './ui/dialogs.js';
 import { applyTheme, nextTheme, effectiveTheme, THEME_LABELS } from './ui/theme.js';
 import { bindShortcuts, SHORTCUTS, modLabel } from './ui/shortcuts.js';
+import { openPalette } from './ui/palette.js';
 import { createWebPlatform } from './platform/web.js';
 
 const DRAFT_KEY = 'draft';
@@ -115,6 +116,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         templateDialog: $('template-dialog'),
         confirmDialog: $('confirm-dialog'),
         shortcutsDialog: $('shortcuts-dialog'),
+        paletteDialog: $('palette-dialog'),
         clearData: $('clear-data-btn'),
         viewSql: $('view-sql-btn'),
         statusBadge: $('status-badge')
@@ -1056,7 +1058,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     // Android back button: close the top-most overlay. Returns false when there
     // is nothing to close, so the platform can apply its default behaviour.
     function handleBack() {
-        const dialogs = [el.confirmDialog, el.promptDialog, el.shortcutsDialog, el.settingsDialog];
+        const dialogs = [el.confirmDialog, el.promptDialog, el.templateDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
         const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
         if (open) {
             closeDialog(open, 'cancel');
@@ -1132,6 +1134,75 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         toast('All saved data was deleted from this browser.', 'success');
     }
 
+    // ------------------------------------------------------- command palette
+
+    function openLibraryTab(name) {
+        selectTab(name, true);
+        doc.getElementById(`tab-${name}`).scrollIntoView({ block: 'nearest' });
+    }
+
+    /** The commands that make sense right now, reusing the buttons' own handlers. */
+    function paletteCommands() {
+        const { type } = state.workspace;
+        const { settings } = state;
+        return [
+            { id: 'generate', group: 'SQL', label: 'Generate SQL', keys: ['Mod', 'Enter'], keywords: 'run build', run: generate },
+            { id: 'copy', group: 'SQL', label: 'Copy SQL', keys: ['Mod', 'Shift', 'C'], keywords: 'clipboard', run: copySql },
+            { id: 'download', group: 'SQL', label: 'Download SQL (.sql)', keywords: 'file save', run: downloadSql },
+            { id: 'save', group: 'Query', label: state.sourceId ? 'Save query' : 'Save query as a template…', keys: ['Mod', 'S'], keywords: 'template', run: saveQuery },
+            state.sourceId && { id: 'save-new', group: 'Templates', label: 'Save as a new template…', keywords: 'copy', run: saveTemplate },
+            undoStack.canUndo && { id: 'undo', group: 'Edit', label: 'Undo', keys: ['Mod', 'Z'], run: undo },
+            undoStack.canRedo && { id: 'redo', group: 'Edit', label: 'Redo', keys: ['Mod', 'Shift', 'Z'], run: redo },
+            ...['select', 'insert', 'update', 'delete'].filter(t => t !== type).map(t => ({
+                id: `type-${t}`, group: 'Query', label: `Switch to ${t.toUpperCase()}`, keywords: 'query type statement', run: () => {
+                    setType(t);
+                    syncTypeTabs();
+                }
+            })),
+            ...listDialects().filter(d => d.id !== settings.dialect).map(d => ({
+                id: `dialect-${d.id}`, group: 'Dialect', label: `Use ${d.label}`, keywords: 'dialect database', run: () => {
+                    updateSettings({ dialect: d.id });
+                    announceDialect();
+                }
+            })),
+            {
+                id: 'output-mode', group: 'Output', keywords: 'format compact one line',
+                label: settings.outputMode === 'formatted' ? 'Show SQL on one line' : 'Show formatted SQL',
+                run: () => updateSettings({ outputMode: settings.outputMode === 'formatted' ? 'compact' : 'formatted' })
+            },
+            {
+                id: 'wrap', group: 'Output', label: settings.wrapOutput ? 'Stop wrapping long lines' : 'Wrap long lines',
+                run: () => updateSettings({ wrapOutput: !settings.wrapOutput })
+            },
+            {
+                id: 'theme', group: 'View', label: `Switch theme to ${THEME_LABELS[nextTheme(settings.theme)]}`, keywords: 'dark light appearance',
+                run: () => updateSettings({ theme: nextTheme(settings.theme) })
+            },
+            { id: 'open-history', group: 'Library', label: 'Open history', run: () => openLibraryTab('history') },
+            { id: 'open-templates', group: 'Library', label: 'Open templates', run: () => openLibraryTab('templates') },
+            { id: 'open-examples', group: 'Library', label: 'Open examples', run: () => openLibraryTab('examples') },
+            { id: 'export-query', group: 'File', label: 'Export query (.json)', run: exportQuery },
+            { id: 'import-query', group: 'File', label: 'Import query (.json)…', run: () => chooseFile('query') },
+            templates.list().length > 0 && { id: 'export-templates', group: 'Templates', label: 'Export all templates', run: exportTemplates },
+            { id: 'import-templates', group: 'Templates', label: 'Import templates…', run: () => chooseFile('templates') },
+            { id: 'shortcuts', group: 'Help', label: 'Show keyboard shortcuts', keys: ['?'], run: () => showDialog(el.shortcutsDialog) },
+            { id: 'settings', group: 'Settings', label: 'Open settings', keywords: 'preferences options', run: openSettings },
+            { id: 'clear', group: 'Query', label: `Clear the ${type.toUpperCase()} query`, run: clearCurrent },
+            { id: 'reset', group: 'Query', label: 'Reset all', keywords: 'new start over', run: resetAll }
+        ].filter(Boolean);
+    }
+
+    async function showPalette() {
+        // One dialog at a time: the palette doesn't open over another one
+        if (doc.querySelector('dialog[open]')) return;
+        // Opened from the File menu: focus returns to the menu's button
+        if (el.fileMenu.contains(doc.activeElement)) el.fileMenu.querySelector('summary').focus();
+        el.fileMenu.open = false;
+        commitSoon.flush();
+        const command = await openPalette(el.paletteDialog, paletteCommands(), (key) => (key === 'Mod' ? modLabel() : key));
+        if (command) command.run();
+    }
+
     function renderShortcuts() {
         const rows = doc.getElementById('shortcut-rows');
         rows.replaceChildren(...SHORTCUTS.map(s => h('tr', {},
@@ -1188,6 +1259,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             'export-query': exportQuery,
             'import-query': () => chooseFile('query'),
             'download-sql': downloadSql,
+            palette: showPalette,
             generate,
             copy: copySql
         };
@@ -1242,12 +1314,13 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.templateExport.addEventListener('click', exportTemplates);
     el.fileInput.addEventListener('change', onFileChosen);
 
-    [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog].forEach(enhanceDialog);
+    [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog, el.paletteDialog].forEach(enhanceDialog);
 
     bindShortcuts(doc, signal, {
         generate,
         copy: copySql,
         save: saveQuery,
+        palette: showPalette,
         undo,
         redo,
         help: () => showDialog(el.shortcutsDialog),

@@ -90,6 +90,7 @@ Messages are listed errors first, then warnings, then tips. On narrower screens 
 - **Examples**: sixteen starter queries, filtered to the selected dialect (the upsert example only exists for PostgreSQL and MySQL). Each one shows a one-line preview of the SQL it produces in that dialect.
 - Import/export of the current query as JSON (validated, never executed), and download of the SQL. An exported query remembers its dialect, and importing it switches back to that dialect.
 - Undo / redo of every change.
+- **Command palette** (Ctrl/⌘+K, or File → Commands… on touch screens): search and run commands such as Generate, Copy, Save, switching the query type, dialect, output format or theme, opening the library tabs, import/export and settings. It only lists commands that apply right now and runs the same actions as the buttons.
 - Unsaved work is restored when you come back; this can be turned off.
 - Settings: dialect (also next to the SQL heading), identifier quoting, live preview, history, session restore, theme, and delete all saved data.
 - Light / Dark / System theme.
@@ -155,6 +156,7 @@ A single column stays on the `SELECT` line (`SELECT * FROM …`); two or more ar
 | `Ctrl`/`⌘` + `Enter` | Generate SQL (and add it to history) |
 | `Ctrl`/`⌘` + `Shift` + `C` | Copy SQL. Some browsers reserve this shortcut for their developer tools; the Copy button always works. |
 | `Ctrl`/`⌘` + `S` | Save the query (updates the template it was loaded from, or asks for a name) |
+| `Ctrl`/`⌘` + `K` | Command palette: type to find any command (also File → Commands…) |
 | `Ctrl`/`⌘` + `Z` | Undo, when focus is not in a text field (text fields keep the browser's own undo) |
 | `Ctrl`/`⌘` + `Shift` + `Z` (or `Ctrl` + `Y`) | Redo, outside text fields |
 | `?` | Show shortcuts |
@@ -222,6 +224,7 @@ src/
     ├── output.js     SQL view with tokens and line numbers
     ├── library.js    History / Templates / Examples lists
     ├── dialogs.js    Native <dialog> helpers
+    ├── palette.js    Command palette (filtering + combobox dialog)
     ├── theme.js, shortcuts.js, dom.js (safe element builder)
 ```
 

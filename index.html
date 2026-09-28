@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=d7473ff7215e">
+    <link rel="stylesheet" href="style.css?v=7486ca6a3b6c">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -27,6 +27,7 @@
                 <details class="menu" id="file-menu">
                     <summary class="btn btn-ghost">File</summary>
                     <div class="menu-panel">
+                        <button type="button" class="menu-item" data-command="palette" aria-keyshortcuts="Control+K Meta+K">Commands…</button>
                         <button type="button" class="menu-item" data-command="export-query">Export query (.json)</button>
                         <button type="button" class="menu-item" data-command="import-query">Import query (.json)…</button>
                         <button type="button" class="menu-item" data-command="download-sql">Download SQL (.sql)</button>
@@ -275,7 +276,17 @@
         </form>
     </dialog>
 
+    <dialog id="palette-dialog" class="dialog palette" aria-labelledby="palette-title">
+        <div class="dialog-body palette-body">
+            <h2 id="palette-title" class="visually-hidden">Commands</h2>
+            <input type="text" id="palette-input" class="input" role="combobox" aria-label="Search commands" aria-controls="palette-list" aria-expanded="true" aria-autocomplete="list" placeholder="Type a command…" autocomplete="off" spellcheck="false">
+            <ul id="palette-list" class="palette-list" role="listbox" aria-label="Commands"></ul>
+            <p class="palette-empty" hidden>No commands match.</p>
+            <p class="field-hint palette-hint"><kbd>↑</kbd> <kbd>↓</kbd> to move, <kbd>Enter</kbd> to run, <kbd>Esc</kbd> to close</p>
+        </div>
+    </dialog>
+
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=cc809f5adb13" defer></script>
+    <script src="dist/sqlbuilder.js?v=f8d6b32751a0" defer></script>
 </body>
 </html>
