@@ -1,13 +1,16 @@
 // Validation of the query model.
 //
 // Issues are { level, category, message, path }:
-//   level:    'error'   – the SQL would be broken; generation is blocked
-//             'warning' – valid SQL that is probably not what you want
-//             'info'    – a hint
+//   level:    'error'      – the SQL would be broken; generation is blocked
+//             'warning'    – valid SQL that is probably not what you want
+//             'suggestion' – valid SQL that could be clearer or simpler
+//             'info'       – a hint
 //   category: 'builder' – missing / inconsistent builder input
 //             'syntax'  – lightweight checks on typed SQL fragments
 //                         (quotes, parentheses, ";") — not a full parser
 //             'safety'  – destructive statements (UPDATE / DELETE)
+//             'analysis' – rules from analysis.js: repeated or contradictory
+//                         conditions, unlinked joins, unused aliases, …
 //   path:     model path of the field the issue refers to
 //
 // Only errors block generation; warnings never stop the user.
@@ -21,6 +24,10 @@ import {
     containsAggregateCall, normalizeExpr, isNumberLiteral, isQuotedString, isBareIdentifier, stripStrings, hasLeadingZero,
     findBareWord
 } from './sql-utils.js';
+import {
+    DEEP_NESTING, duplicateConditions, contradictions, isReversedBetween, joinLink, sourceNames,
+    statementTexts, isUnusedAlias, isReferenced, wildcardColumn, isRedundantDistinct, nestingDepth
+} from './analysis.js';
 
 export const MAX_NESTING_DEPTH = 4;
 
@@ -58,6 +65,7 @@ export function validateWorkspace(workspace, options = {}) {
  */
 export function validateQuery(query, options = {}, basePath = '') {
     const v = new Validator(getDialect(options.dialect), Boolean(options.quoteIdentifiers));
+    v.texts = statementTexts(query);
     switch (query.kind) {
         case 'select': v.select(query, basePath, { scope: '', depth: 0, branch: false, top: true }); break;
         case 'insert': v.insert(query, basePath); break;
@@ -75,7 +83,7 @@ export function hasErrors(issues) {
 
 export function summarize(issues) {
     const count = (level) => issues.filter(i => i.level === level).length;
-    return { errors: count('error'), warnings: count('warning'), infos: count('info') };
+    return { errors: count('error'), warnings: count('warning'), suggestions: count('suggestion'), infos: count('info') };
 }
 
 const blank = (value) => String(value ?? '').trim() === '';
@@ -88,6 +96,8 @@ class Validator {
         this.issues = [];
         /** @type {null | { path: string, scope: string }} first parameter whose name the dialect can't use */
         this.ignoredParam = null;
+        /** @type {string[]} the statement's text fields, for finding alias references */
+        this.texts = [];
     }
 
     // Statement-wide notes, added once after everything else was checked
@@ -221,6 +231,34 @@ class Validator {
         }
 
         this.setOps(q, path, ctx);
+        this.selectAnalysis(q, path, ctx);
+    }
+
+    // Valid SELECTs that could be clearer: see analysis.js
+    selectAnalysis(q, path, ctx) {
+        const { scope } = ctx;
+        if (ctx.top) {
+            // SELECT * from a CTE or FROM subquery only returns columns the query itself lists
+            const cteNames = new Set(q.ctes.map(c => String(c.name).trim().toLowerCase()));
+            const fromQuery = q.from.kind === 'subquery' || cteNames.has(String(q.from.table).trim().toLowerCase());
+            const star = wildcardColumn(q);
+            if (star >= 0 && q.groupBy.length === 0 && !(fromQuery && q.joins.length === 0)) {
+                this.add('suggestion', 'analysis',
+                    'SELECT * returns every column, including any added to the table later. Listing just the columns you need keeps the result predictable and may reduce the amount of data returned.',
+                    joinPath(path, 'columns', star, 'expr'), scope);
+            }
+            const depth = nestingDepth(q);
+            if (depth >= DEEP_NESTING) {
+                this.add('suggestion', 'analysis',
+                    `Subqueries are nested ${depth} levels deep. Moving inner ones into named queries (WITH) can make the query easier to read and check.`,
+                    path, scope);
+            }
+        }
+        if (isRedundantDistinct(q)) {
+            this.add('suggestion', 'analysis',
+                'Every grouped column is selected, so GROUP BY already returns distinct rows and DISTINCT doesn\'t change the result. You can turn DISTINCT off.',
+                joinPath(path, 'distinct'), scope);
+        }
     }
 
     // ORDER BY inside a subquery or CTE only matters together with LIMIT/OFFSET
@@ -448,6 +486,8 @@ class Validator {
             names.set(name, true);
         };
         register(q.from, joinPath(path, 'from'));
+        this.unusedAlias(q.from, joinPath(path, 'from'), scope);
+        const earlier = [...sourceNames(q.from)];
 
         q.joins.forEach((join, i) => {
             const jPath = joinPath(path, 'joins', i);
@@ -466,14 +506,40 @@ class Validator {
                 this.add('error', 'builder', `Add a condition saying how ${quote(join.source.table || join.source.alias || 'the joined table')} matches the other tables.`, joinPath(jPath, 'on'), scope);
             } else {
                 this.group(join.on, joinPath(jPath, 'on'), scope, ctx, 'ON');
+                this.joinLink(join, earlier, jPath, scope);
             }
+            this.unusedAlias(join.source, joinPath(jPath, 'source'), scope);
+            earlier.push(...sourceNames(join.source));
         });
+    }
+
+    // An ON condition that never mentions one side pairs rows with every row of the other
+    joinLink(join, earlier, jPath, scope) {
+        const unlinked = joinLink(join, earlier);
+        if (!unlinked) return;
+        const name = quote(join.source.alias || join.source.table);
+        this.add('warning', 'analysis', unlinked === 'unlinked-earlier'
+            ? `The ON condition only mentions ${name}, not the tables before it, so each of its rows is paired with every earlier row. This may return far more rows than expected and increase the amount of data processed. Add a condition that links ${name} to an earlier table.`
+            : `The ON condition doesn't mention ${name}, the table being joined, so its rows are paired with every matching earlier row. This may return far more rows than expected and increase the amount of data processed. Add a condition that uses a column of ${name}.`,
+        joinPath(jPath, 'on'), scope);
+    }
+
+    unusedAlias(source, sPath, scope) {
+        if (!isUnusedAlias(source, this.texts)) return;
+        const alias = String(source.alias).trim();
+        const table = String(source.table).trim();
+        const tableUsed = isReferenced(table.split('.').pop(), this.texts);
+        this.add('suggestion', 'analysis', tableUsed
+            ? `The alias ${quote(alias)} isn't used, but ${quote(`${table}.`)} is. Once a table has an alias, most databases only accept ${alias}.column, so write that or remove the alias.`
+            : `The alias ${quote(alias)} for ${quote(table)} isn't used. Write ${alias}.column to show which table each column comes from, or remove the alias.`,
+        joinPath(sPath, 'alias'), scope);
     }
 
     group(group, path, scope, ctx, clause) {
         if (!LOGIC_OPERATORS.includes(group.logic)) {
             this.add('error', 'builder', `Unknown logic operator ${quote(group.logic)}.`, joinPath(path, 'logic'), scope);
         }
+        this.groupAnalysis(group, path, scope, clause);
         group.items.forEach((item, i) => {
             const iPath = joinPath(path, 'items', i);
             if (item.kind === 'group') {
@@ -486,6 +552,27 @@ class Validator {
                 this.fragment(item.sql, joinPath(iPath, 'sql'), scope, { label: 'the custom SQL condition' });
             } else {
                 this.condition(item, iPath, scope, ctx, clause);
+            }
+        });
+    }
+
+    // Repeated and contradictory conditions within one group
+    groupAnalysis(group, path, scope, clause) {
+        for (const { index, first } of duplicateConditions(group)) {
+            this.add('suggestion', 'analysis',
+                `This ${clause} condition repeats condition ${first + 1} of the same group, so one of them can be removed.`,
+                joinPath(path, 'items', index), scope);
+        }
+        for (const c of contradictions(group)) {
+            this.add('warning', 'analysis',
+                `${quote(c.column)} can't be ${c.firstText} and ${c.text} at the same time, so these ${clause} conditions never match a row. Check the values, or combine them with OR.`,
+                joinPath(path, 'items', c.index, 'value'), scope);
+        }
+        group.items.forEach((item, i) => {
+            if (isReversedBetween(item)) {
+                this.add('warning', 'analysis',
+                    `BETWEEN ${String(item.value).trim()} AND ${String(item.value2).trim()} never matches: the smaller value has to come first. Swap the two values.`,
+                    joinPath(path, 'items', i, 'value'), scope);
             }
         });
     }

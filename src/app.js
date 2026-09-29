@@ -9,6 +9,7 @@ import {
 } from './model.js';
 import { generateSQL } from './generator.js';
 import { describeStructure } from './structure.js';
+import { describeInsights } from './analysis.js';
 import { validateWorkspace, hasErrors, summarize } from './validation.js';
 import { listDialects, getDialect } from './dialects.js';
 import { createStorage } from './storage.js';
@@ -112,6 +113,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         queryName: $('query-name'),
         save: $('save-btn'),
         structureSteps: $('structure-steps'),
+        structureInsights: $('structure-insights'),
         structureNotes: $('structure-notes'),
         issuesSummary: $('issues-summary'),
         issuesList: $('issues-list'),
@@ -342,17 +344,18 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             renderStatusBadge(0, 0);
             return;
         }
-        const { errors, warnings, infos } = summarize(state.issues);
+        const { errors, warnings, suggestions, infos } = summarize(state.issues);
         const parts = [];
         if (errors) parts.push(`${errors} ${errors === 1 ? 'error' : 'errors'}`);
         if (warnings) parts.push(`${warnings} ${warnings === 1 ? 'warning' : 'warnings'}`);
+        if (suggestions) parts.push(`${suggestions} ${suggestions === 1 ? 'suggestion' : 'suggestions'}`);
         if (infos) parts.push(`${infos} ${infos === 1 ? 'tip' : 'tips'}`);
         el.issuesSummary.textContent = parts.length ? `— ${parts.join(', ')}` : '— all good';
         renderStatusBadge(errors, warnings);
 
-        const labels = { error: 'Error', warning: 'Warning', info: 'Tip' };
-        const rank = { error: 0, warning: 1, info: 2 };
-        // Errors first, then warnings, then tips; ids keep the validation index
+        const labels = { error: 'Error', warning: 'Warning', suggestion: 'Suggestion', info: 'Tip' };
+        const rank = { error: 0, warning: 1, suggestion: 2, info: 3 };
+        // Errors first, then warnings, suggestions and tips; ids keep the validation index
         // because fields point at them with aria-describedby
         const ordered = state.issues.map((issue, i) => [issue, i]).sort((a, b) => rank[a[0].level] - rank[b[0].level] || a[1] - b[1]);
         el.issuesList.replaceChildren(...ordered.map(([issue, i]) => h('li', {
@@ -425,6 +428,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             if (conditions) parts.push(plural(conditions, 'condition'));
         }
         el.complexity.textContent = parts.length ? `· ${parts.join(' · ')}` : '';
+        renderInsights();
 
         const { steps, notes } = describeStructure(state.workspace, getDialect(state.settings.dialect));
         el.structureSteps.replaceChildren(...steps.map((step, i) =>
@@ -439,6 +443,25 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                 h('span', { class: 'structure-detail' }, step.detail)),
                 h('p', { class: 'structure-explain' }, step.explanation))));
         el.structureNotes.textContent = notes.join(' ');
+    }
+
+    /** The insights row: how many parts a SELECT has, and a rough band. */
+    function renderInsights() {
+        const list = el.structureInsights;
+        list.hidden = state.workspace.type !== 'select';
+        if (list.hidden) return;
+        const i = describeInsights(state.workspace.select);
+        const count = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+        const items = [`Overall: ${i.band}`];
+        if (i.ctes) items.push(count(i.ctes, 'CTE'));
+        if (i.joins) items.push(count(i.joins, 'join'));
+        if (i.subqueries) items.push(count(i.subqueries, 'subquery', 'subqueries'));
+        if (i.setOps) items.push(count(i.setOps, 'combined query', 'combined queries'));
+        if (i.aggregates) items.push(count(i.aggregates, 'aggregate'));
+        if (i.windows) items.push(count(i.windows, 'window function'));
+        if (i.filters) items.push(count(i.filters, 'filter'));
+        if (i.depth) items.push(`nesting depth ${i.depth}`);
+        list.replaceChildren(...items.map((text, n) => h('li', { class: n === 0 ? `insight insight-band band-${i.band}` : 'insight' }, text)));
     }
 
     /** Opens a builder section (or finds a field) and moves focus to it. */

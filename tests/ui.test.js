@@ -983,6 +983,23 @@ describe('checks panel', () => {
         expect($('#status-badge').dataset.level).toBe('warning');
     });
 
+    test('suggestions are listed before tips and never change the badge', async () => {
+        $('#example-list [data-action="example-load"][data-id="nested-conditions"]').click();
+        await settle();
+        const items = $$('#issues-list .issue');
+        expect(items.map(n => n.querySelector('.issue-level').textContent)).toEqual(['Suggestion']);
+        expect(items[0].classList.contains('issue-suggestion')).toBe(true);
+        expect(items[0].querySelector('.issue-message').textContent).toMatch(/^SELECT \* returns every column/);
+        expect($('#issues-summary').textContent).toBe('— 1 suggestion');
+        expect($('#status-badge').hidden).toBe(true);
+        expect($('#output-state').textContent).not.toContain('Resolve');
+        // A LIMIT without ORDER BY adds a tip, listed after the suggestion
+        type('select.limit', '5');
+        await settle();
+        expect($$('#issues-list .issue-level').map(n => n.textContent)).toEqual(['Suggestion', 'Tip']);
+        expect($('#issues-summary').textContent).toBe('— 1 suggestion, 1 tip');
+    });
+
     test('field descriptions still point at the right message after sorting', async () => {
         type('select.columns.0.expr', 'x');
         $('#generate-btn').click();
@@ -1378,6 +1395,22 @@ describe('query structure panel', () => {
         expect($('#complexity').textContent).toBe('· 1 join · 1 condition');
         expect(steps()).toEqual(['FROM', 'JOIN', 'GROUP BY', 'HAVING', 'SELECT', 'ORDER BY']);
         expect($$('#structure-steps .structure-jump').every(b => b.type === 'button')).toBe(true);
+    });
+
+    test('shows an insights row for SELECT queries only', async () => {
+        const insights = () => $$('#structure-insights li').map(n => n.textContent);
+        await loadExample('join-aggregate');
+        expect(insights()).toEqual(['Overall: moderate', '1 join', '2 aggregates', '1 filter']);
+        expect($('#structure-insights').getAttribute('aria-label')).toMatch(/^Query insights/);
+        await loadExample('filter-sort');
+        expect(insights()).toEqual(['Overall: simple', '1 filter']);
+        await loadExample('not-exists');
+        expect(insights()).toEqual(['Overall: moderate', '1 subquery', '2 filters', 'nesting depth 1']);
+        expect($('#structure').textContent).not.toMatch(/fast|slow|speed|perform/i);
+        $('input[name="query-type"][value="delete"]').click();
+        type('delete.table', 'audit_log');
+        await settle();
+        expect($('#structure-insights').hidden).toBe(true);
     });
 
     test('follows the dialect and query type', async () => {

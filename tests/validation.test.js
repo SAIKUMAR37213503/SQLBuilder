@@ -7,7 +7,7 @@ import {
 } from '../src/model.js';
 
 function select(overrides = {}) {
-    return createSelect({ columns: [createColumn('*')], from: createTableSource('t'), ...overrides });
+    return createSelect({ columns: [createColumn('id')], from: createTableSource('t'), ...overrides });
 }
 const cond = (left, op, value = '', extra = {}) => createCondition({ left, op, value, ...extra });
 const where = (...items) => createGroup('AND', items);
@@ -44,7 +44,7 @@ describe('SELECT basics', () => {
 
     test('quoted and schema-qualified table names are accepted', () => {
         expect(validateQuery(select({ from: createTableSource('"Order Details"') }))).toEqual([]);
-        expect(validateQuery(select({ from: createTableSource('sales.orders', 'o') }))).toEqual([]);
+        expect(validateQuery(select({ columns: [createColumn('o.id')], from: createTableSource('sales.orders', 'o') }))).toEqual([]);
     });
 
     test('syntax problems in expressions', () => {
@@ -315,7 +315,8 @@ describe('workspace helpers', () => {
     });
 
     test('summarize counts levels', () => {
-        expect(summarize([{ level: 'error' }, { level: 'warning' }, { level: 'warning' }, { level: 'info' }])).toEqual({ errors: 1, warnings: 2, infos: 1 });
+        expect(summarize([{ level: 'error' }, { level: 'warning' }, { level: 'warning' }, { level: 'suggestion' }, { level: 'info' }]))
+            .toEqual({ errors: 1, warnings: 2, suggestions: 1, infos: 1 });
     });
 });
 

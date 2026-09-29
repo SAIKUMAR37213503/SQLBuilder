@@ -105,7 +105,11 @@ describe('golden SQL: SELECT features', () => {
             orderBy: [desc('COUNT(*)')]
         });
         expectSql(q, 'SELECT DISTINCT dept AS department, COUNT(*) AS staff, AVG(salary) FROM employees GROUP BY dept HAVING COUNT(*) > 5 ORDER BY COUNT(*) DESC;');
-        for (const d of ALL) expect(validateQuery(q, { dialect: d }), d).toEqual([]);
+        // Every grouped column is selected, so DISTINCT is redundant: only that suggestion
+        for (const d of ALL) {
+            expect(validateQuery(q, { dialect: d }).map(i => `${i.level}: ${i.message}`), d)
+                .toEqual([expect.stringMatching(/^suggestion: Every grouped column is selected/)]);
+        }
     });
 
     test('CASE column', () => {

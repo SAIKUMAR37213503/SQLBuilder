@@ -27,6 +27,8 @@
     --success: #16723a;
     --success-soft: #e3f5e9;
     --info-soft: #e8f0fb;
+    --suggest: #6a2fc0;
+    --suggest-soft: #f4eefd;
     --focus: #1d5fd6;
     --code-bg: #f7f9fc;
     --tok-keyword: #7a2fd0;
@@ -78,6 +80,8 @@
         --success: #6fd49a;
         --success-soft: #16301f;
         --info-soft: #1b2638;
+        --suggest: #c7a2ff;
+        --suggest-soft: #261e3a;
         --focus: #93bbff;
         --code-bg: #11151d;
         --tok-keyword: #c7a2ff;
@@ -116,6 +120,8 @@
     --success: #6fd49a;
     --success-soft: #16301f;
     --info-soft: #1b2638;
+    --suggest: #c7a2ff;
+    --suggest-soft: #261e3a;
     --focus: #93bbff;
     --code-bg: #11151d;
     --tok-keyword: #c7a2ff;
@@ -741,6 +747,23 @@ kbd {
 .structure-summary:hover { background: var(--surface-2); }
 .structure-title { font-size: 0.85rem; font-weight: 650; }
 .complexity { color: var(--text-muted); font-size: 0.8rem; }
+.structure-insights {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0.5rem 0;
+    padding: 0 0.75rem;
+    list-style: none;
+}
+.insight {
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-2);
+    font-size: 0.78rem;
+}
+.insight-band { font-weight: 650; color: var(--text); }
 .structure-intro, .structure-notes { padding: 0 0.75rem; color: var(--text-muted); font-size: 0.8rem; }
 .structure-notes:empty { display: none; }
 .structure-steps { display: grid; gap: 0.15rem; margin: 0.4rem 0; padding: 0 0.4rem; list-style: none; }
@@ -798,6 +821,8 @@ kbd {
 .issue-error .issue-level { color: var(--danger); }
 .issue-warning { background: var(--warning-soft); border-color: var(--warning); }
 .issue-warning .issue-level { color: var(--warning); }
+.issue-suggestion { background: var(--suggest-soft); border-color: var(--suggest); }
+.issue-suggestion .issue-level { color: var(--suggest); }
 .issue-info { background: var(--info-soft); border-color: var(--accent); }
 .issue-info .issue-level { color: var(--accent); }
 .issue-safety { font-weight: 600; }

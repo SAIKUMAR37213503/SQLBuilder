@@ -61,10 +61,10 @@ A custom SQL condition that contains a top-level `AND`/`OR` is wrapped in parent
 - Formatted SQL (one clause per line, 4-space indentation) or a single line, with an optional Wrap toggle for long lines
 - Syntax highlighting (including parameter placeholders) and line numbers; the line numbers are never copied
 - Live preview while you type (can be switched off)
-- **Query structure**: a panel under the SQL that lists the parts of the query in the order a database works through them (for a SELECT: WITH, FROM, JOIN, WHERE, GROUP BY, HAVING, SELECT, UNION, ORDER BY, LIMIT/TOP), each with a one-line explanation. Selecting a step opens that part of the builder. It describes structure only; it says nothing about speed.
+- **Query structure**: a panel under the SQL that lists the parts of the query in the order a database works through them (for a SELECT: WITH, FROM, JOIN, WHERE, GROUP BY, HAVING, SELECT, UNION, ORDER BY, LIMIT/TOP), each with a one-line explanation. Selecting a step opens that part of the builder. Above the steps, an insights row counts the CTEs, joins, subqueries, combined queries, aggregates, window functions and filters, shows the nesting depth, and gives an overall band: simple, moderate or involved. It describes structure only; it says nothing about speed.
 - Copy, Select all, Download `.sql`. On Android, Download and Export open the share sheet so you can save to Files or Drive, or send to another app. A Share button shares the SQL text.
 
-**Checks:** the checks panel shows three kinds of message:
+**Checks:** the checks panel shows four kinds of message:
 - **Errors** (block generation): missing fields, ORDER BY in a subquery without TOP/LIMIT on SQL Server, LIMIT inside an `IN` subquery on MySQL, INSERT … SELECT column-count mismatches, upserts the dialect doesn't support, invalid names or aliases, unbalanced quotes or parentheses, a join without a condition, column-count mismatches between combined queries, INSERT value/column mismatches, wrong window-function arguments, a window result used in WHERE/HAVING, operators or functions the dialect lacks, …
 - **Warnings** (never block):
   - UPDATE or DELETE without WHERE
@@ -77,6 +77,9 @@ A custom SQL condition that contains a top-level `AND`/`OR` is wrapped in parent
   - a SELECT alias used in HAVING (except MySQL, which accepts it)
   - leading-zero numbers in INSERT values
   - an upsert that updates from an inserted value for a column the INSERT doesn't list
+  - conditions that can never both be true (`price > 50 AND price < 10`, `status = 'paid' AND status = 'void'`), and `BETWEEN 50 AND 10`
+  - a join whose ON condition mentions only the joined table, or only the tables before it
+- **Suggestions** (never block): valid SQL that could be clearer: a plain `SELECT *` on the main query, DISTINCT that GROUP BY already makes redundant, a condition repeated in the same group, a table alias that is never used, and subqueries nested three or more levels deep. The analysis rules are deliberately conservative: when a condition can't be read with certainty (custom SQL, parameters, unqualified column names, text that some databases compare case-insensitively or as dates), they stay silent rather than guess.
 - **Tips**, e.g. LIMIT without ORDER BY, LIKE without a wildcard, INTERSECT precedence, ORDER BY in a subquery (the database may ignore it), or parameter names the dialect ignores.
 
 Messages are listed errors first, then warnings, then tips. On narrower screens the bottom bar's View SQL button shows the number of errors and warnings.
@@ -218,6 +221,7 @@ src/
 ├── generator.js      model → SQL (formatted or one line), no string post-processing
 ├── dialects.js       Every dialect difference: writing rules plus supports/restrictions flags
 ├── validation.js     model → issues { level, category, message, path }
+├── analysis.js       Analysis rules (contradictions, unlinked joins, unused aliases, …) and query insights
 ├── structure.js      model → the query's steps in processing order, with explanations
 ├── sql-utils.js      Quote/paren-aware splitting and balance checks (not a SQL parser)
 ├── tokenizer.js      Highlighting tokens (no HTML)
