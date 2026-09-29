@@ -596,7 +596,8 @@ class Renderer {
                     : 'The unique key that detects an existing row, e.g. email.'
             }) : null,
             u.mode === 'update' ? [
-                h('h4', { class: 'sub-heading' }, 'Update'),
+                // h3: the INSERT editor has no section heading above it
+                h('h3', { class: 'sub-heading' }, 'Update'),
                 h('ol', { class: 'item-list' }, u.set.map((a, i) => {
                     const aPath = joinPath(path, 'set', i);
                     return h('li', { class: 'row', dataset: { path: aPath } },
