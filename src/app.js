@@ -809,9 +809,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         replaceWorkspace(result.workspace, `Query imported${switched}. Undo restores your previous query.`);
     }
 
-    // Import SQL: reads a SELECT into the builder. The dialog shows what will
-    // be imported, and where it can't be; Import replaces the SELECT query,
-    // which Undo brings back.
+    // Import SQL: reads a SELECT, INSERT, UPDATE or DELETE into the builder.
+    // The dialog shows what will be imported, and where it can't be; Import
+    // replaces the query of that type, which Undo brings back.
     async function importSql() {
         const dialog = el.sqlImportDialog;
         const input = dialog.querySelector('#sql-import-text');
@@ -889,7 +889,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                 validate: () => {
                     onInput.flush();
                     if (result && result.ok) return true;
-                    if (!result) renderSqlImportPreview(output, { ok: false, message: 'Paste a SELECT statement or choose a file first.', line: 0, col: 0 });
+                    if (!result) renderSqlImportPreview(output, { ok: false, message: 'Paste a statement or choose a file first.', line: 0, col: 0 });
                     input.focus();
                     return false;
                 }
@@ -906,10 +906,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (!ok || !result || !result.ok) return;
         commitSoon.flush();
         const workspace = JSON.parse(JSON.stringify(state.workspace));
-        workspace.type = 'select';
-        workspace.select = result.query;
+        const type = result.query.kind;
+        workspace.type = type;
+        workspace[type] = result.query;
         const switched = switchDialect(select.value);
-        replaceWorkspace(workspace, `SQL imported${switched}. Undo brings back your previous query.`);
+        replaceWorkspace(workspace, `${type.toUpperCase()} query imported${switched}. Undo brings back your previous query.`);
     }
 
     function importTemplates(text) {
@@ -1650,7 +1651,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             schema.size > 0 && { id: 'schema-export-sql', group: 'Schema', label: 'Export schema as CREATE TABLE (.sql)', keywords: 'ddl tables', run: () => exportSchema('sql') },
             { id: 'export-query', group: 'File', label: 'Export query (.json)', run: exportQuery },
             { id: 'import-query', group: 'File', label: 'Import query (.json)…', run: () => chooseFile('query') },
-            { id: 'import-sql', group: 'File', label: 'Import SQL (.sql)…', keywords: 'open paste select file', run: importSql },
+            { id: 'import-sql', group: 'File', label: 'Import SQL (.sql)…', keywords: 'open paste select insert update delete file', run: importSql },
             { id: 'export-backup', group: 'File', label: 'Back up everything (.json)', keywords: 'backup export templates history settings', run: exportBackup },
             { id: 'import-backup', group: 'File', label: 'Restore from backup…', keywords: 'backup import templates history settings', run: () => chooseFile('backup') },
             templates.list().length > 0 && { id: 'export-templates', group: 'Templates', label: 'Export all templates', run: exportTemplates },

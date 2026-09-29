@@ -315,7 +315,7 @@
         <form method="dialog" class="dialog-body">
             <h2 id="sql-import-title" class="dialog-title">Import SQL</h2>
             <div class="field">
-                <label class="field-label" for="sql-import-text">A SELECT statement, or a .sql file</label>
+                <label class="field-label" for="sql-import-text">A SELECT, INSERT, UPDATE or DELETE statement, or a .sql file</label>
                 <textarea id="sql-import-text" class="input textarea code-input" rows="10" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="sql-import-result"></textarea>
                 <div><button type="button" class="btn btn-ghost btn-sm" id="sql-import-file-btn">Choose a file…</button></div>
             </div>
@@ -325,7 +325,7 @@
                 <p class="field-hint" id="sql-import-guess"></p>
             </div>
             <div class="sql-import-result" id="sql-import-result" aria-live="polite"></div>
-            <p class="sql-import-note">Import replaces the SELECT query in the builder. Undo brings your current query back.</p>
+            <p class="sql-import-note" id="sql-import-note">Import replaces the builder's query of the same type (SELECT, INSERT, UPDATE or DELETE). Undo brings your current query back.</p>
             <div class="dialog-actions">
                 <button type="submit" class="btn btn-primary">Import</button>
                 <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
@@ -385,6 +385,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=babf676980a2" defer></script>
+    <script src="dist/sqlbuilder.js?v=8938ab2f9642" defer></script>
 </body>
 </html>

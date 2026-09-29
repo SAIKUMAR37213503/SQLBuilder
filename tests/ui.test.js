@@ -2131,7 +2131,7 @@ describe('Import SQL', () => {
         await enter('SELECT `id`, COUNT(*) AS n\nFROM `orders` o -- recent\nWHERE o.status = \'paid\'\nGROUP BY `id`\nLIMIT 5');
         expect($('#sql-import-dialect').value).toBe('mysql');
         expect($('#sql-import-guess').textContent).toBe('This looks like MySQL (backquoted names).');
-        expect(result()).toContain('Ready to import: the builder writes the same query.');
+        expect(result()).toContain('Ready to import as a SELECT query: the builder writes the same SQL.');
         expect(result()).toContain('Comments are left out');
         await submit();
         expect(dialog().hasAttribute('open')).toBe(false);
@@ -2160,7 +2160,7 @@ describe('Import SQL', () => {
         await open();
         await submit();
         expect(dialog().hasAttribute('open')).toBe(true);
-        expect(result()).toContain('Paste a SELECT statement or choose a file first.');
+        expect(result()).toContain('Paste a statement or choose a file first.');
         await enter('SELECT a FROM t WHERE a = 1 AND b = 2 OR c = 3');
         expect(result()).toContain('the builder writes 2 parts differently');
         expect(result()).toContain('Line 1: the builder adds “(”.');
@@ -2204,6 +2204,24 @@ describe('Import SQL', () => {
         await submit();
         expect(document.querySelector('img')).toBeNull();
         expect(sql()).toContain('<img src=x onerror="alert(1)">');
+    });
+
+    test('an UPDATE opens as the UPDATE query; the SELECT draft stays', async () => {
+        type('select.from.table', 'kept');
+        await settle();
+        await open();
+        await enter("UPDATE staff SET pay = pay * 1.1, note = 'raise' WHERE id = @id");
+        expect($('#sql-import-dialect').value).toBe('sqlserver');
+        expect(result()).toContain('Ready to import as an UPDATE query: the builder writes the same SQL.');
+        await submit();
+        expect($('input[name="query-type"][value="update"]').checked).toBe(true);
+        expect(field('update.table').value).toBe('staff');
+        expect(field('update.set.1.value').value).toBe('raise');
+        expect($('.toast').textContent).toContain('UPDATE query imported (dialect switched to Microsoft SQL Server).');
+        $('#undo-btn').click();
+        await settle();
+        expect($('input[name="query-type"][value="select"]').checked).toBe(true);
+        expect(field('select.from.table').value).toBe('kept');
     });
 
     test('is in the command palette', async () => {

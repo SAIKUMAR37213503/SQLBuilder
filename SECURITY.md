@@ -71,7 +71,7 @@ Import SQL reads pasted text, a chosen `.sql` file or a dropped file as untruste
 - Parentheses are matched before reading, subqueries are limited to the builder's nesting depth and parenthesized conditions to 64 levels, so input can't exhaust the stack. Anything the reader doesn't understand is refused with its line and column; it never guesses.
 - The result is an ordinary query model: tests check that it passes the same `normalizeWorkspace` rebuild as imported JSON, including for thousands of random and mutated statements.
 - The preview, the differences and the SQL shown are set with `textContent`, so markup in the SQL stays text.
-- Nothing changes until you choose Import; Import replaces only the SELECT query and can be undone.
+- Nothing changes until you choose Import; Import replaces only the query of the imported type (SELECT, INSERT, UPDATE or DELETE) and can be undone. Importing an UPDATE or DELETE never runs it: it only fills the builder.
 
 ## Browser storage
 
