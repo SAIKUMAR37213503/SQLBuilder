@@ -5,6 +5,8 @@ import { getDialect } from '../src/dialects.js';
 import { validateQuery, validateWorkspace } from '../src/validation.js';
 import { createSelect, createColumn, createTableSource, createCondition, createRawCondition, createGroup, createInsert, createUpdate } from '../src/model.js';
 import { EXAMPLES } from '../src/examples.js';
+import { compareDialects } from '../src/dialect-compare.js';
+import { generateSQL } from '../src/generator.js';
 
 const ALL = ['generic', 'sqlserver', 'postgresql', 'mysql'];
 
@@ -147,6 +149,53 @@ describe('in the validator', () => {
             for (const dialect of example.dialects ?? ALL) {
                 const messages = validateWorkspace(example.build(), { dialect }).map(i => i.message);
                 expect(messages.filter(m => /syntax, not standard SQL|isn't available in/.test(m)), `${example.id}/${dialect}`).toEqual([]);
+            }
+        }
+    });
+});
+
+describe('comparing dialects', () => {
+    const build = (id) => EXAMPLES.find(e => e.id === id).build();
+
+    test('lists what another dialect writes differently, with lines in the current SQL', () => {
+        const r = compareDialects(build('page-results'), 'postgresql', 'sqlserver');
+        expect(r.from).toMatchObject({ id: 'postgresql', label: 'PostgreSQL', blocked: false });
+        expect(r.to).toMatchObject({ id: 'sqlserver', label: 'Microsoft SQL Server', blocked: false });
+        expect(r.to.sql).toBe(generateSQL(build('page-results'), { dialect: 'sqlserver', pretty: true }));
+        expect(r.check.differences).toEqual([{ line: 7, col: 1, yours: 'LIMIT 20 OFFSET 40', builder: 'OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY' }]);
+        expect(compareDialects(build('nested-conditions'), 'generic', 'sqlserver').check.differences).toEqual([
+            expect.objectContaining({ yours: 'TRUE', builder: '1' })
+        ]);
+        expect(compareDialects(build('nested-conditions'), 'generic', 'mysql').check.same).toBe(true);
+    });
+
+    test('quote characters are one note, not a difference per name', () => {
+        const r = compareDialects(build('page-results'), 'postgresql', 'mysql', { quoteIdentifiers: true });
+        expect(r.check.same).toBe(true);
+        expect(r.notes).toEqual(['Names are quoted as `name` instead of "name".']);
+        expect(compareDialects(build('page-results'), 'postgresql', 'generic', { quoteIdentifiers: true }).notes).toEqual([]);
+    });
+
+    test('adds the other dialect\'s checks that the current one doesn\'t have', () => {
+        const upsert = compareDialects(build('upsert'), 'postgresql', 'sqlserver');
+        expect(upsert.to.blocked).toBe(true);
+        expect(upsert.added).toEqual([expect.objectContaining({ level: 'error', message: expect.stringContaining('Conflict handling (upsert) isn\'t available for SQL Server') })]);
+        const q = createSelect({ columns: [createColumn('GETDATE()', { alias: 'now' })], from: createTableSource('t') });
+        expect(compareDialects({ type: 'select', select: q }, 'sqlserver', 'postgresql').added).toEqual([
+            { level: 'warning', message: 'GETDATE() isn\'t available in PostgreSQL; it\'s SQL Server syntax. Use CURRENT_TIMESTAMP instead.' }
+        ]);
+        // Typed text is never rewritten
+        expect(compareDialects({ type: 'select', select: q }, 'sqlserver', 'postgresql').to.sql).toContain('GETDATE()');
+    });
+
+    test('every example compares in every direction without throwing', () => {
+        for (const example of EXAMPLES) {
+            for (const from of ALL) {
+                for (const to of ALL.filter(d => d !== from)) {
+                    const r = compareDialects(example.build(), from, to, { quoteIdentifiers: true });
+                    expect(r.check.same, `${example.id} ${from}→${to}`).toBe(r.check.differences.length === 0);
+                    expect(r.to.sql, example.id).toMatch(/;$/);
+                }
             }
         }
     });

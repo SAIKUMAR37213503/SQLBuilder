@@ -62,6 +62,7 @@ A custom SQL condition that contains a top-level `AND`/`OR` is wrapped in parent
 - Syntax highlighting (including parameter placeholders) and line numbers; the line numbers are never copied
 - Live preview while you type (can be switched off)
 - **Query structure**: a panel under the SQL that lists the parts of the query in the order a database works through them (for a SELECT: WITH, FROM, JOIN, WHERE, GROUP BY, HAVING, SELECT, UNION, ORDER BY, LIMIT/TOP), each with a one-line explanation. Selecting a step opens that part of the builder. Above the steps, an insights row counts the CTEs, joins, subqueries, combined queries, aggregates, window functions and filters, shows the nesting depth, and gives an overall band: simple, moderate or involved. It describes structure only; it says nothing about speed.
+- **Compare dialects** (Compare… next to the dialect picker, or the command palette): the current query as the selected dialect writes it next to another dialect's SQL, with each difference listed by line (“LIMIT 20 OFFSET 40” becomes “OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY”, TRUE becomes 1, `$1` becomes `?`) and the checks the other dialect would add, such as an upsert SQL Server can't express or `GETDATE()` in PostgreSQL. Nothing changes unless you choose Switch.
 - Copy, Select all, Download `.sql`. On Android, Download and Export open the share sheet so you can save to Files or Drive, or send to another app. A Share button shares the SQL text.
 
 **Checks:** the checks panel shows four kinds of message:
@@ -224,6 +225,7 @@ src/
 ├── validation.js     model → issues { level, category, message, path }
 ├── analysis.js       Analysis rules (contradictions, unlinked joins, unused aliases, …) and query insights
 ├── dialect-functions.js  Dialect-specific functions, operators and quoting found in typed SQL
+├── dialect-compare.js    The current query written for two dialects, and what differs
 ├── structure.js      model → the query's steps in processing order, with explanations
 ├── sql-utils.js      Quote/paren-aware splitting and balance checks (not a SQL parser)
 ├── tokenizer.js      Highlighting tokens (no HTML)
@@ -249,6 +251,7 @@ src/
     ├── palette.js    Command palette (filtering + combobox dialog)
     ├── suggest.js    Suggestion list under builder fields (ARIA combobox)
     ├── sql-import.js Import SQL dialog preview (check result and differences)
+    ├── compare.js    Compare dialects dialog (differences, checks, both SQLs)
     ├── theme.js, shortcuts.js, dom.js (safe element builder)
 ```
 

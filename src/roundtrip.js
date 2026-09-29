@@ -25,8 +25,9 @@ function comparable(text, syntax) {
     return tokens.filter(t => !(t.type === 'word' && OPTIONAL_WORDS.has(t.text.toUpperCase())));
 }
 
-/** @param {Token} t */
-const keyOf = (t) => (t.type === 'word' ? `w:${t.text.toUpperCase()}` : `${t.type}:${t.text}`);
+/** @param {Token} t @param {boolean} quoting whether the quote characters of a name count */
+const keyOf = (t, quoting = true) => (t.type === 'word' ? `w:${t.text.toUpperCase()}`
+    : t.type === 'quoted' && !quoting ? `quoted:${t.value}` : `${t.type}:${t.text}`);
 
 /** @param {Token[]} tokens */
 function snippet(tokens) {
@@ -104,12 +105,15 @@ function diffRanges(a, b) {
  * @param {string} yours the SQL as imported
  * @param {string} builder the SQL the builder generates
  * @param {{ backslashEscapes?: boolean, hashComments?: boolean }} [syntax] how to read both (the dialect's syntax)
+ * @param {{ builderSyntax?: object, quoting?: boolean }} [options]
+ *   builderSyntax: how to read the second text, when it's another dialect;
+ *   quoting: false treats "name", `name` and [name] as the same
  * @returns {{ same: boolean, total: number, differences: Difference[] }}
  */
-export function compareSql(yours, builder, syntax = {}) {
+export function compareSql(yours, builder, syntax = {}, { builderSyntax = syntax, quoting = true } = {}) {
     const a = comparable(yours, syntax);
-    const b = comparable(builder, syntax);
-    const ranges = diffRanges(a.map(keyOf), b.map(keyOf));
+    const b = comparable(builder, builderSyntax);
+    const ranges = diffRanges(a.map(t => keyOf(t, quoting)), b.map(t => keyOf(t, quoting)));
     const differences = ranges.slice(0, MAX_REPORTED).map(([a0, a1, b0, b1]) => {
         // Where the difference is: its first token, or the token after an addition
         const at = a[a0] || a[a0 - 1] || { line: 1, col: 1 };

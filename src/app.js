@@ -10,6 +10,7 @@ import {
 import { generateSQL } from './generator.js';
 import { describeStructure } from './structure.js';
 import { describeInsights } from './analysis.js';
+import { compareDialects } from './dialect-compare.js';
 import { validateWorkspace, hasErrors, summarize } from './validation.js';
 import { listDialects, getDialect } from './dialects.js';
 import { createStorage } from './storage.js';
@@ -28,6 +29,7 @@ import { EXAMPLES, EXAMPLE_TOPICS, examplesFor } from './examples.js';
 import { h, byPath, debounce, cssEscape, formatTime } from './ui/dom.js';
 import { renderEditor } from './ui/builder.js';
 import { renderSqlCode, selectContents } from './ui/output.js';
+import { renderDialectComparison } from './ui/compare.js';
 import { renderHistoryList, renderTemplateList, renderExampleList, renderSchemaList, renderSchemaImportPreview } from './ui/library.js';
 import { promptDialog, templateDialog, confirmDialog, showDialog, closeDialog, enhanceDialog, formDialog } from './ui/dialogs.js';
 import { applyTheme, nextTheme, effectiveTheme, THEME_LABELS } from './ui/theme.js';
@@ -137,6 +139,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         schemaTableDialog: $('schema-table-dialog'),
         schemaImportDialog: $('schema-import-dialog'),
         sqlImportDialog: $('sql-import-dialog'),
+        compareDialog: $('compare-dialog'),
+        compare: $('compare-btn'),
         libraryPanel: /** @type {any} */ (doc.querySelector('.library-panel')),
         fileInput: $('file-input'),
         toast: $('toast'),
@@ -177,6 +181,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         templateSearch: '',
         templateSort: 'name',            // 'name' or 'recent'
         exampleFilter: /** @type {string | null} */ (null), // null: follow the selected dialect
+        compareWith: /** @type {string | null} */ (null), // the dialect last compared with
         exampleTopic: 'all',
         schemaSearch: ''
     };
@@ -1157,6 +1162,37 @@ export function startApp({ doc = document, storage = createStorage(), platform =
      * Switches to the dialect a saved query was made for. Returns a note for
      * the toast (" (dialect: MySQL)") or '' when nothing changed.
      */
+    /** Compare dialects: the current query written for another dialect, and what changes. */
+    async function compareWithDialect() {
+        commitSoon.flush();
+        const dialog = el.compareDialog;
+        const select = dialog.querySelector('#compare-dialect');
+        const output = dialog.querySelector('#compare-result');
+        const switchButton = dialog.querySelector('#compare-switch');
+        const current = state.settings.dialect;
+        const others = listDialects().filter(d => d.id !== current);
+        select.replaceChildren(...others.map(d => h('option', { value: d.id }, d.label)));
+        if (others.some(d => d.id === state.compareWith)) select.value = state.compareWith;
+        dialog.querySelector('#compare-intro').textContent =
+            `Your query as ${getDialect(current).label} writes it, next to another dialect. Nothing changes unless you switch.`;
+        const render = () => {
+            state.compareWith = select.value;
+            renderDialectComparison(output, compareDialects(state.workspace, current, select.value, { quoteIdentifiers: state.settings.quoteIdentifiers }));
+            switchButton.textContent = `Switch to ${getDialect(select.value).label}`;
+        };
+        render();
+        select.addEventListener('change', render);
+        let ok;
+        try {
+            ok = await formDialog(dialog, { onOpen: () => select.focus(), validate: () => true });
+        } finally {
+            select.removeEventListener('change', render);
+        }
+        if (!ok) return;
+        updateSettings({ dialect: select.value });
+        announceDialect();
+    }
+
     function switchDialect(dialect) {
         if (!dialect || dialect === state.settings.dialect || !listDialects().some(d => d.id === dialect)) return '';
         updateSettings({ dialect });
@@ -1538,7 +1574,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             suggester.close();
             return true;
         }
-        const dialogs = [el.confirmDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
+        const dialogs = [el.confirmDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
         const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
         if (open) {
             closeDialog(open, 'cancel');
@@ -1674,6 +1710,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             schema.size > 0 && { id: 'schema-export-sql', group: 'Schema', label: 'Export schema as CREATE TABLE (.sql)', keywords: 'ddl tables', run: () => exportSchema('sql') },
             { id: 'export-query', group: 'File', label: 'Export query (.json)', run: exportQuery },
             { id: 'import-query', group: 'File', label: 'Import query (.json)…', run: () => chooseFile('query') },
+            { id: 'compare-dialects', group: 'Output', label: 'Compare dialects…', keywords: 'convert sql server postgresql mysql generic differences', run: compareWithDialect },
             { id: 'import-sql', group: 'File', label: 'Import SQL (.sql)…', keywords: 'open paste select insert update delete file', run: importSql },
             { id: 'export-backup', group: 'File', label: 'Back up everything (.json)', keywords: 'backup export templates history settings', run: exportBackup },
             { id: 'import-backup', group: 'File', label: 'Restore from backup…', keywords: 'backup import templates history settings', run: () => chooseFile('backup') },
@@ -1740,6 +1777,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.share.hidden = !platform.canShare;
     el.share.addEventListener('click', shareSql);
     el.download.addEventListener('click', downloadSql);
+    el.compare.addEventListener('click', compareWithDialect);
     el.selectAll.addEventListener('click', () => {
         if (el.output.hidden) return;
         el.output.focus();
@@ -1837,7 +1875,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     }, 150));
 
     [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog, el.paletteDialog, el.backupDialog,
-        el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog].forEach(enhanceDialog);
+        el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog].forEach(enhanceDialog);
 
     bindShortcuts(doc, signal, {
         generate,

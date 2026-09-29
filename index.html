@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=8c6f7cfaa6ce">
+    <link rel="stylesheet" href="style.css?v=7326115e5df9">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -73,6 +73,7 @@
                                 <select id="dialect-select" class="dialect-select" aria-describedby="dialect-picker-note"></select>
                             </label>
                             <span class="visually-hidden" id="dialect-picker-note">Changes the SQL that is generated and the checks. Your query is kept.</span>
+                            <button type="button" class="btn btn-ghost btn-sm" id="compare-btn" aria-haspopup="dialog">Compare…</button>
                         </div>
                         <div class="output-actions">
                             <div class="segmented" role="group" aria-label="SQL layout">
@@ -334,6 +335,22 @@
         </form>
     </dialog>
 
+    <dialog id="compare-dialog" class="dialog dialog-wide" aria-labelledby="compare-title" aria-describedby="compare-intro">
+        <form method="dialog" class="dialog-body">
+            <h2 id="compare-title" class="dialog-title">Compare dialects</h2>
+            <p class="dialog-message" id="compare-intro"></p>
+            <div class="field">
+                <label class="field-label" for="compare-dialect">Compare with</label>
+                <select id="compare-dialect" class="select"></select>
+            </div>
+            <div class="compare-result" id="compare-result" aria-live="polite"></div>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary" id="compare-switch">Switch</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Close</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="backup-dialog" class="dialog dialog-sm" aria-labelledby="backup-title" aria-describedby="backup-summary">
         <form method="dialog" class="dialog-body">
             <h2 id="backup-title" class="dialog-title">Restore from backup</h2>
@@ -386,6 +403,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=5c84e264467c" defer></script>
+    <script src="dist/sqlbuilder.js?v=1d437c910380" defer></script>
 </body>
 </html>

@@ -2265,3 +2265,71 @@ describe('Import SQL', () => {
         expect($$('#palette-list [role="option"] .palette-label').map(n => n.textContent)).toContain('Import SQL (.sql)…');
     });
 });
+
+describe('Compare dialects', () => {
+    const dialog = () => $('#compare-dialog');
+    const result = () => $('#compare-result').textContent;
+    const loadExample = async (id) => {
+        $(`#example-list [data-action="example-load"][data-id="${id}"]`).click();
+        await settle();
+    };
+
+    test('shows what another dialect writes differently, and switching is optional', async () => {
+        await loadExample('page-results');
+        pickDialect('postgresql');
+        await settle();
+        $('#compare-btn').click();
+        await settle();
+        expect(dialog().hasAttribute('open')).toBe(true);
+        expect($('#compare-intro').textContent).toContain('as PostgreSQL writes it');
+        // The current dialect isn't offered
+        expect($$('#compare-dialect option').map(o => o.value)).toEqual(['generic', 'sqlserver', 'mysql']);
+        $('#compare-dialect').value = 'sqlserver';
+        $('#compare-dialect').dispatchEvent(new Event('change', { bubbles: true }));
+        await settle();
+        expect(result()).toContain('Microsoft SQL Server writes 1 part differently.');
+        expect(result()).toContain('Line 7: “LIMIT 20 OFFSET 40” becomes “OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY”.');
+        expect($$('#compare-result .compare-pane-title').map(n => n.textContent)).toEqual(['PostgreSQL (current)', 'Microsoft SQL Server']);
+        expect($$('#compare-result pre').every(p => p.tabIndex === 0)).toBe(true);
+        expect($('#compare-switch').textContent).toBe('Switch to Microsoft SQL Server');
+
+        // Close keeps the dialect
+        dialog().querySelector('button[value="cancel"]').click();
+        await settle();
+        expect($('#dialect-select').value).toBe('postgresql');
+
+        // Switch changes it, and the dialog remembers the last choice
+        $('#compare-btn').click();
+        await settle();
+        expect($('#compare-dialect').value).toBe('sqlserver');
+        $('#compare-switch').click();
+        await settle();
+        expect(dialog().hasAttribute('open')).toBe(false);
+        expect($('#dialect-select').value).toBe('sqlserver');
+        expect(sql()).toContain('FETCH NEXT 20 ROWS ONLY');
+    });
+
+    test('lists the other dialect\'s checks, and asks for errors to be fixed first', async () => {
+        type('select.columns.0.expr', 'GETDATE()');
+        type('select.from.table', 'orders');
+        pickDialect('sqlserver');
+        await settle();
+        $('#compare-btn').click();
+        await settle();
+        $('#compare-dialect').value = 'postgresql';
+        $('#compare-dialect').dispatchEvent(new Event('change', { bubbles: true }));
+        await settle();
+        expect(result()).toContain('In PostgreSQL, Checks would also show:');
+        expect(result()).toContain('Warning: GETDATE() isn\'t available in PostgreSQL');
+        dialog().querySelector('button[value="cancel"]').click();
+        await settle();
+
+        type('select.from.table', '');
+        await settle();
+        $('#compare-btn').click();
+        await settle();
+        expect(result()).toBe('Resolve the errors under Checks first. The comparison uses the SQL the builder writes for Microsoft SQL Server.');
+        dialog().querySelector('button[value="cancel"]').click();
+        await settle();
+    });
+});

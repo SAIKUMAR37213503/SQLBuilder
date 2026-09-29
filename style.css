@@ -912,6 +912,17 @@ kbd {
 .sql-import-differences { margin: 0; padding-left: 1.2rem; font-size: 0.8rem; overflow-wrap: anywhere; }
 .sql-import-sql summary { cursor: pointer; color: var(--text-muted); font-size: 0.8rem; }
 .sql-import-sql pre { margin: 0.35rem 0 0; max-height: 14rem; overflow: auto; padding: 0.5rem; border: 1px solid var(--border); border-radius: 6px; font-family: var(--font-mono); font-size: 0.78rem; white-space: pre; }
+.compare-result { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; font-size: 0.85rem; }
+.compare-result p { margin: 0; }
+.compare-same { font-weight: 600; color: var(--success); }
+.compare-differences, .compare-checks { margin: 0; padding-left: 1.2rem; font-size: 0.8rem; overflow-wrap: anywhere; }
+.compare-level { font-weight: 650; }
+.compare-error .compare-level { color: var(--danger); }
+.compare-warning .compare-level { color: var(--warning); }
+.compare-panes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 0.75rem; }
+.compare-pane { min-width: 0; }
+.compare-pane-title { margin: 0 0 0.3rem; font-size: 0.8rem; font-weight: 650; color: var(--text-2); }
+.compare-pane pre { margin: 0; max-height: 18rem; overflow: auto; padding: 0.5rem; border: 1px solid var(--border); border-radius: 6px; font-family: var(--font-mono); font-size: 0.78rem; white-space: pre; }
 .sql-import-note { margin: 0; font-size: 0.8rem; color: var(--text-muted); }
 .textarea { min-height: 8rem; resize: vertical; line-height: 1.45; white-space: pre; overflow-wrap: normal; overflow-x: auto; }
 
@@ -940,6 +951,7 @@ kbd {
     box-shadow: var(--shadow-lg);
 }
 .dialog-sm { width: min(26rem, calc(100vw - 2rem)); }
+.dialog-wide { width: min(60rem, calc(100vw - 2rem)); }
 .dialog::backdrop { background: rgb(8 12 20 / 55%); }
 .dialog-body { display: grid; gap: 0.9rem; padding: 1.25rem; }
 .dialog-title { font-size: 1.1rem; }
