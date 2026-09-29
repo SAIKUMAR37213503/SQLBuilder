@@ -63,12 +63,81 @@ describe('round trip: every example, in every dialect', () => {
         }
     });
 
-    test('INSERT, UPDATE and DELETE examples are refused for now, at their first word', () => {
-        for (const example of EXAMPLES.filter(e => e.build().type !== 'select')) {
+    test.each(DIALECTS)('%s: INSERT, UPDATE and DELETE examples come back exactly, as the same query type', (dialect) => {
+        const others = EXAMPLES.filter(e => e.build().type !== 'select');
+        expect(others.map(e => e.build().type).sort()).toEqual(['delete', 'insert', 'insert', 'insert', 'update']);
+        for (const example of others) {
             const ws = example.build();
-            const sql = generateQuery(ws[ws.type], { dialect: 'postgresql' });
-            expect(refusal(sql, 'postgresql')).toMatch(/^1:1 Importing (INSERT|UPDATE|DELETE) statements isn't supported yet/);
+            for (const pretty of [true, false]) {
+                for (const quoteIdentifiers of [false, true]) {
+                    const options = { dialect, pretty, quoteIdentifiers };
+                    const sql = generateQuery(ws[ws.type], options);
+                    const preview = previewSqlImport(sql, { dialect, pretty });
+                    if (!preview.ok) throw new Error(`${example.id}: ${preview.message}`);
+                    expect(preview.query.kind).toBe(ws.type);
+                    expect(preview.check.same, example.id).toBe(true);
+                    expect(generateQuery(preview.query, options), example.id).toBe(sql);
+                    const imported = createWorkspace(ws.type);
+                    imported[ws.type] = preview.query;
+                    expect(normalizeWorkspace(JSON.parse(JSON.stringify(imported)))).toEqual(imported);
+                    const errors = (w) => validateWorkspace(w, { dialect }).filter(i => i.level === 'error').map(i => i.message);
+                    // No errors; an upsert the dialect can't write isn't in the SQL, so it isn't imported either
+                    expect(errors(imported), `${example.id} ${dialect}`).toEqual([]);
+                }
+            }
         }
+    });
+});
+
+describe('INSERT, UPDATE and DELETE', () => {
+    test('INSERT … VALUES with several rows; names like date are columns', () => {
+        const q = read("INSERT INTO sales.orders (id, date, \"Note\") VALUES (1, '2024-01-01', NULL), (2, CURRENT_DATE, 'x, y')");
+        expect(q).toMatchObject({
+            kind: 'insert', table: 'sales.orders', columns: 'id, date, "Note"', source: 'values',
+            rows: [{ values: "1, '2024-01-01', NULL" }, { values: "2, CURRENT_DATE, 'x, y'" }]
+        });
+        expect(read('INSERT INTO t VALUES (1)').columns).toBe('');
+    });
+
+    test('INSERT … SELECT keeps the whole SELECT, joins and all', () => {
+        const q = read('INSERT INTO archive (id) SELECT o.id FROM orders o JOIN old x ON x.id = o.id WHERE o.done = 1 ORDER BY o.id LIMIT 10');
+        expect(q.source).toBe('select');
+        expect(q.select).toMatchObject({ limit: '10', joins: [{ type: 'INNER JOIN' }], orderBy: [{ expr: 'o.id' }] });
+    });
+
+    test('upserts in PostgreSQL and MySQL, with the inserted value recognised', () => {
+        const pg = read('INSERT INTO t (id, n) VALUES (1, 2) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n, seen = seen + 1, at = $3', 'postgresql');
+        expect(pg.upsert).toEqual({
+            mode: 'update', conflict: 'id', set: [
+                { column: 'n', valueType: 'inserted', value: '' },
+                { column: 'seen', valueType: 'column', value: 'seen + 1' },
+                { column: 'at', valueType: 'param', value: '3' }
+            ]
+        });
+        expect(read('INSERT INTO t (id) VALUES (1) ON CONFLICT DO NOTHING', 'postgresql').upsert).toEqual({ mode: 'nothing', conflict: '', set: [] });
+        const my = read('INSERT INTO t (id, n) VALUES (1, 2) ON DUPLICATE KEY UPDATE n = values(n), m = \'x\'', 'mysql');
+        expect(my.upsert.set).toEqual([{ column: 'n', valueType: 'inserted', value: '' }, { column: 'm', valueType: 'value', value: 'x' }]);
+    });
+
+    test('UPDATE with SET values of every kind, and WHERE', () => {
+        const q = read("UPDATE dbo.staff SET name = 'Ann', boss = NULL, pay = pay * 1.1, code = '007', year = @y WHERE id = @id AND (a = 1 OR b = 2)", 'sqlserver');
+        expect(q.table).toBe('dbo.staff');
+        expect(q.set.map(a => [a.column, a.valueType, a.value])).toEqual([
+            ['name', 'value', 'Ann'], ['boss', 'value', 'NULL'], ['pay', 'column', 'pay * 1.1'], ['code', 'value', '007'], ['year', 'param', 'y']
+        ]);
+        expect(q.where.items.map(i => i.kind)).toEqual(['condition', 'group']);
+        expect(read('UPDATE t SET a = 1').where.items).toEqual([]);
+    });
+
+    test('DELETE with and without WHERE, subqueries included', () => {
+        expect(read('DELETE FROM t').where.items).toEqual([]);
+        const q = read('DELETE FROM t WHERE id IN (SELECT id FROM old WHERE old.x = t.x)');
+        expect(q.where.items[0]).toMatchObject({ op: 'IN', valueType: 'subquery' });
+    });
+
+    test('the dialect guess notices upsert syntax', () => {
+        expect(guessDialect('INSERT INTO t (a) VALUES (1) ON CONFLICT DO NOTHING')).toEqual({ dialect: 'postgresql', reason: 'ON CONFLICT' });
+        expect(guessDialect('INSERT INTO t (a) VALUES (1) ON DUPLICATE KEY UPDATE a = 1')).toEqual({ dialect: 'mysql', reason: 'ON DUPLICATE KEY' });
     });
 });
 
@@ -239,8 +308,32 @@ describe('what can\'t be imported is refused with its line and column', () => {
         ['', '0:0 Paste a SELECT statement to import.'],
         ['  ;  ', '0:0 Paste a SELECT statement to import.'],
         ['SELECT a FROM t;\nSELECT b FROM u', '2:1 This is more than one statement; import one statement at a time.'],
-        ['UPDATE t SET a = 1', "1:1 Importing UPDATE statements isn't supported yet; for now only SELECT queries can be imported."],
-        ['CREATE TABLE t (a int)', '1:1 Only SELECT queries can be imported; this starts with “CREATE”.'],
+        ['CREATE TABLE t (a int)', '1:1 Only SELECT, INSERT, UPDATE and DELETE statements can be imported; this starts with “CREATE”.'],
+        ['MERGE INTO t USING u ON 1 = 1', "1:1 MERGE statements aren't supported in the builder."],
+        ['INSERT t VALUES (1)', '1:8 Expected INTO after INSERT.'],
+        ['INSERT IGNORE INTO t VALUES (1)', "1:8 INSERT IGNORE isn't supported in the builder."],
+        ['INSERT INTO t DEFAULT VALUES', "1:15 DEFAULT VALUES isn't supported in the builder."],
+        ['INSERT INTO t SET a = 1', "1:15 INSERT … SET isn't supported; write INSERT INTO t (columns) VALUES (…)."],
+        ['INSERT INTO t (a, 1) VALUES (1, 2)', '1:15 The column list should be column names separated by commas.'],
+        ['INSERT INTO t (a) VALUES (1, )', '1:26 Expected values separated by commas in this row.'],
+        ['INSERT INTO t (a) VALUES 1', '1:26 Expected a row of values in parentheses here.'],
+        ['INSERT INTO t (a) (SELECT a FROM u)', '1:19 Remove the parentheses around the SELECT.'],
+        ['INSERT INTO t (a) VALUES (1) RETURNING id', "1:30 RETURNING isn't supported in the builder."],
+        ['INSERT INTO t (a) VALUES (1) ON CONFLICT DO NOTHING', "1:30 Generic SQL has no ON CONFLICT; pick PostgreSQL if this SQL is for PostgreSQL."],
+        ['INSERT INTO t (a) VALUES (1) ON DUPLICATE KEY UPDATE a = 2', "1:30 Generic SQL has no ON DUPLICATE KEY UPDATE; pick MySQL if this SQL is for MySQL."],
+        ['UPDATE t x SET a = 1', "1:10 An alias for the UPDATE table isn't supported; use the table's name in the conditions."],
+        ['UPDATE t SET a = 1 FROM u WHERE u.id = t.id', "1:20 UPDATE … FROM isn't supported in the builder."],
+        ['UPDATE t SET (a, b) = (1, 2)', "1:14 Setting several columns from one list isn't supported; write one column = value each."],
+        ['UPDATE t SET a + 1 = 2', '1:14 Expected column = value here.'],
+        ['UPDATE t SET a =', '1:16 Expected a value after =.'],
+        ['UPDATE t, u SET a = 1', "1:9 Updating several tables at once isn't supported in the builder."],
+        ['UPDATE t SET a = 1 WHERE b = 2 ORDER BY c LIMIT 1', "1:32 ORDER BY isn't supported here in the builder."],
+        ['UPDATE TOP (5) t SET a = 1', "1:8 UPDATE TOP isn't supported in the builder."],
+        ['UPDATE t SET a = 1 OUTPUT inserted.a WHERE id = 1', "1:20 OUTPUT isn't supported in the builder yet."],
+        ['DELETE t FROM t JOIN u ON u.id = t.id', '1:8 Expected FROM after DELETE; the builder writes DELETE FROM table.'],
+        ['DELETE FROM t USING u WHERE u.id = t.id', "1:15 Deleting with other tables (USING or JOIN) isn't supported; use WHERE … IN (SELECT …) instead."],
+        ['DELETE FROM t AS x WHERE x.a = 1', "1:15 An alias for the DELETE table isn't supported; use the table's name in the conditions."],
+        ['WITH x AS (SELECT 1 FROM t) DELETE FROM t', "1:29 A WITH before DELETE isn't supported in the builder."],
         ['(SELECT a FROM t)', '1:1 Remove the parentheses around the whole query and import it again.'],
         ['SELECT a FROM t WHERE (a = 1', '1:23 This "(" is never closed.'],
         ['SELECT a) FROM t', '1:9 This ")" has no matching "(".'],
@@ -344,11 +437,12 @@ describe('hostile and random input', () => {
             seed = (seed * 1103515245 + 12345) % 2147483648;
             return seed % n;
         };
-        const selects = EXAMPLES.map(e => e.build()).filter(ws => ws.type === 'select');
+        const workspaces = EXAMPLES.map(e => e.build());
         let imported = 0;
-        for (let run = 0; run < 1500; run++) {
+        for (let run = 0; run < 2000; run++) {
             const dialect = DIALECTS[random(DIALECTS.length)];
-            const original = generateQuery(selects[random(selects.length)].select, { dialect, pretty: false });
+            const example = workspaces[random(workspaces.length)];
+            const original = generateQuery(example[example.type], { dialect, pretty: false });
             const words = original.split(' ');
             const at = random(words.length);
             const kind = random(3);
@@ -359,13 +453,13 @@ describe('hostile and random input', () => {
             const result = previewSqlImport(sql, { dialect, pretty: false });
             if (!result.ok) continue;
             imported++;
-            const ws = createWorkspace();
-            ws.select = result.query;
+            const ws = createWorkspace(result.query.kind);
+            ws[result.query.kind] = result.query;
             expect(normalizeWorkspace(JSON.parse(JSON.stringify(ws)))).toEqual(ws);
             // "Imported exactly" means the builder's SQL reads the same as the text
             if (result.check.same) expect(compareSql(sql, result.sql, {}).same).toBe(true);
         }
-        expect(imported).toBeGreaterThan(200);
+        expect(imported).toBeGreaterThan(300);
     });
 });
 

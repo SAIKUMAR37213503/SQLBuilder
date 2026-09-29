@@ -1,4 +1,4 @@
-// SQL import: reads a SELECT statement into the query model, so SQL written
+// SQL import: reads a SELECT, INSERT, UPDATE or DELETE statement into the query model, so SQL written
 // elsewhere can be edited in the builder. It is a small recursive-descent
 // reader over the lexer's tokens that understands what the builder can hold;
 // anything else is refused with its line and column, never guessed at.
@@ -12,7 +12,7 @@ import { lex, significant, isWord } from './sql-lexer.js';
 import {
     createSelect, createColumn, createCaseColumn, createWindowColumn, createCondition, createRawCondition, createGroup,
     createJoin, createTableSource, createSubquerySource, createCte, createSetOp, createOrderItem, createGroupByItem,
-    WINDOW_FUNCTIONS
+    createInsert, createUpdate, createDelete, createAssignment, WINDOW_FUNCTIONS
 } from './model.js';
 import { getDialect, DEFAULT_DIALECT, listDialects } from './dialects.js';
 import { formatLiteral, generateQuery } from './generator.js';
@@ -35,11 +35,16 @@ const NOT_AN_ALIAS = new Set([
     'JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS', 'NATURAL', 'OUTER', 'APPLY', 'STRAIGHT_JOIN', 'WINDOW', 'QUALIFY',
     'FOR', 'OPTION', 'WITH', 'TABLESAMPLE', 'LATERAL', 'USE', 'FORCE', 'IGNORE', 'PARTITION', 'INTO', 'FROM', 'SELECT',
     'AS', 'AND', 'OR', 'NOT', 'IS', 'IN', 'LIKE', 'BETWEEN', 'NULL', 'TRUE', 'FALSE', 'CASE', 'WHEN', 'THEN', 'ELSE',
-    'END', 'ASC', 'DESC', 'BY', 'ALL', 'DISTINCT', 'RETURNING', 'VALUES', 'SET',
+    'END', 'ASC', 'DESC', 'BY', 'ALL', 'DISTINCT', 'RETURNING', 'VALUES', 'VALUE', 'SET', 'DEFAULT', 'OUTPUT',
     // Time units and other words that end an expression (INTERVAL 1 DAY, AT TIME ZONE …)
     'DAY', 'DAYS', 'HOUR', 'HOURS', 'MINUTE', 'MINUTES', 'SECOND', 'SECONDS', 'MONTH', 'MONTHS', 'YEAR', 'YEARS',
     'WEEK', 'WEEKS', 'QUARTER', 'MICROSECOND', 'ZONE', 'TIME', 'TIMESTAMP', 'DATE', 'INTERVAL', 'PRECEDING',
     'FOLLOWING', 'ROW', 'ROWS', 'ONLY', 'FIRST', 'LAST', 'NEXT', 'NULLS'
+]);
+// Words that can't be a column name in a column list or SET
+const NOT_A_COLUMN = new Set([
+    'SELECT', 'FROM', 'WHERE', 'SET', 'VALUES', 'VALUE', 'AND', 'OR', 'NOT', 'NULL', 'ON', 'AS', 'IN', 'IS', 'LIKE',
+    'BETWEEN', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'JOIN', 'UNION', 'DEFAULT', 'TRUE', 'FALSE'
 ]);
 // Words after which the next word is still part of the expression (a DIV b, x COLLATE nocase)
 const JOINING_WORDS = new Set([
@@ -121,6 +126,8 @@ export function guessDialect(text) {
         else if (isWord(t, 'ILIKE')) sign('postgresql', 'ILIKE');
         else if (isWord(t, 'FETCH') && isWord(prev, 'ROWS', 'ROW')) sign('sqlserver', 'OFFSET … FETCH');
         else if (isWord(t, 'LIMIT') && tokens[i + 2] && tokens[i + 2].text === ',') sign('mysql', 'LIMIT offset, count');
+        else if (isWord(t, 'CONFLICT') && isWord(prev, 'ON')) sign('postgresql', 'ON CONFLICT');
+        else if (isWord(t, 'DUPLICATE') && isWord(prev, 'ON')) sign('mysql', 'ON DUPLICATE KEY');
     });
     const ranked = Object.entries(signs).sort((a, b) => b[1].length - a[1].length);
     if (!ranked.length || (ranked[1] && ranked[1][1].length === ranked[0][1].length)) return null;
@@ -154,17 +161,17 @@ function read(text, dialect) {
     if (all.some(t => t.type === 'comment')) notes.push('Comments are left out: the builder has no place for them.');
 
     const first = tokens[0];
-    if (isWord(first, 'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'REPLACE', 'UPSERT')) {
-        throw new Refusal(`Importing ${first.text.toUpperCase()} statements isn't supported yet; for now only SELECT queries can be imported.`, first);
+    if (isWord(first, 'MERGE', 'REPLACE', 'UPSERT')) {
+        throw new Refusal(`${first.text.toUpperCase()} statements aren't supported in the builder.`, first);
     }
     if (first.type === 'punct' && first.text === '(') {
         throw new Refusal('Remove the parentheses around the whole query and import it again.', first);
     }
-    if (!isWord(first, 'SELECT', 'WITH')) {
-        throw new Refusal(`Only SELECT queries can be imported; this starts with “${first.text}”.`, first);
+    if (!isWord(first, 'SELECT', 'WITH', 'INSERT', 'UPDATE', 'DELETE')) {
+        throw new Refusal(`Only SELECT, INSERT, UPDATE and DELETE statements can be imported; this starts with “${first.text}”.`, first);
     }
     const reader = new Reader(tokens.slice(0, end), dialect);
-    return { query: reader.query(0, end, 0), notes };
+    return { query: reader.statement(end), notes };
 }
 
 class Reader {
@@ -229,7 +236,10 @@ class Reader {
             WINDOW: 'Named windows (WINDOW … AS) aren\'t supported yet; write the window in OVER (…).',
             QUALIFY: 'QUALIFY isn\'t supported in the builder.',
             INTO: 'SELECT … INTO isn\'t supported in the builder.',
-            MINUS: 'MINUS isn\'t supported; use EXCEPT.'
+            MINUS: 'MINUS isn\'t supported; use EXCEPT.',
+            OUTPUT: 'OUTPUT isn\'t supported in the builder yet.',
+            ORDER: 'ORDER BY isn\'t supported here in the builder.',
+            LIMIT: 'LIMIT isn\'t supported here in the builder.'
         };
         if (t.type === 'word' && unsupported[upper]) this.fail(unsupported[upper], i);
         this.fail(expected || `The builder can't read “${t.text}” here.`, i);
@@ -309,6 +319,196 @@ class Reader {
         return this.punct(i, '(') && this.word(i + 1, 'SELECT', 'WITH');
     }
 
+    // ------------------------------------------------------------- statements
+
+    /** The whole statement: a query, INSERT, UPDATE or DELETE. */
+    statement(end) {
+        if (this.word(0, 'INSERT')) return this.insert({ i: 0, end });
+        if (this.word(0, 'UPDATE')) return this.update({ i: 0, end });
+        if (this.word(0, 'DELETE')) return this.remove({ i: 0, end });
+        return this.query(0, end, 0);
+    }
+
+    /** INSERT INTO t [(columns)] VALUES (…), (…) | SELECT …  [ON CONFLICT … | ON DUPLICATE KEY UPDATE …] */
+    insert(c) {
+        c.i++;
+        if (this.word(c.i, 'IGNORE', 'LOW_PRIORITY', 'DELAYED', 'HIGH_PRIORITY', 'OVERWRITE')) this.fail(`INSERT ${this.t[c.i].text.toUpperCase()} isn't supported in the builder.`, c.i);
+        if (this.word(c.i, 'TOP')) this.fail('TOP in INSERT isn\'t supported in the builder.', c.i);
+        if (!this.word(c.i, 'INTO')) this.unexpected(c.i, 'Expected INTO after INSERT.');
+        c.i++;
+        const q = /** @type {any} */ (createInsert());
+        q.table = this.tableName(c);
+        if (this.isName(c.i) || this.word(c.i, 'AS')) this.fail('An alias for the INSERT table isn\'t supported in the builder.', c.i);
+        if (this.punct(c.i, '(') && !this.isSubquery(c.i)) {
+            const close = this.match[c.i];
+            const columns = this.commas(c.i + 1, close);
+            if (!columns.length || columns.some(([x, y]) => !this.isNameChain(x, y))) this.fail('The column list should be column names separated by commas.', c.i);
+            q.columns = columns.map(([x, y]) => this.text(x, y)).join(', ');
+            c.i = close + 1;
+        }
+        if (this.word(c.i, 'VALUES', 'VALUE')) {
+            c.i++;
+            q.rows = [];
+            do {
+                if (!this.punct(c.i, '(') || c.i >= c.end) this.unexpected(c.i, 'Expected a row of values in parentheses here.');
+                const close = this.match[c.i];
+                const values = this.commas(c.i + 1, close);
+                if (!values.length || values.some(([x, y]) => x === y)) this.fail('Expected values separated by commas in this row.', c.i);
+                q.rows.push({ values: values.map(([x, y]) => this.text(x, y)).join(', ') });
+                c.i = close + 1;
+            } while (this.eat(c, ','));
+        } else if (this.word(c.i, 'SELECT', 'WITH')) {
+            // The SELECT runs up to the upsert or the end
+            let stop = c.i;
+            while (stop < c.end && !(this.word(stop, 'ON') && this.word(stop + 1, 'CONFLICT', 'DUPLICATE')) && !this.word(stop, 'RETURNING')) {
+                stop = this.punct(stop, '(') ? this.match[stop] + 1 : stop + 1;
+            }
+            q.source = 'select';
+            q.select = this.query(c.i, stop, 1);
+            c.i = stop;
+        } else if (this.isSubquery(c.i)) {
+            this.fail('Remove the parentheses around the SELECT.', c.i);
+        } else if (this.word(c.i, 'DEFAULT')) {
+            this.fail('DEFAULT VALUES isn\'t supported in the builder.', c.i);
+        } else if (this.word(c.i, 'SET')) {
+            this.fail('INSERT … SET isn\'t supported; write INSERT INTO t (columns) VALUES (…).', c.i);
+        } else {
+            this.unexpected(c.i, 'Expected VALUES or SELECT here.');
+        }
+        if (this.word(c.i, 'ON') && this.word(c.i + 1, 'CONFLICT')) this.onConflict(c, q);
+        else if (this.word(c.i, 'ON') && this.word(c.i + 1, 'DUPLICATE')) this.onDuplicateKey(c, q);
+        if (c.i < c.end) this.unexpected(c.i);
+        return q;
+    }
+
+    /** PostgreSQL: ON CONFLICT [(columns)] DO NOTHING | DO UPDATE SET … */
+    onConflict(c, q) {
+        if (this.dialect.supports.upsert !== 'on-conflict') this.fail(`${this.dialect.shortLabel} has no ON CONFLICT; pick PostgreSQL if this SQL is for PostgreSQL.`, c.i);
+        c.i += 2;
+        if (this.punct(c.i, '(')) {
+            const close = this.match[c.i];
+            const columns = this.commas(c.i + 1, close);
+            if (!columns.length || columns.some(([x, y]) => !this.isNameChain(x, y))) this.fail('The conflict target should be column names separated by commas.', c.i);
+            q.upsert.conflict = columns.map(([x, y]) => this.text(x, y)).join(', ');
+            c.i = close + 1;
+        } else if (this.word(c.i, 'ON') && this.word(c.i + 1, 'CONSTRAINT')) {
+            this.fail('ON CONFLICT ON CONSTRAINT isn\'t supported; name the key\'s columns instead.', c.i);
+        }
+        if (this.word(c.i, 'WHERE')) this.fail('A WHERE on the conflict target isn\'t supported in the builder.', c.i);
+        if (!this.word(c.i, 'DO')) this.unexpected(c.i, 'Expected DO NOTHING or DO UPDATE here.');
+        c.i++;
+        if (this.word(c.i, 'NOTHING')) {
+            c.i++;
+            q.upsert.mode = 'nothing';
+            return;
+        }
+        if (!this.word(c.i, 'UPDATE') || !this.word(c.i + 1, 'SET')) this.unexpected(c.i, 'Expected DO NOTHING or DO UPDATE SET here.');
+        c.i += 2;
+        q.upsert.mode = 'update';
+        q.upsert.set = this.assignments(c, true);
+        if (this.word(c.i, 'WHERE')) this.fail('A WHERE on DO UPDATE isn\'t supported in the builder.', c.i);
+    }
+
+    /** MySQL: ON DUPLICATE KEY UPDATE … */
+    onDuplicateKey(c, q) {
+        if (this.dialect.supports.upsert !== 'on-duplicate-key') this.fail(`${this.dialect.shortLabel} has no ON DUPLICATE KEY UPDATE; pick MySQL if this SQL is for MySQL.`, c.i);
+        if (!this.word(c.i + 2, 'KEY') || !this.word(c.i + 3, 'UPDATE')) this.unexpected(c.i + 2, 'Expected ON DUPLICATE KEY UPDATE here.');
+        c.i += 4;
+        q.upsert.mode = 'update';
+        q.upsert.set = this.assignments(c, true);
+    }
+
+    /** UPDATE t SET a = 1, … [WHERE …] */
+    update(c) {
+        c.i++;
+        if (this.word(c.i, 'TOP', 'LOW_PRIORITY', 'IGNORE', 'ONLY')) this.fail(`UPDATE ${this.t[c.i].text.toUpperCase()} isn't supported in the builder.`, c.i);
+        const q = /** @type {any} */ (createUpdate());
+        q.table = this.tableName(c);
+        if (this.isName(c.i) || this.word(c.i, 'AS')) this.fail('An alias for the UPDATE table isn\'t supported; use the table\'s name in the conditions.', c.i);
+        if (this.punct(c.i, ',') || this.joinStart(c.i)) this.fail('Updating several tables at once isn\'t supported in the builder.', c.i);
+        if (!this.word(c.i, 'SET')) this.unexpected(c.i, 'Expected SET here.');
+        c.i++;
+        q.set = this.assignments(c, false);
+        if (this.word(c.i, 'FROM')) this.fail('UPDATE … FROM isn\'t supported in the builder.', c.i);
+        if (this.word(c.i, 'WHERE') && c.i < c.end) {
+            c.i++;
+            q.where = this.condition(c, 0, 'WHERE');
+        }
+        if (c.i < c.end) this.unexpected(c.i);
+        return q;
+    }
+
+    /** DELETE FROM t [WHERE …] */
+    remove(c) {
+        c.i++;
+        if (this.word(c.i, 'TOP', 'LOW_PRIORITY', 'QUICK', 'IGNORE')) this.fail(`DELETE ${this.t[c.i].text.toUpperCase()} isn't supported in the builder.`, c.i);
+        if (!this.word(c.i, 'FROM')) this.unexpected(c.i, 'Expected FROM after DELETE; the builder writes DELETE FROM table.');
+        c.i++;
+        if (this.word(c.i, 'ONLY')) this.fail('DELETE FROM ONLY isn\'t supported in the builder.', c.i);
+        const q = /** @type {any} */ (createDelete());
+        q.table = this.tableName(c);
+        if (this.isName(c.i) || this.word(c.i, 'AS')) this.fail('An alias for the DELETE table isn\'t supported; use the table\'s name in the conditions.', c.i);
+        if (this.word(c.i, 'USING') || this.punct(c.i, ',') || this.joinStart(c.i)) this.fail('Deleting with other tables (USING or JOIN) isn\'t supported; use WHERE … IN (SELECT …) instead.', c.i);
+        if (this.word(c.i, 'WHERE') && c.i < c.end) {
+            c.i++;
+            q.where = this.condition(c, 0, 'WHERE');
+        }
+        if (c.i < c.end) this.unexpected(c.i);
+        return q;
+    }
+
+    /** column = value, … for SET and the upsert's update part */
+    assignments(c, upsert) {
+        const set = [];
+        do {
+            const [x, y] = this.span(c, (i) => this.clauseStart(i) || this.word(i, 'FROM', 'OUTPUT'));
+            if (x === y) this.unexpected(x, 'Expected column = value here.');
+            if (this.punct(x, '(')) this.fail('Setting several columns from one list isn\'t supported; write one column = value each.', x);
+            let eq = x;
+            while (eq < y && !(this.t[eq].type === 'op' && this.t[eq].text === '=')) eq++;
+            if (eq === y || eq === x || !this.isNameChain(x, eq)) this.fail('Expected column = value here.', x);
+            if (eq + 1 === y) this.fail('Expected a value after =.', eq);
+            const assignment = createAssignment();
+            assignment.column = this.text(x, eq);
+            const value = this.text(eq + 1, y);
+            const inserted = upsert && this.dialect.insertedValue ? this.dialect.insertedValue(assignment.column) : null;
+            const plain = (/** @type {string} */ text) => text.replace(/\s+/g, '').toUpperCase();
+            if (inserted && plain(value) === plain(inserted)) {
+                assignment.valueType = 'inserted';
+            } else {
+                Object.assign(assignment, this.operand(eq + 1, y));
+            }
+            set.push(assignment);
+        } while (this.eat(c, ','));
+        return set;
+    }
+
+    /** schema.table, [dbo].[t] … as typed */
+    tableName(c) {
+        if (!this.isName(c.i) || c.i >= c.end) this.unexpected(c.i, 'Expected a table name here.');
+        const start = c.i;
+        c.i++;
+        let parts = 1;
+        while (this.punct(c.i, '.') && this.isName(c.i + 1) && parts < 4) {
+            c.i += 2;
+            parts++;
+        }
+        return this.text(start, c.i);
+    }
+
+    /** [a, b) is a column name like col, t.col or "My col"; words such as date or year are names here */
+    isNameChain(a, b) {
+        const part = (/** @type {number} */ i) => {
+            const t = this.t[i];
+            return Boolean(t) && (t.type === 'quoted' || (t.type === 'word' && !NOT_A_COLUMN.has(t.text.toUpperCase())));
+        };
+        if (b <= a || !part(a)) return false;
+        for (let i = a + 1; i < b; i += 2) {
+            if (!this.punct(i, '.') || !part(i + 1)) return false;
+        }
+        return (b - a) % 2 === 1;
+    }
+
     // ------------------------------------------------------------- queries
 
     /** A whole query in [a, b): WITH, SELECTs joined by UNION etc., ORDER BY and paging. */
@@ -364,6 +564,7 @@ class Reader {
     /** One SELECT … FROM … WHERE … GROUP BY … HAVING … */
     core(c, depth, branch) {
         if (depth > MAX_NESTING_DEPTH) this.fail(`Queries can be nested at most ${MAX_NESTING_DEPTH} levels deep in the builder.`, c.i);
+        if (this.word(c.i, 'INSERT', 'UPDATE', 'DELETE')) this.fail(`A WITH before ${this.t[c.i].text.toUpperCase()} isn't supported in the builder.`, c.i);
         if (!this.word(c.i, 'SELECT') || c.i >= c.end) this.unexpected(c.i, 'Expected SELECT here.');
         c.i++;
         const q = /** @type {any} */ (createSelect());
@@ -503,15 +704,7 @@ class Reader {
             return source;
         }
         if (this.word(c.i, 'LATERAL', 'VALUES', 'UNNEST', 'ONLY')) this.fail(`${this.t[c.i].text.toUpperCase()} isn't supported in FROM or JOIN.`, c.i);
-        if (!this.isName(c.i) || c.i >= c.end) this.unexpected(c.i, 'Expected a table name here.');
-        const start = c.i;
-        c.i++;
-        let parts = 1;
-        while (this.punct(c.i, '.') && this.isName(c.i + 1) && parts < 4) {
-            c.i += 2;
-            parts++;
-        }
-        const table = this.text(start, c.i);
+        const table = this.tableName(c);
         if (this.punct(c.i, '(')) this.fail('Table functions aren\'t supported in FROM or JOIN yet.', c.i);
         const alias = this.alias(c);
         if (this.punct(c.i, '(')) this.fail('Column names after a table\'s alias aren\'t supported.', c.i);
