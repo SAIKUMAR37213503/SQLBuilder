@@ -51,6 +51,10 @@
 //
 // minVersions                features that need a later release, shown as tips
 //
+// syntax                     how SQL text in this dialect is read (SQL import)
+//   backslashEscapes         \' and \\ escape characters inside strings
+//   hashComments             # starts a line comment
+//
 // ui                         wording for dialect-specific builder fields
 //   limitLabel, limitHint    the row-limit field (LIMIT, or TOP on SQL Server)
 
@@ -101,6 +105,7 @@ function defineDialect(spec) {
         restrictions: Object.freeze({ ...DEFAULT_RESTRICTIONS, ...spec.restrictions }),
         parameters: Object.freeze({ names: 'kept', ignoredNote: '', ...spec.parameters }),
         minVersions: Object.freeze({ ...spec.minVersions }),
+        syntax: Object.freeze({ backslashEscapes: false, hashComments: false, ...spec.syntax }),
         ui: Object.freeze({ limitLabel: 'LIMIT', limitHint: '', ...spec.ui }),
         notes: Object.freeze([...(spec.notes || [])])
     });
@@ -195,6 +200,7 @@ export const DIALECTS = {
         },
         // INTERSECT / EXCEPT exist since MySQL 8.0.31
         minVersions: { INTERSECT: '8.0.31', EXCEPT: '8.0.31' },
+        syntax: { backslashEscapes: true, hashComments: true },
         notes: ['FULL JOIN is not supported by MySQL.', 'Window functions need MySQL 8.0+; INTERSECT / EXCEPT need 8.0.31+.', 'Parameters are written as ?.', 'Upsert: ON DUPLICATE KEY UPDATE.']
     })
 };

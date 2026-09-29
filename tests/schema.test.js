@@ -22,6 +22,13 @@ describe('SQL lexer', () => {
         ]);
     });
 
+    test('T-SQL @names and #temp tables are words; a lone @ or # is an operator', () => {
+        expect(types('@id #tmp @@ROWCOUNT a @> b c <@ d e<=>f g @ h')).toEqual([
+            'word:@id', 'word:#tmp', 'word:@@ROWCOUNT', 'word:a', 'op:@>', 'word:b', 'word:c', 'op:<@', 'word:d',
+            'word:e', 'op:<=>', 'word:f', 'word:g', 'op:@', 'word:h'
+        ]);
+    });
+
     test('keeps positions, skips comments and reads dollar-quoted bodies whole', () => {
         const tokens = lex("-- note\n/* block\n */ CREATE $$ a; b $$ x");
         const create = tokens.find(t => t.text === 'CREATE');

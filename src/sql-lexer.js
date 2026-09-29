@@ -9,7 +9,8 @@
 //   string    'text', N'text', E'text', X'hex', $$text$$ / $tag$text$tag$;
 //             `value` is the text without quotes, escapes resolved
 //   quoted    a quoted name: "name", `name`, [name]; `value` is the name
-//   word      a keyword or bare name (letters, digits, _, $; T-SQL @x and #x)
+//   word      a keyword or bare name (letters, digits, _, $; T-SQL @x and #x;
+//             a lone @ or # is an operator)
 //   number    12, 1.5, .5, 1e3
 //   param     ?, $1, :name
 //   op        operators: = <> != < <= > >= + - * / % || :: -> ->> and any
@@ -28,7 +29,8 @@
 const WORD_START = /[\p{L}_@#]/u;
 const WORD_CHAR = /[\p{L}\p{N}_$@#]/u;
 const DIGIT = /[0-9]/;
-const MULTI_OPS = ['->>', '<>', '!=', '>=', '<=', '||', '::', '->', '=>', '!<', '!>'];
+// Longest first, so <=> isn't read as <= and >
+const MULTI_OPS = ['->>', '<=>', '!~*', '<>', '!=', '>=', '<=', '||', '::', '->', '=>', '!<', '!>', '@>', '<@', '&&', '!~', '~*'];
 
 /**
  * @param {string} text
@@ -130,7 +132,7 @@ export function lex(text, { backslashEscapes = false, hashComments = false } = {
             i++;
             while (i < text.length && /[A-Za-z0-9_]/.test(text[i])) i++;
             push('param', start);
-        } else if (WORD_START.test(ch) && !(hashComments && ch === '#')) {
+        } else if (WORD_START.test(ch) && !(hashComments && ch === '#') && !((ch === '@' || ch === '#') && !WORD_CHAR.test(next || ''))) {
             i++;
             while (i < text.length && WORD_CHAR.test(text[i])) i++;
             push('word', start);
