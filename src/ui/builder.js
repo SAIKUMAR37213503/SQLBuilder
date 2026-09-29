@@ -326,7 +326,7 @@ class Renderer {
             ),
             h('div', { class: 'window-over' },
                 h('p', { class: 'subquery-label' }, 'OVER'),
-                h('h4', { class: 'sub-heading' }, 'PARTITION BY'),
+                h('h3', { class: 'sub-heading' }, 'PARTITION BY'),
                 h('ol', { class: 'item-list' }, col.partitionBy.map((p, j) => {
                     const pPath = joinPath(cPath, 'partitionBy', j);
                     return h('li', { class: 'row', dataset: { path: pPath } },
@@ -334,7 +334,7 @@ class Renderer {
                         button('', 'remove-item', pPath, { icon: '✕', label: `Remove partition column ${j + 1}`, variant: 'danger-ghost' }));
                 })),
                 addBar(button('+ Partition column', 'add-item', joinPath(cPath, 'partitionBy'), { arg: 'groupBy' })),
-                h('h4', { class: 'sub-heading' }, 'ORDER BY'),
+                h('h3', { class: 'sub-heading' }, 'ORDER BY'),
                 h('ol', { class: 'item-list' }, col.orderBy.map((o, j) => {
                     const oPath = joinPath(cPath, 'orderBy', j);
                     return h('li', { class: 'row', dataset: { path: oPath } },
@@ -406,7 +406,7 @@ class Renderer {
 
     grouping(q, path, ctx) {
         return [
-            h('h4', { class: 'sub-heading' }, 'GROUP BY'),
+            h('h3', { class: 'sub-heading' }, 'GROUP BY'),
             h('ol', { class: 'item-list' }, q.groupBy.map((g, i) => {
                 const gPath = joinPath(path, 'groupBy', i);
                 return h('li', { class: 'row', dataset: { path: gPath } },
@@ -414,7 +414,7 @@ class Renderer {
                     rowTools(gPath, i, q.groupBy.length, 'GROUP BY column'));
             })),
             addBar(button('+ GROUP BY column', 'add-item', joinPath(path, 'groupBy'), { arg: 'groupBy' })),
-            h('h4', { class: 'sub-heading' }, 'HAVING (filter groups)'),
+            h('h3', { class: 'sub-heading' }, 'HAVING (filter groups)'),
             this.group(q.having, joinPath(path, 'having'), ctx, { clause: 'HAVING', root: true })
         ];
     }
