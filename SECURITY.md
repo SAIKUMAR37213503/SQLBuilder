@@ -63,6 +63,16 @@ The Schema tab reads pasted text or a chosen `.sql` / `.json` file as untrusted 
 - Every table is rebuilt field by field: names at most 128 characters with no control characters, types at most 64, at most 500 tables and 500 columns per table, duplicate names rejected, and key columns checked against the table. The stored schema is capped at 1.5 MB.
 - Names are shown with `textContent` only.
 
+## SQL import (Import SQL)
+
+Import SQL reads pasted text, a chosen `.sql` file or a dropped file as untrusted input:
+- Files over 1 MB are rejected before they are read, and text over 1 MB is refused.
+- The SQL is tokenized and read locally (`src/sql-lexer.js`, `src/sql-import.js`). It is never run and never sent anywhere; the dialog works offline.
+- Parentheses are matched before reading, subqueries are limited to the builder's nesting depth and parenthesized conditions to 64 levels, so input can't exhaust the stack. Anything the reader doesn't understand is refused with its line and column; it never guesses.
+- The result is an ordinary query model: tests check that it passes the same `normalizeWorkspace` rebuild as imported JSON, including for thousands of random and mutated statements.
+- The preview, the differences and the SQL shown are set with `textContent`, so markup in the SQL stays text.
+- Nothing changes until you choose Import; Import replaces only the SELECT query and can be undone.
+
 ## Browser storage
 
 Stored in `localStorage` under the `sqlb:v1:` prefix, and only in the current browser:

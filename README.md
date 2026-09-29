@@ -95,6 +95,7 @@ Messages are listed errors first, then warnings, then tips. On narrower screens 
   - a tip when ON doesn't use the schema's link, or when no foreign key links the tables (only if the schema has foreign keys at all);
   - a warning when the joined columns aren't a primary or unique key on either side, so rows can repeat;
   - tips for table and column names that aren't in the schema (qualified names always; unqualified ones only when every table in scope is known).
+- **Import SQL** (File → Import SQL, or the command palette): paste a SELECT statement, choose a `.sql` file, or drop one on the dialog, and edit it in the builder. The dialect is guessed from syntax only one dialect uses (backquotes, `[brackets]`, `TOP`, `$1`, `::`…) and can be picked by hand. Before anything changes, the dialog shows either where the SQL can't be imported (“Line 7, column 3: JOIN … USING isn't supported yet”) or a round-trip check: the SQL the builder will write is compared with yours, ignoring layout, comments, keyword case and optional words (AS, INNER, OUTER, ASC), and every remaining difference is listed by line (for example MySQL's `LIMIT 10, 20` becomes `LIMIT 20 OFFSET 10`, and `a AND b OR c` gains parentheses that keep its meaning). Import replaces only the SELECT query (INSERT, UPDATE and DELETE drafts stay), switches to the SQL's dialect, and Undo brings the previous query back. It reads CTEs, DISTINCT, TOP, aggregates, CASE and window columns (when the builder can write them the same way), all five join types with ON, WHERE / HAVING with AND / OR groups and every builder operator, GROUP BY, UNION / INTERSECT / EXCEPT, ORDER BY, LIMIT / OFFSET / FETCH, parameters in each dialect's style, and subqueries in FROM, JOIN and conditions. Expressions are kept word for word; conditions the builder has no operator for (ILIKE, `= ANY (…)`, …) become custom SQL conditions. Values become plain values only when the builder writes them back identically (`'John'` → John, `'042'` → 042).
 - **Full backup** (File → Back up everything / Restore from backup…): one JSON file (`sql-builder-backup`, version 2) with all templates (including pins and dates), history, the schema and settings. Version 1 backups still restore. Restoring validates every field first and asks how to restore: **Merge** (default) adds the templates, history and schema tables that aren't here yet and skips exact copies (a table already here keeps your version), keeping your settings; **Replace** asks for confirmation, then swaps templates, history, schema and settings for the backup's (a version 1 backup leaves the schema as it is). History isn't restored while saving history is turned off. A backup never contains anything that leaves your device unless you move the file yourself.
 - Undo / redo of every change.
 - **Command palette** (Ctrl/⌘+K, or File → Commands… on touch screens): search and run commands such as Generate, Copy, Save, switching the query type, dialect, output format or theme, opening the library tabs, import/export and settings. It only lists commands that apply right now and runs the same actions as the buttons.
@@ -223,7 +224,9 @@ src/
 ├── serialization.js  JSON import/export; rebuilds untrusted input field by field
 ├── schema.js         Schema model (tables, columns, keys), validation, storage, CREATE TABLE output
 ├── ddl.js            Reads CREATE TABLE / ALTER TABLE … ADD text into schema tables (never runs it)
-├── sql-lexer.js      SQL tokens with positions, for reading pasted DDL
+├── sql-lexer.js      SQL tokens with positions, for reading pasted DDL and imported SQL
+├── sql-import.js     Reads a SELECT into the model (recursive descent; refuses with line and column)
+├── roundtrip.js      Compares imported SQL with the builder's SQL, token by token
 ├── suggest.js        Which tables/columns a builder field can use (scope, aliases, CTEs)
 ├── joins.js          JOIN assistant (ON from foreign keys) and schema checks (tips/warnings)
 ├── storage.js        Guarded localStorage wrapper
@@ -239,11 +242,12 @@ src/
     ├── dialogs.js    Native <dialog> helpers
     ├── palette.js    Command palette (filtering + combobox dialog)
     ├── suggest.js    Suggestion list under builder fields (ARIA combobox)
+    ├── sql-import.js Import SQL dialog preview (check result and differences)
     ├── theme.js, shortcuts.js, dom.js (safe element builder)
 ```
 
 Design decisions:
-- **One structured model.** The builder, generator, validator, history, templates, import/export and undo all operate on the same JSON model, so SQL is never parsed back from text. New constructs are added as a model field, a generator branch, a validation rule and an editor control. Window functions and `INTERSECT`/`EXCEPT` were added exactly this way.
+- **One structured model.** The builder, generator, validator, history, templates, import/export and undo all operate on the same JSON model. The only place SQL text is read back is Import SQL, which turns it into that model once and proves the result with a round-trip check. New constructs are added as a model field, a generator branch, a validation rule and an editor control. Window functions and `INTERSECT`/`EXCEPT` were added exactly this way.
 - **Formatting happens during generation.** The generator emits `[indent, text]` lines and pretty-prints or joins them, so user values are never reformatted.
 - **No framework.** Rendering uses a ~30-line `h()` helper with `textContent`/`setAttribute`; there is no `innerHTML`. Events are delegated: inputs carry `data-path` (their location in the model) and buttons carry `data-action`.
 - **Bundled classic script.** ES modules can't load from `file://`, so esbuild bundles them into one IIFE. The only runtime dependency is the browser.
@@ -307,10 +311,10 @@ Fabric_Sync/                                      ← unrelated Power BI content
 ## Limitations
 
 - **Not a SQL parser.** Expressions you type (columns, custom conditions, CASE parts, INSERT values) are inserted as written. Validation only checks balanced quotes and parentheses and rejects `;` and `--`. It cannot tell whether a column exists or a function is valid.
-- You can't paste a query in to edit it; queries are built with the builder or imported as JSON. Pasted SQL is only read for `CREATE TABLE` definitions in the Schema tab.
+- Import SQL reads one SELECT statement. INSERT, UPDATE and DELETE, and SELECTs using `DISTINCT ON`, `USING`, `NATURAL` or `LATERAL` joins, `APPLY`, comma-separated FROM tables, table functions or hints, recursive CTEs, CTE column lists, `NULLS FIRST/LAST`, `WITH ROLLUP`, named windows, parenthesized UNION parts, `FOR UPDATE`, `RETURNING` or a SELECT without FROM, are refused with their location. Comments aren't kept, PostgreSQL parameter names can't be recovered from `$1`, and a CASE or window column the builder can't write the same way stays a plain expression.
 - Schema checks look at plain column references only (`e.name`, `name`); names inside expressions such as `UPPER(e.nmae)` aren't checked. Columns of CTEs and derived tables are known only when they are plain columns or have an alias.
 - Suggestions come from the saved schema and what the query selects; a column produced by an expression without an alias has no name to suggest.
-- CTEs are only allowed on the main query, and recursive CTEs aren't supported.
+- CTEs are only allowed on the main query (Import SQL refuses a WITH inside a subquery), and recursive CTEs aren't supported.
 - INSERT values are SQL expressions: write text in quotes. A warning flags likely unquoted text.
 - GROUP BY checking is a heuristic: it compares expressions textually and can't know about functional dependencies.
 - Dialect support covers only the differences listed in [SQL dialects](#sql-dialects).

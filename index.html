@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=6828e0783999">
+    <link rel="stylesheet" href="style.css?v=900f02d37c26">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -30,6 +30,7 @@
                         <button type="button" class="menu-item" data-command="palette" aria-keyshortcuts="Control+K Meta+K">Commands…</button>
                         <button type="button" class="menu-item" data-command="export-query">Export query (.json)</button>
                         <button type="button" class="menu-item" data-command="import-query">Import query (.json)…</button>
+                        <button type="button" class="menu-item" data-command="import-sql">Import SQL (.sql)…</button>
                         <button type="button" class="menu-item" data-command="download-sql">Download SQL (.sql)</button>
                         <button type="button" class="menu-item" data-command="export-backup">Back up everything (.json)</button>
                         <button type="button" class="menu-item" data-command="import-backup">Restore from backup…</button>
@@ -310,6 +311,28 @@
         </form>
     </dialog>
 
+    <dialog id="sql-import-dialog" class="dialog" aria-labelledby="sql-import-title">
+        <form method="dialog" class="dialog-body">
+            <h2 id="sql-import-title" class="dialog-title">Import SQL</h2>
+            <div class="field">
+                <label class="field-label" for="sql-import-text">A SELECT statement, or a .sql file</label>
+                <textarea id="sql-import-text" class="input textarea code-input" rows="10" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="sql-import-result"></textarea>
+                <div><button type="button" class="btn btn-ghost btn-sm" id="sql-import-file-btn">Choose a file…</button></div>
+            </div>
+            <div class="field">
+                <label class="field-label" for="sql-import-dialect">Written for</label>
+                <select id="sql-import-dialect" class="select" aria-describedby="sql-import-guess"></select>
+                <p class="field-hint" id="sql-import-guess"></p>
+            </div>
+            <div class="sql-import-result" id="sql-import-result" aria-live="polite"></div>
+            <p class="sql-import-note">Import replaces the SELECT query in the builder. Undo brings your current query back.</p>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary">Import</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="backup-dialog" class="dialog dialog-sm" aria-labelledby="backup-title" aria-describedby="backup-summary">
         <form method="dialog" class="dialog-body">
             <h2 id="backup-title" class="dialog-title">Restore from backup</h2>
@@ -362,6 +385,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=45e24b0a3fe5" defer></script>
+    <script src="dist/sqlbuilder.js?v=babf676980a2" defer></script>
 </body>
 </html>

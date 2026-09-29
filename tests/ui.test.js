@@ -2103,3 +2103,114 @@ describe('JOIN assistant', () => {
         expect(hint().hidden).toBe(false);
     });
 });
+
+describe('Import SQL', () => {
+    const dialog = () => $('#sql-import-dialog');
+    const result = () => $('#sql-import-result').textContent;
+
+    async function open() {
+        $('[data-command="import-sql"]').click();
+        await settle();
+        expect(dialog().hasAttribute('open')).toBe(true);
+    }
+    async function enter(text) {
+        $('#sql-import-text').value = text;
+        $('#sql-import-text').dispatchEvent(new Event('input', { bubbles: true }));
+        await settle();
+    }
+    async function submit() {
+        dialog().querySelector('button[type="submit"]').click();
+        await settle();
+    }
+
+    test('guesses the dialect, shows the check, imports, and Undo brings the old query back', async () => {
+        type('select.from.table', 'old_table');
+        await settle();
+        await open();
+        expect(result()).toContain('Nothing changes until you choose Import.');
+        await enter('SELECT `id`, COUNT(*) AS n\nFROM `orders` o -- recent\nWHERE o.status = \'paid\'\nGROUP BY `id`\nLIMIT 5');
+        expect($('#sql-import-dialect').value).toBe('mysql');
+        expect($('#sql-import-guess').textContent).toBe('This looks like MySQL (backquoted names).');
+        expect(result()).toContain('Ready to import: the builder writes the same query.');
+        expect(result()).toContain('Comments are left out');
+        await submit();
+        expect(dialog().hasAttribute('open')).toBe(false);
+        expect($('#dialect-select').value).toBe('mysql');
+        expect(field('select.where.items.0.value').value).toBe('paid');
+        $('[data-output-mode="compact"]')?.click();
+        await settle();
+        expect(sql()).toContain('SELECT `id`, COUNT(*) AS n FROM `orders` AS o WHERE o.status = \'paid\' GROUP BY `id` LIMIT 5;');
+        $('#undo-btn').click();
+        await settle();
+        expect(field('select.from.table').value).toBe('old_table');
+    });
+
+    test('what can\'t be imported keeps the dialog open with its line and column', async () => {
+        await open();
+        await enter('SELECT a FROM t;\nSELECT b FROM u');
+        expect(result()).toBe('Can\'t import. Line 2, column 1: This is more than one statement; import one statement at a time.');
+        await submit();
+        expect(dialog().hasAttribute('open')).toBe(true);
+        dialog().querySelector('[value="cancel"]').click();
+        await settle();
+        expect(field('select.from.table').value).toBe('');
+    });
+
+    test('an empty dialog asks for SQL; differences are listed', async () => {
+        await open();
+        await submit();
+        expect(dialog().hasAttribute('open')).toBe(true);
+        expect(result()).toContain('Paste a SELECT statement or choose a file first.');
+        await enter('SELECT a FROM t WHERE a = 1 AND b = 2 OR c = 3');
+        expect(result()).toContain('the builder writes 2 parts differently');
+        expect(result()).toContain('Line 1: the builder adds “(”.');
+    });
+
+    test('a picked dialect is kept; other query types are left as they were', async () => {
+        const selectType = (type) => {
+            const radio = $(`input[name="query-type"][value="${type}"]`);
+            radio.checked = true;
+            radio.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        selectType('insert');
+        await settle();
+        type('insert.table', 'audit_log');
+        await settle();
+        await open();
+        const picker = $('#sql-import-dialect');
+        picker.value = 'postgresql';
+        picker.dispatchEvent(new Event('change', { bubbles: true }));
+        await enter('SELECT [a] FROM t');
+        expect(picker.value).toBe('postgresql');
+        expect($('#sql-import-guess').textContent).toBe('');
+        await submit();
+        expect($('#dialect-select').value).toBe('postgresql');
+        expect(field('select.columns.0.expr').value).toBe('[a]');
+        expect($('input[name="query-type"][value="select"]').checked).toBe(true);
+        selectType('insert');
+        await settle();
+        expect(field('insert.table').value).toBe('audit_log');
+    });
+
+    test('opens .sql files and never renders imported text as HTML', async () => {
+        await open();
+        $('#sql-import-file-btn').click();
+        expect($('#file-input').accept).toContain('.sql');
+        await chooseFile('SELECT \'<img src=x onerror="alert(1)">\' AS x FROM t', 'query.sql');
+        expect($('#sql-import-text').value).toContain('<img');
+        dialog().querySelector('details').open = true;
+        expect(document.querySelector('img')).toBeNull();
+        expect($('#sql-import-result pre').textContent).toContain('<img src=x onerror="alert(1)">');
+        await submit();
+        expect(document.querySelector('img')).toBeNull();
+        expect(sql()).toContain('<img src=x onerror="alert(1)">');
+    });
+
+    test('is in the command palette', async () => {
+        press('k', { ctrlKey: true });
+        await settle();
+        $('#palette-input').value = 'import sql';
+        $('#palette-input').dispatchEvent(new Event('input', { bubbles: true }));
+        expect($$('#palette-list [role="option"] .palette-label').map(n => n.textContent)).toContain('Import SQL (.sql)…');
+    });
+});

@@ -35,6 +35,8 @@ import { openPalette } from './ui/palette.js';
 import { createSuggester } from './ui/suggest.js';
 import { fieldContext, suggest } from './suggest.js';
 import { analyzeJoin, applyJoinCandidate, isEmptyGroup, checkSchema } from './joins.js';
+import { previewSqlImport, guessDialect } from './sql-import.js';
+import { renderSqlImportPreview } from './ui/sql-import.js';
 import { createWebPlatform } from './platform/web.js';
 
 const DRAFT_KEY = 'draft';
@@ -42,6 +44,8 @@ const DRAFT_KEY = 'draft';
 const SOURCE_KEY = 'draft-source';
 // Files the Schema panel can import
 const SCHEMA_FILE_TYPES = '.sql,.ddl,.txt,.json,text/plain,application/sql,application/json';
+// Files Import SQL can open
+const SQL_FILE_TYPES = '.sql,.txt,text/plain,application/sql';
 
 const NEW_TABLE_DDL = `CREATE TABLE table_name (
     id INT PRIMARY KEY,
@@ -130,6 +134,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         schemaClear: $('schema-clear-btn'),
         schemaTableDialog: $('schema-table-dialog'),
         schemaImportDialog: $('schema-import-dialog'),
+        sqlImportDialog: $('sql-import-dialog'),
         libraryPanel: /** @type {any} */ (doc.querySelector('.library-panel')),
         fileInput: $('file-input'),
         toast: $('toast'),
@@ -176,6 +181,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     // Set while the schema import dialog is open: fills it with a chosen file's text
     /** @type {null | ((text: string) => void)} */
     let fillSchemaImport = null;
+    // Set while the Import SQL dialog is open: fills it with a chosen file's text
+    /** @type {((text: string) => void) | null} */
+    let fillSqlImport = null;
     /** @type {null | ReturnType<typeof createSuggester>} */
     let suggester = null;
     if (state.settings.restoreSession) {
@@ -761,7 +769,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
     function chooseFile(mode) {
         el.fileInput.dataset.mode = mode;
-        el.fileInput.accept = mode === 'schema' ? SCHEMA_FILE_TYPES : '.json,application/json';
+        el.fileInput.accept = mode === 'schema' ? SCHEMA_FILE_TYPES : mode === 'sql' ? SQL_FILE_TYPES : '.json,application/json';
         el.fileInput.value = '';
         el.fileInput.click();
     }
@@ -784,6 +792,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         }
         if (mode === 'schema') {
             if (fillSchemaImport) fillSchemaImport(text);
+        } else if (mode === 'sql') {
+            if (fillSqlImport) fillSqlImport(text);
         } else if (mode === 'templates') importTemplates(text);
         else if (mode === 'backup') await restoreBackup(text);
         else importQuery(text);
@@ -797,6 +807,109 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         }
         const switched = switchDialect(result.dialect);
         replaceWorkspace(result.workspace, `Query imported${switched}. Undo restores your previous query.`);
+    }
+
+    // Import SQL: reads a SELECT into the builder. The dialog shows what will
+    // be imported, and where it can't be; Import replaces the SELECT query,
+    // which Undo brings back.
+    async function importSql() {
+        const dialog = el.sqlImportDialog;
+        const input = dialog.querySelector('#sql-import-text');
+        const select = dialog.querySelector('#sql-import-dialect');
+        const guessNote = dialog.querySelector('#sql-import-guess');
+        const output = dialog.querySelector('#sql-import-result');
+        select.replaceChildren(...listDialects().map(d => h('option', { value: d.id }, d.label)));
+        select.value = state.settings.dialect;
+        guessNote.textContent = '';
+        input.value = '';
+        // Once the person picks a dialect, it is no longer guessed
+        let picked = false;
+        /** @type {any} */
+        let result = null;
+        const preview = () => {
+            const text = input.value;
+            if (!picked) {
+                const guess = text.trim() ? guessDialect(text) : null;
+                select.value = guess ? guess.dialect : state.settings.dialect;
+                guessNote.textContent = guess && guess.dialect !== state.settings.dialect
+                    ? `This looks like ${getDialect(guess.dialect).label} (${guess.reason}).` : '';
+            }
+            try {
+                result = text.trim() ? previewSqlImport(text, { dialect: select.value, quoteIdentifiers: state.settings.quoteIdentifiers }) : null;
+            } catch {
+                result = { ok: false, message: 'This SQL couldn\'t be read.', line: 0, col: 0 };
+            }
+            renderSqlImportPreview(output, result);
+        };
+        const onInput = debounce(preview, 250);
+        const onDialect = () => {
+            picked = true;
+            guessNote.textContent = '';
+            preview();
+        };
+        const fill = (/** @type {string} */ text) => {
+            input.value = text;
+            onInput.cancel();
+            preview();
+            input.focus();
+        };
+        const onFile = () => chooseFile('sql');
+        // A .sql file dropped on the dialog is read like a chosen one
+        const onDragOver = (/** @type {any} */ event) => {
+            if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'copy';
+        };
+        const onDrop = async (/** @type {any} */ event) => {
+            const file = event.dataTransfer?.files?.[0];
+            if (!file) return;
+            event.preventDefault();
+            if (file.size > MAX_IMPORT_BYTES) {
+                toast(`That file is too large to import (limit ${MAX_IMPORT_BYTES / 1024 / 1024} MB).`, 'error');
+                return;
+            }
+            try {
+                fill(await file.text());
+            } catch {
+                toast('The file could not be read.', 'error');
+            }
+        };
+        const fileButton = dialog.querySelector('#sql-import-file-btn');
+        preview();
+        input.addEventListener('input', onInput);
+        select.addEventListener('change', onDialect);
+        fileButton.addEventListener('click', onFile);
+        dialog.addEventListener('dragover', onDragOver);
+        dialog.addEventListener('drop', onDrop);
+        fillSqlImport = fill;
+        let ok;
+        try {
+            ok = await formDialog(dialog, {
+                onOpen: () => input.focus(),
+                validate: () => {
+                    onInput.flush();
+                    if (result && result.ok) return true;
+                    if (!result) renderSqlImportPreview(output, { ok: false, message: 'Paste a SELECT statement or choose a file first.', line: 0, col: 0 });
+                    input.focus();
+                    return false;
+                }
+            });
+        } finally {
+            onInput.cancel();
+            input.removeEventListener('input', onInput);
+            select.removeEventListener('change', onDialect);
+            fileButton.removeEventListener('click', onFile);
+            dialog.removeEventListener('dragover', onDragOver);
+            dialog.removeEventListener('drop', onDrop);
+            fillSqlImport = null;
+        }
+        if (!ok || !result || !result.ok) return;
+        commitSoon.flush();
+        const workspace = JSON.parse(JSON.stringify(state.workspace));
+        workspace.type = 'select';
+        workspace.select = result.query;
+        const switched = switchDialect(select.value);
+        replaceWorkspace(workspace, `SQL imported${switched}. Undo brings back your previous query.`);
     }
 
     function importTemplates(text) {
@@ -1401,7 +1514,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             suggester.close();
             return true;
         }
-        const dialogs = [el.confirmDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
+        const dialogs = [el.confirmDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
         const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
         if (open) {
             closeDialog(open, 'cancel');
@@ -1537,6 +1650,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             schema.size > 0 && { id: 'schema-export-sql', group: 'Schema', label: 'Export schema as CREATE TABLE (.sql)', keywords: 'ddl tables', run: () => exportSchema('sql') },
             { id: 'export-query', group: 'File', label: 'Export query (.json)', run: exportQuery },
             { id: 'import-query', group: 'File', label: 'Import query (.json)…', run: () => chooseFile('query') },
+            { id: 'import-sql', group: 'File', label: 'Import SQL (.sql)…', keywords: 'open paste select file', run: importSql },
             { id: 'export-backup', group: 'File', label: 'Back up everything (.json)', keywords: 'backup export templates history settings', run: exportBackup },
             { id: 'import-backup', group: 'File', label: 'Restore from backup…', keywords: 'backup import templates history settings', run: () => chooseFile('backup') },
             templates.list().length > 0 && { id: 'export-templates', group: 'Templates', label: 'Export all templates', run: exportTemplates },
@@ -1627,6 +1741,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         const commands = {
             'export-query': exportQuery,
             'import-query': () => chooseFile('query'),
+            'import-sql': importSql,
             'download-sql': downloadSql,
             'export-backup': exportBackup,
             'import-backup': () => chooseFile('backup'),
@@ -1698,7 +1813,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     }, 150));
 
     [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog, el.paletteDialog, el.backupDialog,
-        el.schemaTableDialog, el.schemaImportDialog].forEach(enhanceDialog);
+        el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog].forEach(enhanceDialog);
 
     bindShortcuts(doc, signal, {
         generate,
