@@ -79,8 +79,9 @@ A custom SQL condition that contains a top-level `AND`/`OR` is wrapped in parent
   - an upsert that updates from an inserted value for a column the INSERT doesn't list
   - conditions that can never both be true (`price > 50 AND price < 10`, `status = 'paid' AND status = 'void'`), and `BETWEEN 50 AND 10`
   - a join whose ON condition mentions only the joined table, or only the tables before it
+  - functions, operators and name quoting typed in an expression, custom condition or value that the selected dialect doesn't have, with the usual replacement: `GETDATE()` in PostgreSQL (use `CURRENT_TIMESTAMP`), `NOW()` on SQL Server, `ISNULL(a, b)` or `IFNULL` outside their dialect (use `COALESCE`), `ILIKE`, `::` casts, `LEN`/`LENGTH`, `CHARINDEX`, `DATEADD`/`DATE_ADD`, `DATEDIFF` with the other dialect's arguments, `GROUP_CONCAT`/`STRING_AGG`, `IIF`/`IF`, `NEWID`/`UUID`, `` `name` `` and `[name]` quoting, and more. Typed text is flagged, never rewritten. With Generic SQL these are tips instead, saying which database the syntax comes from.
 - **Suggestions** (never block): valid SQL that could be clearer: a plain `SELECT *` on the main query, DISTINCT that GROUP BY already makes redundant, a condition repeated in the same group, a table alias that is never used, and subqueries nested three or more levels deep. The analysis rules are deliberately conservative: when a condition can't be read with certainty (custom SQL, parameters, unqualified column names, text that some databases compare case-insensitively or as dates), they stay silent rather than guess.
-- **Tips**, e.g. LIMIT without ORDER BY, LIKE without a wildcard, INTERSECT precedence, ORDER BY in a subquery (the database may ignore it), or parameter names the dialect ignores.
+- **Tips**, e.g. LIMIT without ORDER BY, LIKE without a wildcard, INTERSECT precedence, ORDER BY in a subquery (the database may ignore it), parameter names the dialect ignores, or syntax that needs a later version (`STRING_AGG` needs SQL Server 2017).
 
 Messages are listed errors first, then warnings, then tips. On narrower screens the bottom bar's View SQL button shows the number of errors and warnings.
 
@@ -222,6 +223,7 @@ src/
 ├── dialects.js       Every dialect difference: writing rules plus supports/restrictions flags
 ├── validation.js     model → issues { level, category, message, path }
 ├── analysis.js       Analysis rules (contradictions, unlinked joins, unused aliases, …) and query insights
+├── dialect-functions.js  Dialect-specific functions, operators and quoting found in typed SQL
 ├── structure.js      model → the query's steps in processing order, with explanations
 ├── sql-utils.js      Quote/paren-aware splitting and balance checks (not a SQL parser)
 ├── tokenizer.js      Highlighting tokens (no HTML)

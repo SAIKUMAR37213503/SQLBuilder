@@ -19,6 +19,8 @@ import {
     OPERATORS, JOIN_TYPES, SET_OPERATORS, AGGREGATES, LOGIC_OPERATORS, WINDOW_FUNCTIONS, WINDOW_FRAMES, UPSERT_MODES, joinPath
 } from './model.js';
 import { getDialect } from './dialects.js';
+import { dialectSyntaxIssues } from './dialect-functions.js';
+import { lex, significant } from './sql-lexer.js';
 import {
     findSyntaxProblem, isQualifiedName, isIdentifier, isColumnReference, splitTopLevel,
     containsAggregateCall, normalizeExpr, isNumberLiteral, isQuotedString, isBareIdentifier, stripStrings, hasLeadingZero,
@@ -159,6 +161,9 @@ class Validator {
     // Hand-written SQL is passed through unchanged, so point out words the
     // selected dialect doesn't understand instead of rewriting them
     dialectWords(text, path, scope) {
+        for (const issue of dialectSyntaxIssues(significant(lex(text, this.dialect.syntax)), this.dialect)) {
+            this.add(issue.level, 'dialect', issue.message, path, scope);
+        }
         if (!this.dialect.supports.booleanKeywords) {
             const word = findBareWord(text, ['TRUE', 'FALSE']);
             if (word) {
