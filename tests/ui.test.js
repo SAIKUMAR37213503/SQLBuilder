@@ -1228,6 +1228,101 @@ describe('saving the current query', () => {
     });
 });
 
+describe('SQL format settings', () => {
+    const loadExample = async (id) => {
+        $(`#example-list [data-action="example-load"][data-id="${id}"]`).click();
+        await settle();
+    };
+    const setSetting = (key, value) => {
+        const input = $(`[data-setting="${key}"]`);
+        if (input.type === 'checkbox') input.checked = value;
+        else input.value = value;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    test('keyword case, indent, commas and one item per line change the output and the preview', async () => {
+        await loadExample('page-results');
+        expect(sql()).toBe('SELECT\n    id,\n    name,\n    email\nFROM customers\nORDER BY name, id\nLIMIT 20\nOFFSET 40;');
+        $('#settings-btn').click();
+        expect($('#format-preview').textContent).toContain('ORDER BY staff DESC, department;');
+        setSetting('keywordCase', 'lower');
+        setSetting('indentStyle', '2');
+        setSetting('commaPosition', 'leading');
+        setSetting('expandLists', true);
+        await settle();
+        expect(sql()).toBe('select\n  id\n  , name\n  , email\nfrom customers\norder by\n  name\n  , id\nlimit 20\noffset 40;');
+        expect($('#format-preview').textContent).toContain('order by\n  staff desc\n  , department;');
+        // Kept across restarts, and the dialog shows the saved choices
+        boot(backend);
+        $('#settings-btn').click();
+        expect($('[data-setting="keywordCase"]').value).toBe('lower');
+        expect($('[data-setting="indentStyle"]').value).toBe('2');
+        expect($('[data-setting="commaPosition"]').value).toBe('leading');
+        expect($('[data-setting="expandLists"]').checked).toBe(true);
+    });
+
+    test('one-line SQL follows keyword case only, and copies and history use the format', async () => {
+        await loadExample('page-results');
+        $('#settings-btn').click();
+        setSetting('keywordCase', 'lower');
+        setSetting('commaPosition', 'leading');
+        $('[data-output-mode="compact"]').click();
+        await settle();
+        expect(sql()).toBe('select id, name, email from customers order by name, id limit 20 offset 40;');
+        $('#generate-btn').click();
+        await settle();
+        expect(app.history.list()[0].sql).toBe('select\n    id\n    , name\n    , email\nfrom customers\norder by name, id\nlimit 20\noffset 40;');
+    });
+
+    test('a manually generated query is rewritten when the format changes', async () => {
+        $('#settings-btn').click();
+        setSetting('livePreview', false);
+        await fillSimpleSelect();
+        $('#generate-btn').click();
+        await settle();
+        expect(sql()).toBe('SELECT name\nFROM users;');
+        setSetting('keywordCase', 'lower');
+        await settle();
+        expect(sql()).toBe('select name\nfrom users;');
+    });
+
+    test('example previews follow the keyword case', async () => {
+        $('#settings-btn').click();
+        setSetting('keywordCase', 'lower');
+        await settle();
+        const preview = $$('#example-list .example-sql').map(n => n.textContent)[0];
+        expect(preview).toMatch(/^select /);
+    });
+
+    test('the command palette switches keyword case and opens the format settings', async () => {
+        await fillSimpleSelect();
+        press('k', { ctrlKey: true });
+        await settle();
+        $('#palette-input').value = 'lowercase';
+        $('#palette-input').dispatchEvent(new Event('input', { bubbles: true }));
+        press('Enter', {}, $('#palette-input'));
+        await settle();
+        expect(sql()).toBe('select name\nfrom users;');
+        press('k', { ctrlKey: true });
+        await settle();
+        $('#palette-input').value = 'format settings';
+        $('#palette-input').dispatchEvent(new Event('input', { bubbles: true }));
+        press('Enter', {}, $('#palette-input'));
+        await settle();
+        expect($('#settings-dialog').hasAttribute('open')).toBe(true);
+        expect(document.activeElement).toBe($('[data-setting="keywordCase"]'));
+    });
+
+    test('delete all saved data resets the format', async () => {
+        $('#settings-btn').click();
+        setSetting('keywordCase', 'lower');
+        $('#clear-data-btn').click();
+        await answerConfirm(true);
+        expect(app.state.settings.keywordCase).toBe('upper');
+        expect($('[data-setting="keywordCase"]').value).toBe('upper');
+    });
+});
+
 describe('command palette', () => {
     const palette = () => $('#palette-dialog');
     const options = () => $$('#palette-list [role="option"] .palette-label').map(n => n.textContent);

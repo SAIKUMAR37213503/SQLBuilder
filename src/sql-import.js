@@ -88,15 +88,17 @@ export function importSql(text, { dialect = DEFAULT_DIALECT } = {}) {
  * Imports SQL and checks it: the query, the SQL the builder writes for it, and
  * how that compares with the imported text.
  * @param {string} text
- * @param {{ dialect?: string, quoteIdentifiers?: boolean, pretty?: boolean }} [options]
+ * @param {{ dialect?: string, quoteIdentifiers?: boolean, pretty?: boolean, format?: object }} [options]
+ *   format: SQL format options for the SQL shown (see generator.js)
  */
-export function previewSqlImport(text, { dialect = DEFAULT_DIALECT, quoteIdentifiers = false, pretty = true } = {}) {
+export function previewSqlImport(text, { dialect = DEFAULT_DIALECT, quoteIdentifiers = false, pretty = true, format = {} } = {}) {
     const result = importSql(text, { dialect });
     if (!result.ok) return result;
-    const plain = generateQuery(result.query, { dialect, pretty });
-    // The check compares names as typed; quoting them is a setting, not a change
+    const plain = generateQuery(result.query, { ...format, dialect, pretty });
+    // The check compares names as typed; quoting them is a setting, not a change.
+    // Layout and keyword case don't count as differences either.
     const check = compareSql(text, plain, getDialect(dialect).syntax);
-    const sql = quoteIdentifiers ? generateQuery(result.query, { dialect, pretty, quoteIdentifiers }) : plain;
+    const sql = quoteIdentifiers ? generateQuery(result.query, { ...format, dialect, pretty, quoteIdentifiers }) : plain;
     return { ...result, sql, check };
 }
 

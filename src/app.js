@@ -16,7 +16,7 @@ import { validateWorkspace, hasErrors, summarize } from './validation.js';
 import { listDialects, getDialect } from './dialects.js';
 import { createStorage } from './storage.js';
 import { splitTopLevel } from './sql-utils.js';
-import { loadSettings, saveSettings, DEFAULT_SETTINGS } from './settings.js';
+import { loadSettings, saveSettings, DEFAULT_SETTINGS, formatOptions, FORMAT_SETTINGS } from './settings.js';
 import { createHistory } from './history.js';
 import { createTemplateStore, TemplateError } from './templates.js';
 import { createSchemaStore, SchemaError, tableToDdl, schemaToDdl } from './schema.js';
@@ -26,7 +26,7 @@ import {
     normalizeWorkspace, parseQueryFile, parseTemplatesFile, createQueryExport, createTemplatesExport, MAX_IMPORT_BYTES,
     createBackup, parseBackupFile, MAX_BACKUP_BYTES, createSchemaExport, readSchemaInput, MAX_SCHEMA_IMPORT_BYTES
 } from './serialization.js';
-import { EXAMPLES, EXAMPLE_TOPICS, examplesFor } from './examples.js';
+import { EXAMPLES, EXAMPLE_TOPICS, examplesFor, formatSample } from './examples.js';
 import { h, byPath, debounce, cssEscape, formatTime } from './ui/dom.js';
 import { renderEditor } from './ui/builder.js';
 import { renderSqlCode, selectContents } from './ui/output.js';
@@ -220,6 +220,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     });
 
     const generationOptions = (pretty = state.settings.outputMode === 'formatted') => ({
+        ...formatOptions(state.settings),
         dialect: state.settings.dialect,
         quoteIdentifiers: state.settings.quoteIdentifiers,
         pretty
@@ -871,7 +872,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     ? `This looks like ${getDialect(guess.dialect).label} (${guess.reason}).` : '';
             }
             try {
-                result = text.trim() ? previewSqlImport(text, { dialect: select.value, quoteIdentifiers: state.settings.quoteIdentifiers }) : null;
+                result = text.trim() ? previewSqlImport(text, { dialect: select.value, quoteIdentifiers: state.settings.quoteIdentifiers, format: formatOptions(state.settings) }) : null;
             } catch {
                 result = { ok: false, message: 'This SQL couldn\'t be read.', line: 0, col: 0 };
             }
@@ -1144,7 +1145,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         const dialect = filter === 'all' ? state.settings.dialect : filter;
         renderExampleList(el.exampleList, shown, (workspace) => {
             try {
-                return generateSQL(workspace, { dialect, quoteIdentifiers: false, pretty: false });
+                return generateSQL(workspace, { dialect, quoteIdentifiers: false, pretty: false, keywordCase: state.settings.keywordCase });
             } catch {
                 return '';
             }
@@ -1185,7 +1186,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             `Your query as ${getDialect(current).label} writes it, next to another dialect. Nothing changes unless you switch.`;
         const render = () => {
             state.compareWith = select.value;
-            renderDialectComparison(output, compareDialects(state.workspace, current, select.value, { quoteIdentifiers: state.settings.quoteIdentifiers }));
+            renderDialectComparison(output, compareDialects(state.workspace, current, select.value, { quoteIdentifiers: state.settings.quoteIdentifiers, format: formatOptions(state.settings) }));
             switchButton.textContent = `Switch to ${getDialect(select.value).label}`;
         };
         render();
@@ -1558,7 +1559,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             renderBuilder();
             renderExamples();
         }
-        if (state.generated && (patch.dialect !== undefined || patch.quoteIdentifiers !== undefined || patch.outputMode !== undefined)) {
+        const formatChanged = FORMAT_SETTINGS.some(key => patch[key] !== undefined && patch[key] !== before[key]);
+        if (formatChanged) renderFormatPreview();
+        if (patch.keywordCase !== undefined && patch.keywordCase !== before.keywordCase && patch.dialect === undefined) renderExamples();
+        if (state.generated && (patch.dialect !== undefined || patch.quoteIdentifiers !== undefined || patch.outputMode !== undefined || formatChanged)) {
             // Keep a manually generated query in sync with output preferences
             if (!hasErrors(validateWorkspace(state.workspace, validationOptions()))) {
                 state.generated = { snapshot: state.generated.snapshot, sql: generateSQL(JSON.parse(state.generated.snapshot), generationOptions()) };
@@ -1615,16 +1619,30 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             else input.value = state.settings[key];
         }
         renderDialectNotes();
+        renderFormatPreview();
     }
 
-    function openSettings() {
+    // A short sample query in the chosen dialect, written with the format settings
+    function renderFormatPreview() {
+        const preview = doc.getElementById('format-preview');
+        if (!preview) return;
+        let sql = '';
+        try {
+            sql = generateSQL(formatSample(), { ...formatOptions(state.settings), dialect: state.settings.dialect, pretty: true });
+        } catch {
+            // the sample is valid in every dialect; nothing to show otherwise
+        }
+        preview.textContent = sql;
+    }
+
+    function openSettings(focusId) {
         const dialog = el.settingsDialog;
         const dialectSelect = dialog.querySelector('[data-setting="dialect"]');
         if (dialectSelect.options.length === 0) {
             dialectSelect.append(...listDialects().map(d => h('option', { value: d.id }, d.label)));
         }
         syncSettingsForm();
-        showDialog(dialog, () => dialectSelect.focus());
+        showDialog(dialog, () => (focusId ? doc.getElementById(focusId) : dialectSelect).focus());
     }
 
     function onSettingChange(event) {
@@ -1705,6 +1723,15 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                 run: () => updateSettings({ wrapOutput: !settings.wrapOutput })
             },
             {
+                id: 'keyword-case', group: 'Output', keywords: 'format uppercase lowercase keywords style',
+                label: settings.keywordCase === 'upper' ? 'Write keywords in lowercase' : 'Write keywords in UPPERCASE',
+                run: () => updateSettings({ keywordCase: settings.keywordCase === 'upper' ? 'lower' : 'upper' })
+            },
+            {
+                id: 'format-settings', group: 'Output', label: 'SQL format settings…', keywords: 'indent commas leading trailing expand layout style',
+                run: () => openSettings('setting-keyword-case')
+            },
+            {
                 id: 'theme', group: 'View', label: `Switch theme to ${THEME_LABELS[nextTheme(settings.theme)]}`, keywords: 'dark light appearance',
                 run: () => updateSettings({ theme: nextTheme(settings.theme) })
             },
@@ -1725,7 +1752,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             templates.list().length > 0 && { id: 'export-templates', group: 'Templates', label: 'Export all templates', run: exportTemplates },
             { id: 'import-templates', group: 'Templates', label: 'Import templates…', run: () => chooseFile('templates') },
             { id: 'shortcuts', group: 'Help', label: 'Show keyboard shortcuts', keys: ['?'], run: () => showDialog(el.shortcutsDialog) },
-            { id: 'settings', group: 'Settings', label: 'Open settings', keywords: 'preferences options', run: openSettings },
+            { id: 'settings', group: 'Settings', label: 'Open settings', keywords: 'preferences options', run: () => openSettings() },
             { id: 'clear', group: 'Query', label: `Clear the ${type.toUpperCase()} query`, run: clearCurrent },
             { id: 'reset', group: 'Query', label: 'Reset all', keywords: 'new start over', run: resetAll }
         ].filter(Boolean);
@@ -1829,7 +1856,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
     el.themeBtn.addEventListener('click', () => updateSettings({ theme: nextTheme(state.settings.theme) }));
     el.shortcutsBtn.addEventListener('click', () => showDialog(el.shortcutsDialog));
-    el.settingsBtn.addEventListener('click', openSettings);
+    el.settingsBtn.addEventListener('click', () => openSettings());
     el.settingsDialog.addEventListener('change', onSettingChange);
     el.clearData.addEventListener('click', clearAllData);
 

@@ -12,15 +12,16 @@ import { compareSql } from './roundtrip.js';
  * @param {any} workspace
  * @param {string} fromId the current dialect
  * @param {string} toId the dialect to compare with
- * @param {{ quoteIdentifiers?: boolean, pretty?: boolean }} [options]
+ * @param {{ quoteIdentifiers?: boolean, pretty?: boolean, format?: object }} [options]
+ *   format: SQL format options (see generator.js)
  */
-export function compareDialects(workspace, fromId, toId, { quoteIdentifiers = false, pretty = true } = {}) {
+export function compareDialects(workspace, fromId, toId, { quoteIdentifiers = false, pretty = true, format = {} } = {}) {
     const side = (id) => {
         const dialect = getDialect(id);
         const issues = validateWorkspace(workspace, { dialect: id, quoteIdentifiers });
         let sql = '';
         try {
-            sql = generateSQL(workspace, { dialect: id, quoteIdentifiers, pretty });
+            sql = generateSQL(workspace, { ...format, dialect: id, quoteIdentifiers, pretty });
         } catch {
             // An incomplete query; the errors say why
         }

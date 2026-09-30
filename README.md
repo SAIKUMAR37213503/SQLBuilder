@@ -59,6 +59,7 @@ A custom SQL condition that contains a top-level `AND`/`OR` is wrapped in parent
 
 **Output**
 - Formatted SQL (one clause per line, 4-space indentation) or a single line, with an optional Wrap toggle for long lines
+- **SQL format** (Settings, or the command palette): keywords in UPPERCASE or lowercase; an indent of 4 spaces, 2 spaces or a tab; commas at the end or the start of a line; and an option to put each GROUP BY and ORDER BY item, INSERT column and nested AND / OR group on its own line. A preview in Settings shows the result. The options change only what the builder writes: text typed into a field is never changed. The defaults write exactly the same SQL as before, and every combination writes the same tokens, which the tests check for every example in every dialect.
 - Syntax highlighting (including parameter placeholders) and line numbers; the line numbers are never copied
 - Live preview while you type (can be switched off)
 - **Query structure**: a panel under the SQL that lists the parts of the query in the order a database works through them (for a SELECT: WITH, FROM, JOIN, WHERE, GROUP BY, HAVING, SELECT, UNION, ORDER BY, LIMIT/TOP), each with a one-line explanation. Selecting a step opens that part of the builder. Above the steps, an insights row counts the CTEs, joins, subqueries, combined queries, aggregates, window functions and filters, shows the nesting depth, and gives an overall band: simple, moderate or involved. A one-sentence summary above it says what the query does in plain words (“Returns department and the average salary from employees, where salary is greater than 50000, one row per department, sorted by AVG(salary) descending.”). An **Explain for** switch picks how much each step explains, and is remembered: **Beginner** (what each step does), **Developer** (how LEFT and other joins treat unmatched rows, repeated matches, NULLs in comparisons, NOT IN with a subquery, WHERE vs HAVING, what DISTINCT has to do, a WHERE condition that undoes a LEFT JOIN) and **Advanced** (window frames, including the RANGE default with ORDER BY, set-operation precedence, and the selected dialect's NULL ordering and pagination rules). The insights row describes structure only; it says nothing about speed.
@@ -220,7 +221,7 @@ Source is plain ES modules in `src/`. The committed `dist/sqlbuilder.js` is what
 ```
 src/
 ├── model.js          Query model: plain JSON objects + factories + path helpers
-├── generator.js      model → SQL (formatted or one line), no string post-processing
+├── generator.js      model → SQL (formatted or one line, with format options), no string post-processing
 ├── dialects.js       Every dialect difference: writing rules plus supports/restrictions flags
 ├── validation.js     model → issues { level, category, message, path }
 ├── analysis.js       Analysis rules (contradictions, unlinked joins, unused aliases, …) and query insights

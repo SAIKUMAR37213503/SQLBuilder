@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=5136bed7268b">
+    <link rel="stylesheet" href="style.css?v=bc7d9f473e74">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -234,6 +234,37 @@
             </fieldset>
 
             <fieldset class="fieldset">
+                <legend>SQL format</legend>
+                <div class="field-row">
+                    <div class="field">
+                        <label class="field-label" for="setting-keyword-case">Keywords</label>
+                        <select id="setting-keyword-case" class="select" data-setting="keywordCase">
+                            <option value="upper">UPPERCASE</option>
+                            <option value="lower">lowercase</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label class="field-label" for="setting-indent">Indent</label>
+                        <select id="setting-indent" class="select" data-setting="indentStyle">
+                            <option value="4">4 spaces</option>
+                            <option value="2">2 spaces</option>
+                            <option value="tab">Tab</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label class="field-label" for="setting-commas">Commas</label>
+                        <select id="setting-commas" class="select" data-setting="commaPosition">
+                            <option value="trailing">End of line</option>
+                            <option value="leading">Start of line</option>
+                        </select>
+                    </div>
+                </div>
+                <label class="check check-block"><input type="checkbox" data-setting="expandLists"> <span>One item per line in GROUP BY, ORDER BY, INSERT columns and nested AND / OR groups</span></label>
+                <p class="field-hint" id="format-hint">Keyword case applies to both formatted and one-line SQL; the layout options apply to formatted SQL. Text you type into a field is never changed.</p>
+                <pre class="format-preview" id="format-preview" aria-label="Preview of the SQL format"></pre>
+            </fieldset>
+
+            <fieldset class="fieldset">
                 <legend>Privacy (stored only in this browser)</legend>
                 <label class="check"><input type="checkbox" data-setting="saveHistory"> <span>Save generated queries to history</span></label>
                 <label class="check"><input type="checkbox" data-setting="restoreSession"> <span>Restore my unsaved work when I come back</span></label>
@@ -412,6 +443,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=cc75bf5932de" defer></script>
+    <script src="dist/sqlbuilder.js?v=49a592613b3f" defer></script>
 </body>
 </html>

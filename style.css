@@ -515,6 +515,20 @@ kbd {
     border-radius: var(--radius);
 }
 .fieldset legend { padding: 0 0.3rem; font-weight: 650; }
+.format-preview {
+    margin: 0;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--code-bg);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.5;
+    /* Wraps instead of scrolling, so the dialog never needs a sideways scroll */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    tab-size: 4;
+}
 
 .dml-editor { display: grid; gap: 0.9rem; }
 

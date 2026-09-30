@@ -397,3 +397,22 @@ export function examplesFor(dialect, topic = 'all') {
     return EXAMPLES.filter(e => (dialect === 'all' || !e.dialects || e.dialects.includes(dialect))
         && (topic === 'all' || e.topic === topic));
 }
+
+// The short query the Settings dialog writes to preview the SQL format
+// options. Not listed with the examples.
+export function formatSample() {
+    return workspace('select', (q) => {
+        q.columns = [
+            createColumn('department'),
+            createColumn('region'),
+            createColumn('', { aggregate: 'COUNT', alias: 'staff' })
+        ];
+        q.from = createTableSource('employees');
+        q.where = createGroup('AND', [
+            cond('status', '=', 'active'),
+            createGroup('OR', [cond('salary', '>', '50000'), cond('role', '=', 'lead')])
+        ]);
+        q.groupBy = [createGroupByItem('department'), createGroupByItem('region')];
+        q.orderBy = [{ expr: 'staff', direction: 'DESC' }, { expr: 'department', direction: 'ASC' }];
+    });
+}
