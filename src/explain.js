@@ -93,7 +93,15 @@ export function levelNotes(workspace, dialect, level) {
 
     if (type === 'select') {
         add('with', 'Each named query exists only while this statement runs; it is not stored.');
+        if (q.ctes.some(c => c.recursive)) {
+            add('with',
+                'The recursive part needs a condition that eventually stops it, such as depth < 10. With UNION ALL, a cycle in the data (a row that leads back to itself) repeats until that condition or the database\'s limit stops it.',
+                dialect.recursive.depthLimit);
+        }
         if (advanced) add('with', 'The database may copy a named query into the main query or work it out once; the result is the same either way.');
+        if (advanced && q.ctes.some(c => c.recursive)) {
+            add('with', dialect.recursive.keyword === 'WITH' ? '' : 'The column types come from the first SELECT.', dialect.recursive.growingText);
+        }
         if (q.from.kind === 'subquery') add('from', 'The subquery is worked out first and then read like a table.');
 
         const types = [...new Set(q.joins.map(j => j.type))];

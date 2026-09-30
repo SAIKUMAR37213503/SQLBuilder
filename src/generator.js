@@ -195,9 +195,13 @@ function renderSelect(q, ctx, { branch = false } = {}) {
     const lines = [];
 
     if (!branch && q.ctes.length > 0) {
+        // One RECURSIVE keyword covers the whole WITH list (SQL Server has none)
+        const withKeyword = q.ctes.some(cte => cte.recursive) ? ctx.dialect.recursive.keyword : 'WITH';
         q.ctes.forEach((cte, i) => {
-            const lead = i === 0 ? `${kw(ctx, 'WITH')} ` : ctx.leadingCommas ? ', ' : '';
-            const opening = `${lead}${quoteName(cte.name.trim(), ctx)} ${kw(ctx, 'AS')} (`;
+            const lead = i === 0 ? `${kw(ctx, withKeyword)} ` : ctx.leadingCommas ? ', ' : '';
+            const columns = splitTopLevel(String(cte.columns ?? '')).filter(Boolean).map(c => expr(c, ctx));
+            const name = quoteName(cte.name.trim(), ctx) + (columns.length ? ` (${columns.join(', ')})` : '');
+            const opening = `${lead}${name} ${kw(ctx, 'AS')} (`;
             const closing = i < q.ctes.length - 1 && !ctx.leadingCommas ? '),' : ')';
             lines.push(...wrapBlock(opening, renderSelect(cte.query, ctx), closing));
         });

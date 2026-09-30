@@ -5,7 +5,7 @@ import {
     createWorkspace, createEmptyFor, createColumn, createCaseColumn, createWindowColumn, createCondition, createRawCondition,
     createGroup, createJoin, createTableSource, createSubquerySource, createCte, createSetOp, createOrderItem,
     createGroupByItem, createAssignment, createSelect, OPERATORS, getAt, setAt, parentPath, splitPath,
-    isPristine, describeComplexity
+    isPristine, describeComplexity, withModelVersion
 } from './model.js';
 import { generateSQL } from './generator.js';
 import { describeStructure } from './structure.js';
@@ -494,7 +494,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
     const saveDraft = debounce(() => {
         if (state.settings.restoreSession) {
-            storage.set(DRAFT_KEY, state.workspace);
+            storage.set(DRAFT_KEY, withModelVersion(state.workspace));
             if (state.sourceId) storage.set(SOURCE_KEY, state.sourceId);
             else storage.remove(SOURCE_KEY);
         } else {

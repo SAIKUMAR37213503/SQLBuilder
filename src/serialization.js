@@ -8,7 +8,8 @@
 import {
     MODEL_VERSION, QUERY_TYPES, JOIN_TYPES, SET_OPERATORS, AGGREGATES, SORT_DIRECTIONS,
     LOGIC_OPERATORS, OPERATORS, VALUE_TYPES, WINDOW_FUNCTIONS, WINDOW_FRAMES, ASSIGNMENT_VALUE_TYPES,
-    UPSERT_VALUE_TYPES, INSERT_SOURCES, UPSERT_MODES, createWorkspace, createSelect, createUpsert
+    UPSERT_VALUE_TYPES, INSERT_SOURCES, UPSERT_MODES, createWorkspace, createSelect, createUpsert,
+    workspaceVersion, withModelVersion
 } from './model.js';
 import { MAX_NESTING_DEPTH } from './validation.js';
 import { sanitizeSettings } from './settings.js';
@@ -172,8 +173,11 @@ function readSelect(data, where, depth = 0) {
     const emptyGroup = { kind: 'group', logic: 'AND', negate: false, items: [] };
     return {
         kind: 'select',
+        // recursive and columns were added in model version 2
         ctes: list(data, 'ctes', where, (c, w) => ({
             name: str(c, 'name', w),
+            recursive: bool(c, 'recursive', w),
+            columns: str(c, 'columns', w),
             query: readSelect(obj(c, 'query', w), `${w}.query`, depth + 1)
         })),
         distinct: bool(data, 'distinct', where),
@@ -287,7 +291,7 @@ function parseJson(text, maxBytes = MAX_IMPORT_BYTES) {
 }
 
 export function createQueryExport(workspace, meta = {}) {
-    return { app: APP_ID, kind: 'query', version: MODEL_VERSION, exportedAt: new Date().toISOString(), ...meta, query: workspace };
+    return { app: APP_ID, kind: 'query', version: workspaceVersion(workspace), exportedAt: new Date().toISOString(), ...meta, query: withModelVersion(workspace) };
 }
 
 /** @returns {{ ok: true, workspace: any, dialect?: string } | { ok: false, error: string }} */
@@ -317,14 +321,17 @@ const exportTemplate = ({ name, dialect, description, category, pinned, workspac
     ...(description ? { description } : {}),
     ...(category ? { category } : {}),
     ...(pinned ? { pinned: true } : {}),
-    workspace, createdAt, updatedAt
+    workspace: withModelVersion(workspace), createdAt, updatedAt
 });
+
+// Files say the newest model version any query in them uses
+const newestVersion = (workspaces) => Math.max(workspaceVersion(null), ...workspaces.map(workspaceVersion));
 
 export function createTemplatesExport(templates) {
     return {
         app: APP_ID,
         kind: 'templates',
-        version: MODEL_VERSION,
+        version: newestVersion(templates.map(t => t.workspace)),
         exportedAt: new Date().toISOString(),
         templates: templates.map(exportTemplate)
     };
@@ -386,11 +393,11 @@ export function createBackup({ templates, history, settings, schema = [] }) {
         kind: 'backup',
         format: BACKUP_FORMAT,
         version: BACKUP_VERSION,
-        modelVersion: MODEL_VERSION,
+        modelVersion: newestVersion([...templates, ...history].map(item => item.workspace)),
         exportedAt: new Date().toISOString(),
         settings: sanitizeSettings(settings),
         templates: templates.map(exportTemplate),
-        history: history.map(({ timestamp, type, dialect, sql, workspace }) => ({ timestamp, type, dialect, sql, workspace })),
+        history: history.map(({ timestamp, type, dialect, sql, workspace }) => ({ timestamp, type, dialect, sql, workspace: withModelVersion(workspace) })),
         schema: { tables: schema.map(exportTable) }
     };
 }

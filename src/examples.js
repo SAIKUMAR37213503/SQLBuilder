@@ -257,6 +257,39 @@ export const EXAMPLES = [
         })
     },
     {
+        id: 'org-chart',
+        level: 'advanced',
+        topic: 'Subqueries and CTEs',
+        name: 'Org chart (recursive CTE)',
+        description: 'Starts from the people with no manager, then adds each level of reports until none are left. The depth condition stops it if the data ever loops.',
+        build: () => workspace('select', (q) => {
+            const cte = createCte();
+            cte.name = 'reports';
+            cte.recursive = true;
+            cte.columns = 'id, name, manager_id, depth';
+            const step = createSetOp('UNION ALL');
+            const join = createJoin('INNER JOIN');
+            join.source = createTableSource('reports', 'r');
+            join.on = createGroup('AND', [colCond('e.manager_id', 'r.id')]);
+            step.query = createSelect({
+                columns: [createColumn('e.id'), createColumn('e.name'), createColumn('e.manager_id'), createColumn('r.depth + 1')],
+                from: createTableSource('employees', 'e'),
+                joins: [join],
+                where: createGroup('AND', [cond('r.depth', '<', '10')])
+            });
+            cte.query = createSelect({
+                columns: [createColumn('id'), createColumn('name'), createColumn('manager_id'), createColumn('0')],
+                from: createTableSource('employees'),
+                where: createGroup('AND', [cond('manager_id', 'IS NULL')]),
+                setOps: [step]
+            });
+            q.ctes = [cte];
+            q.columns = ['id', 'name', 'depth'].map(c => createColumn(c));
+            q.from = createTableSource('reports');
+            q.orderBy = [{ expr: 'depth', direction: 'ASC' }, { expr: 'name', direction: 'ASC' }];
+        })
+    },
+    {
         id: 'top-n-per-group',
         level: 'advanced',
         topic: 'Window functions',

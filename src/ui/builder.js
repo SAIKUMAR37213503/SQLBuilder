@@ -236,6 +236,13 @@ class Renderer {
                         field(joinPath(cPath, 'name'), cte.name, { label: `CTE ${i + 1} name`, placeholder: 'e.g. recent_orders', required: true }),
                         rowTools(cPath, i, q.ctes.length, 'CTE')
                     ),
+                    h('div', { class: 'row' },
+                        checkbox(joinPath(cPath, 'recursive'), cte.recursive,
+                            this.dialect.recursive.keyword === 'WITH' ? 'Recursive (plain WITH in SQL Server)' : 'Recursive (WITH RECURSIVE)', { rerender: true }),
+                        field(joinPath(cPath, 'columns'), cte.columns ?? '', { label: 'Column names (optional)', placeholder: 'e.g. id, name, depth' })
+                    ),
+                    cte.recursive ? h('p', { class: 'field-hint' },
+                        'The first SELECT gives the starting rows. Add a UNION ALL part that joins to this CTE by its name; it runs again on each new set of rows until it returns none.') : null,
                     this.select(cte.query, joinPath(cPath, 'query'), { depth: ctx.depth + 1, top: false, branch: false })
                 );
             })),

@@ -2100,6 +2100,147 @@ WHERE: Keeps only the rows that match, before any grouping.
 SELECT: Works out the output columns."
 `;
 
+exports[`explanation text for every example > org-chart in generic: advanced 1`] = `
+"Returns id, name and depth from reports, sorted by depth then name.
+WITH RECURSIVE: Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The recursive part needs a condition that eventually stops it, such as depth < 10. With UNION ALL, a cycle in the data (a row that leads back to itself) repeats until that condition or the database's limit stops it.
+  + Some databases stop after a set number of levels; others keep going until the query is cancelled.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+  + The column types come from the first SELECT.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
+  + Where NULLs sort depends on the database. Some accept NULLS FIRST or NULLS LAST; sorting on a CASE works everywhere."
+`;
+
+exports[`explanation text for every example > org-chart in generic: beginner 1`] = `
+"Returns id, name and depth from reports, sorted by depth then name.
+WITH RECURSIVE: Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result."
+`;
+
+exports[`explanation text for every example > org-chart in generic: developer 1`] = `
+"Returns id, name and depth from reports, sorted by depth then name.
+WITH RECURSIVE: Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The recursive part needs a condition that eventually stops it, such as depth < 10. With UNION ALL, a cycle in the data (a row that leads back to itself) repeats until that condition or the database's limit stops it.
+  + Some databases stop after a set number of levels; others keep going until the query is cancelled.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
+`;
+
+exports[`explanation text for every example > org-chart in mysql: advanced 1`] = `
+"Returns id, name and depth from reports, sorted by depth then name.
+WITH RECURSIVE: Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The recursive part needs a condition that eventually stops it, such as depth < 10. With UNION ALL, a cycle in the data (a row that leads back to itself) repeats until that condition or the database's limit stops it.
+  + MySQL stops with an error after 1,000 levels (the cte_max_recursion_depth setting).
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+  + The column types come from the first SELECT.
+  + MySQL takes each column's type from the first part, so text that grows level by level can be cut off or rejected. Cast it wider in the first part, for example CAST(name AS CHAR(1000)).
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
+  + MySQL sorts NULLs first in ascending order and last in descending order."
+`;
+
+exports[`explanation text for every example > org-chart in mysql: beginner 1`] = `
+"Returns id, name and depth from reports, sorted by depth then name.
+WITH RECURSIVE: Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result."
+`;
+
+exports[`explanation text for every example > org-chart in mysql: developer 1`] = `
+"Returns id, name and depth from reports, sorted by depth then name.
+WITH RECURSIVE: Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The recursive part needs a condition that eventually stops it, such as depth < 10. With UNION ALL, a cycle in the data (a row that leads back to itself) repeats until that condition or the database's limit stops it.
+  + MySQL stops with an error after 1,000 levels (the cte_max_recursion_depth setting).
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
+`;
+
+exports[`explanation text for every example > org-chart in postgresql: advanced 1`] = `
+"Returns id, name and depth from reports, sorted by depth then name.
+WITH RECURSIVE: Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The recursive part needs a condition that eventually stops it, such as depth < 10. With UNION ALL, a cycle in the data (a row that leads back to itself) repeats until that condition or the database's limit stops it.
+  + PostgreSQL has no depth limit, so a cycle in the data repeats until the query is cancelled.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+  + The column types come from the first SELECT.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
+  + PostgreSQL sorts NULLs last in ascending order and first in descending order; NULLS FIRST or NULLS LAST changes that."
+`;
+
+exports[`explanation text for every example > org-chart in postgresql: beginner 1`] = `
+"Returns id, name and depth from reports, sorted by depth then name.
+WITH RECURSIVE: Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result."
+`;
+
+exports[`explanation text for every example > org-chart in postgresql: developer 1`] = `
+"Returns id, name and depth from reports, sorted by depth then name.
+WITH RECURSIVE: Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The recursive part needs a condition that eventually stops it, such as depth < 10. With UNION ALL, a cycle in the data (a row that leads back to itself) repeats until that condition or the database's limit stops it.
+  + PostgreSQL has no depth limit, so a cycle in the data repeats until the query is cancelled.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
+`;
+
+exports[`explanation text for every example > org-chart in sqlserver: advanced 1`] = `
+"Returns id, name and depth from reports, sorted by depth then name.
+WITH: Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The recursive part needs a condition that eventually stops it, such as depth < 10. With UNION ALL, a cycle in the data (a row that leads back to itself) repeats until that condition or the database's limit stops it.
+  + SQL Server stops with an error after 100 levels; OPTION (MAXRECURSION n) at the end of the statement changes the limit.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+  + SQL Server needs each column to have exactly the same type in both parts, so text built up level by level needs the same CAST in both, for example CAST(name AS NVARCHAR(1000)).
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
+  + SQL Server sorts NULLs first in ascending order and last in descending order."
+`;
+
+exports[`explanation text for every example > org-chart in sqlserver: beginner 1`] = `
+"Returns id, name and depth from reports, sorted by depth then name.
+WITH: Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result."
+`;
+
+exports[`explanation text for every example > org-chart in sqlserver: developer 1`] = `
+"Returns id, name and depth from reports, sorted by depth then name.
+WITH: Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The recursive part needs a condition that eventually stops it, such as depth < 10. With UNION ALL, a cycle in the data (a row that leads back to itself) repeats until that condition or the database's limit stops it.
+  + SQL Server stops with an error after 100 levels; OPTION (MAXRECURSION n) at the end of the statement changes the limit.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
+`;
+
 exports[`explanation text for every example > page-results in generic: advanced 1`] = `
 "Returns id, name and email from customers, sorted by name then id, rows 41 to 60.
 FROM: Picks where the rows come from.

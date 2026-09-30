@@ -2,6 +2,7 @@
 
 import { createId } from './storage.js';
 import { normalizeWorkspace } from './serialization.js';
+import { withModelVersion } from './model.js';
 import { DIALECTS } from './dialects.js';
 
 export const TEMPLATE_LIMIT = 200;
@@ -55,7 +56,8 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
     }
 
     function persist() {
-        if (!storage.set(TEMPLATES_KEY, templates)) {
+        // Stored with the model version each query needs (see model.js)
+        if (!storage.set(TEMPLATES_KEY, templates.map(t => ({ ...t, workspace: withModelVersion(t.workspace) })))) {
             throw new TemplateError(storage.available
                 ? 'Browser storage is full; delete some templates or history first.'
                 : 'Browser storage is unavailable, so templates can\'t be saved.');

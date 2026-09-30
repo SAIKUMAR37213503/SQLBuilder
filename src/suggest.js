@@ -8,7 +8,7 @@
 
 import { splitPath } from './model.js';
 import { findTable } from './schema.js';
-import { isBareIdentifier, isColumnReference } from './sql-utils.js';
+import { isBareIdentifier, isColumnReference, splitTopLevel } from './sql-utils.js';
 import { RESERVED_WORDS } from './validation.js';
 
 export const MAX_SUGGESTIONS = 50;
@@ -153,12 +153,13 @@ function isExpressionField(owner, field) {
 }
 
 // The CTEs a field can refer to: all of the main query's, except inside CTE i,
-// which sees only the ones before it
+// which sees only the ones before it (and itself when it is recursive)
 function visibleCtes(chain, keys) {
     const top = chain[0].query;
     if (top.kind !== 'select' || !Array.isArray(top.ctes)) return [];
     const at = keys.indexOf('ctes', chain[0].keys.length);
-    const limit = at === chain[0].keys.length ? Number(keys[at + 1]) : top.ctes.length;
+    const inside = at === chain[0].keys.length ? Number(keys[at + 1]) : -1;
+    const limit = inside < 0 ? top.ctes.length : inside + (top.ctes[inside]?.recursive ? 1 : 0);
     return top.ctes.slice(0, limit).filter((/** @type {any} */ c) => String(c.name || '').trim());
 }
 
@@ -210,9 +211,12 @@ function tableSource(name, alias, env) {
     const cte = !name.includes('.') && env.ctes.find((/** @type {any} */ c) => key(unquote(c.name)) === key(unquote(name)));
     if (cte) {
         if (env.depth >= MAX_DEPTH) return { ref, detail: 'CTE', columns: [] };
-        // A CTE sees only the CTEs before it
-        const before = env.ctes.slice(0, env.ctes.indexOf(cte));
-        return { ref, detail: 'CTE', columns: outputColumns(cte.query, { ...env, ctes: before, depth: env.depth + 1 }) };
+        // A CTE sees only the CTEs before it, and itself when recursive;
+        // a column list names its columns
+        const before = env.ctes.slice(0, env.ctes.indexOf(cte) + (cte.recursive ? 1 : 0));
+        const listed = splitTopLevel(String(cte.columns ?? '')).map(c => unquote(c.trim())).filter(Boolean);
+        const columns = listed.length ? listed.map(name => ({ name, detail: '' })) : outputColumns(cte.query, { ...env, ctes: before, depth: env.depth + 1 });
+        return { ref, detail: 'CTE', columns };
     }
     const table = lookupTable(env.tables, name.split('.').map(unquote).join('.'));
     return {

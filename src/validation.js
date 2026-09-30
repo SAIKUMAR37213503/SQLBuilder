@@ -30,6 +30,7 @@ import {
     DEEP_NESTING, duplicateConditions, contradictions, isReversedBetween, joinLink, sourceNames,
     statementTexts, isUnusedAlias, isReferenced, wildcardColumn, isRedundantDistinct, nestingDepth
 } from './analysis.js';
+import { cteReferences } from './recursion.js';
 
 export const MAX_NESTING_DEPTH = 4;
 
@@ -232,7 +233,8 @@ class Validator {
                 }
             });
             this.pagination(q, path, scope);
-            if (!ctx.top && !ctx.insertSource) this.nestedOrderBy(q, path, scope);
+            // A recursive CTE's sorting has its own check (recursiveCte)
+            if (!ctx.top && !ctx.insertSource && !(ctx.recursive && this.dialect.recursive.orderBy !== 'allowed')) this.nestedOrderBy(q, path, scope);
         }
 
         this.setOps(q, path, ctx);
@@ -300,10 +302,138 @@ class Validator {
                 this.reserved(name, joinPath(cPath, 'name'), '');
             }
             seen.add(name.toLowerCase());
+            const scope = `CTE ${name ? quote(name) : i + 1}`;
             this.select(cte.query, joinPath(cPath, 'query'), {
-                scope: `CTE ${name ? quote(name) : i + 1}`, depth: ctx.depth + 1, branch: false, top: false
+                scope, depth: ctx.depth + 1, branch: false, top: false, recursive: cte.recursive === true
             });
+            this.cteColumns(cte, cPath, scope);
+            if (name && isIdentifier(name)) {
+                if (cte.recursive) this.recursiveCte(cte, name, cPath, scope);
+                else this.selfReference(cte, name, cPath, scope);
+            }
         });
+    }
+
+    // name (a, b) AS (…): one name per column the query returns
+    cteColumns(cte, cPath, scope) {
+        const names = splitTopLevel(String(cte.columns ?? '')).filter(Boolean);
+        if (names.length === 0) return;
+        const path = joinPath(cPath, 'columns');
+        const bad = names.find(n => !isIdentifier(n));
+        if (bad) {
+            this.add('error', 'builder', `Column name ${quote(bad)} can only contain letters, numbers and _.`, path, scope);
+            return;
+        }
+        names.forEach(n => this.reserved(n, path, scope));
+        const count = outputColumnCount(cte.query);
+        if (count >= 0 && count !== names.length) {
+            this.add('error', 'builder',
+                `The column list names ${names.length} ${names.length === 1 ? 'column' : 'columns'}, but the query returns ${count}. Give one name per column.`,
+                path, scope);
+        }
+    }
+
+    // A CTE that isn't marked recursive but uses its own name
+    selfReference(cte, name, cPath, scope) {
+        const { direct, nested } = cteReferences(cte.query, name);
+        if (direct + nested === 0) return;
+        if (this.dialect.recursive.keyword === 'WITH') {
+            this.add('error', 'dialect',
+                `${quote(name)} refers to itself, which ${this.dialect.shortLabel} always treats as a recursive CTE. Turn on Recursive for it, or rename it if you meant the table of the same name.`,
+                joinPath(cPath, 'recursive'), scope);
+        } else {
+            this.add('info', 'builder',
+                `Inside ${quote(name)}, the name ${quote(name)} means the table of that name, not this CTE. To make the CTE refer to itself, turn on Recursive.`,
+                joinPath(cPath, 'recursive'), scope);
+        }
+    }
+
+    // WITH RECURSIVE: a first part that gives the starting rows, then parts
+    // joined by UNION [ALL] that refer to the CTE once, directly
+    recursiveCte(cte, name, cPath, scope) {
+        const rules = this.dialect.recursive;
+        const d = this.dialect.shortLabel;
+        const q = cte.query;
+        const qPath = joinPath(cPath, 'query');
+        if (q.setOps.length === 0) {
+            this.add('error', 'builder',
+                `A recursive CTE needs a second part, joined with UNION ALL, that refers to ${quote(name)}. Add it under UNION / INTERSECT / EXCEPT, or turn off Recursive.`,
+                joinPath(cPath, 'recursive'), scope);
+            return;
+        }
+        const anchor = cteReferences(q, name, { setOps: false });
+        if (anchor.direct + anchor.nested > 0) {
+            this.add('error', 'builder',
+                `The first part of ${quote(name)} gives the starting rows, so it can't refer to ${quote(name)} itself. Refer to it in a part after UNION ALL.`,
+                qPath, scope);
+        }
+        const recursiveParts = [];
+        q.setOps.forEach((setOp, i) => {
+            const sPath = joinPath(qPath, 'setOps', i);
+            const refs = cteReferences(setOp.query, name);
+            if (refs.direct + refs.nested === 0) return;
+            recursiveParts.push(setOp);
+            if (setOp.op !== 'UNION' && setOp.op !== 'UNION ALL') {
+                this.add('error', 'builder', `Only UNION or UNION ALL can join the part that refers to ${quote(name)}; ${setOp.op} can't.`, joinPath(sPath, 'op'), scope);
+            } else if (rules.unionAllOnly && setOp.op !== 'UNION ALL') {
+                this.add('error', 'dialect', `${d} joins the recursive part of a CTE with UNION ALL only.`, joinPath(sPath, 'op'), scope);
+            }
+            if (refs.nested > 0 || refs.direct > 1) {
+                this.add('error', 'builder',
+                    `The recursive part can refer to ${quote(name)} only once, as a table in FROM or a join, not in a subquery or an expression.`,
+                    joinPath(sPath, 'query'), scope);
+            }
+            this.recursivePartContents(setOp.query, joinPath(sPath, 'query'), name, scope);
+        });
+        if (recursiveParts.length === 0) {
+            this.add('warning', 'builder',
+                `No part after UNION refers to ${quote(name)}, so it isn't recursive. Refer to ${quote(name)} in the part after UNION ALL, or turn off Recursive.`,
+                joinPath(cPath, 'recursive'), scope);
+            return;
+        }
+        if (rules.singleRecursivePart && recursiveParts.length > 1) {
+            this.add('error', 'dialect', `${d} allows only one part of a recursive CTE to refer to ${quote(name)}.`, joinPath(qPath, 'setOps'), scope);
+        }
+        /** @type {[string, string, boolean][]} */
+        const sorting = [
+            ['orderBy', 'ORDER BY', q.orderBy.length > 0],
+            ['limit', `${this.dialect.ui.limitLabel} or OFFSET`, !blank(q.limit) || !blank(q.offset)]
+        ];
+        for (const [key, label, present] of sorting) {
+            if (!present || rules[key] === 'allowed') continue;
+            const refused = rules[key] === 'error';
+            this.add(refused ? 'error' : 'warning', refused ? 'dialect' : 'builder',
+                `${refused ? `${d} doesn't` : 'Most databases don\'t'} allow ${label} on a recursive CTE. Sort and limit the main query instead.`,
+                joinPath(qPath, key), scope);
+        }
+        if (recursiveParts.every(part => part.query.where.items.length === 0)) {
+            this.add('warning', 'builder',
+                `Nothing in the recursive part of ${quote(name)} limits how deep it goes, so data that loops (a row that leads back to itself) would keep it repeating. ${rules.depthLimit} Add a depth column and a condition such as depth < 20.`,
+                recursiveParts.length === 1 ? joinPath(qPath, 'setOps', q.setOps.indexOf(recursiveParts[0]), 'query', 'where') : qPath,
+                scope);
+        }
+    }
+
+    // What the dialect refuses inside the part that refers to the CTE
+    recursivePartContents(q, path, name, scope) {
+        const d = this.dialect.shortLabel;
+        const refused = new Set(this.dialect.recursive.notInRecursivePart);
+        const found = [
+            ['aggregate', 'aggregates such as COUNT or SUM', q.columns.some(c => c.kind === 'column' && c.aggregate !== '') || q.having.items.length > 0, joinPath(path, 'columns')],
+            ['window', 'window functions', q.columns.some(c => c.kind === 'window'), joinPath(path, 'columns')],
+            ['groupBy', 'GROUP BY', q.groupBy.length > 0, joinPath(path, 'groupBy')],
+            ['distinct', 'DISTINCT', q.distinct, joinPath(path, 'distinct')],
+            ['outerJoin', 'LEFT, RIGHT or FULL joins', q.joins.some(j => /^(LEFT|RIGHT|FULL) /.test(j.type)), joinPath(path, 'joins')]
+        ];
+        for (const [key, label, present, where] of found) {
+            if (present && refused.has(key)) {
+                this.add('error', 'dialect', `${d} doesn't allow ${label} in the recursive part of a CTE (the part that refers to ${quote(name)}).`, where, scope);
+            }
+        }
+        const growing = this.dialect.recursive.growingText;
+        if (growing && q.columns.some(c => c.kind === 'column' && /\bCONCAT\s*\(|\|\||\+\s*N?'|'\s*\+/i.test(String(c.expr)))) {
+            this.add('info', 'dialect', growing, joinPath(path, 'columns'), scope);
+        }
     }
 
     columns(q, path, scope) {

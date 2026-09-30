@@ -31,10 +31,13 @@ function selectSteps(q, path, dialect) {
 
     if (q.ctes.length) {
         const names = q.ctes.map(c => c.name.trim()).filter(Boolean);
+        const recursive = q.ctes.filter(c => c.recursive).map(c => c.name.trim()).filter(Boolean);
         steps.push({
-            key: 'with', clause: 'WITH',
-            detail: `${plural(q.ctes.length, 'named query', 'named queries')}${names.length ? `: ${names.join(', ')}` : ''}`,
-            explanation: 'Defines named queries first, so the rest of the query can use them like tables.',
+            key: 'with', clause: q.ctes.some(c => c.recursive) ? dialect.recursive.keyword : 'WITH',
+            detail: `${plural(q.ctes.length, 'named query', 'named queries')}${names.length ? `: ${names.join(', ')}` : ''}${recursive.length ? ` (recursive: ${recursive.join(', ')})` : ''}`,
+            explanation: q.ctes.some(c => c.recursive)
+                ? 'Defines named queries first, so the rest of the query can use them like tables. A recursive one starts with the rows of its first SELECT, then runs its UNION part again on the rows it just added, until no new rows come back.'
+                : 'Defines named queries first, so the rest of the query can use them like tables.',
             target: at('ctes')
         });
     }

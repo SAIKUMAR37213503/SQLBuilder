@@ -2,7 +2,13 @@
 // Everything else (generation, validation, history, templates, import/export,
 // undo) operates on this structure, never on SQL strings.
 
-export const MODEL_VERSION = 1;
+// The newest query model version this app reads. Version 2 added recursive
+// CTEs (a CTE's `recursive` flag and `columns` list). A workspace is saved as
+// version 2 only when it uses a recursive CTE, so everything else stays
+// readable by earlier versions of the app, which refuse newer versions
+// instead of loading them without the recursion.
+export const MODEL_VERSION = 2;
+const BASE_MODEL_VERSION = 1;
 
 export const QUERY_TYPES = ['select', 'insert', 'update', 'delete'];
 
@@ -175,8 +181,11 @@ export function createSelect(overrides = {}) {
     };
 }
 
+// recursive: the query refers to itself (WITH RECURSIVE); its first part gives
+// the starting rows and the parts after UNION [ALL] run on the rows just added.
+// columns: an optional column list, written as name (a, b) AS (…).
 export function createCte() {
-    return { name: '', query: createSelect() };
+    return { name: '', recursive: false, columns: '', query: createSelect() };
 }
 
 export function createSetOp(op = 'UNION') {
@@ -227,7 +236,7 @@ export function createDelete() {
 // The workspace keeps one query per type so switching tabs never loses work.
 export function createWorkspace(type = 'select') {
     return {
-        version: MODEL_VERSION,
+        version: BASE_MODEL_VERSION,
         type,
         select: createSelect(),
         insert: createInsert(),
@@ -332,4 +341,22 @@ export function describeComplexity(select) {
         conditions += countConditions(q.where) + countConditions(q.having);
     });
     return { subqueries: selects - 1, joins, conditions };
+}
+
+/** Whether any CTE in the workspace (at any depth) is recursive. */
+export function usesRecursiveCte(node) {
+    if (Array.isArray(node)) return node.some(usesRecursiveCte);
+    if (node === null || typeof node !== 'object') return false;
+    if (Array.isArray(node.ctes) && node.ctes.some((/** @type {any} */ c) => c && c.recursive === true)) return true;
+    return Object.values(node).some(usesRecursiveCte);
+}
+
+/** The model version a workspace is saved as: 2 only when it needs it. */
+export function workspaceVersion(workspace) {
+    return usesRecursiveCte(workspace) ? MODEL_VERSION : BASE_MODEL_VERSION;
+}
+
+/** A copy of the workspace stamped with the version it is saved as. */
+export function withModelVersion(workspace) {
+    return { ...workspace, version: workspaceVersion(workspace) };
 }

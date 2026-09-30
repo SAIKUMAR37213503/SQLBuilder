@@ -1663,7 +1663,7 @@ describe('dialects in the UI', () => {
         const filter = $('#example-filter');
         filter.value = 'all';
         filter.dispatchEvent(new Event('change', { bubbles: true }));
-        expect(names()).toHaveLength(26);
+        expect(names()).toHaveLength(27);
     });
 
     test('the pattern examples load as their query type', async () => {
@@ -1680,6 +1680,34 @@ describe('dialects in the UI', () => {
         expect($('input[name="query-type"][value="delete"]').checked).toBe(true);
         expect(sql()).toMatch(/^DELETE FROM contacts\nWHERE email IS NOT NULL\n {4}AND id NOT IN \(/);
         expect($$('#issues-list .issue-warning, #issues-list .issue-error')).toEqual([]);
+    });
+
+    test('the recursive CTE switch and column names', async () => {
+        $('#tab-examples').click();
+        $('#example-list [data-action="example-load"][data-id="org-chart"]').click();
+        await settle();
+        const recursive = field('select.ctes.0.recursive');
+        expect(recursive.checked).toBe(true);
+        expect(recursive.closest('label').textContent).toBe('Recursive (WITH RECURSIVE)');
+        expect(field('select.ctes.0.columns').value).toBe('id, name, manager_id, depth');
+        expect(sql().split('\n')[0]).toBe('WITH RECURSIVE reports (id, name, manager_id, depth) AS (');
+        expect($$('#issues-list .issue-warning, #issues-list .issue-error')).toEqual([]);
+        expect(JSON.parse(backend.getItem(`${STORAGE_PREFIX}draft`)).version).toBe(2);
+
+        pickDialect('sqlserver');
+        await settle();
+        expect(field('select.ctes.0.recursive').closest('label').textContent).toBe('Recursive (plain WITH in SQL Server)');
+        expect(sql().split('\n')[0]).toBe('WITH reports (id, name, manager_id, depth) AS (');
+
+        type('select.ctes.0.columns', 'id, name, manager_id');
+        await settle();
+        expect(issues().join(' ')).toContain('The column list names 3 columns, but the query returns 4.');
+        type('select.ctes.0.columns', 'id, name, manager_id, depth');
+        choose('select.ctes.0.recursive', false);
+        await settle();
+        expect(field('select.ctes.0.recursive').checked).toBe(false);
+        expect(issues().join(' ')).toContain('Recursive');
+        expect(JSON.parse(backend.getItem(`${STORAGE_PREFIX}draft`)).version).toBe(1);
     });
 
     test('examples show their level and topic and can be filtered by topic', () => {

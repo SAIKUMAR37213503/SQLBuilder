@@ -3,6 +3,7 @@
 
 import { createId } from './storage.js';
 import { normalizeWorkspace } from './serialization.js';
+import { withModelVersion } from './model.js';
 
 export const HISTORY_LIMIT = 50;
 const MAX_ENTRY_BYTES = 100 * 1024;
@@ -35,7 +36,9 @@ export function createHistory(storage, { limit = HISTORY_LIMIT, now = () => Date
     function persist() {
         // If storage is full, keep dropping the oldest half until it fits
         let toSave = entries;
-        while (!storage.set(HISTORY_KEY, toSave)) {
+        // Stored with the model version each query needs (see model.js)
+        const stamped = (list) => list.map(entry => ({ ...entry, workspace: withModelVersion(entry.workspace) }));
+        while (!storage.set(HISTORY_KEY, stamped(toSave))) {
             if (toSave.length <= 1) return false;
             toSave = toSave.slice(0, Math.ceil(toSave.length / 2));
         }

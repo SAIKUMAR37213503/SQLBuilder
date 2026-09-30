@@ -15,6 +15,7 @@ import {
     createInsert, createUpdate, createDelete, createAssignment, WINDOW_FUNCTIONS
 } from './model.js';
 import { getDialect, DEFAULT_DIALECT, listDialects } from './dialects.js';
+import { refersToItself } from './recursion.js';
 import { formatLiteral, generateQuery } from './generator.js';
 import { splitTopLevel } from './sql-utils.js';
 import { MAX_NESTING_DEPTH } from './validation.js';
@@ -520,19 +521,31 @@ class Reader {
         if (this.word(c.i, 'WITH')) {
             if (depth > 0) this.fail('WITH can only be used on the main query in the builder; move this CTE to the top.', c.i);
             c.i++;
-            if (this.word(c.i, 'RECURSIVE')) this.fail('Recursive CTEs (WITH RECURSIVE) aren\'t supported yet.', c.i);
+            // RECURSIVE covers the whole WITH list; SQL Server has no keyword
+            // and treats any CTE that uses its own name as recursive. Without
+            // the keyword, other databases read that name as the real table.
+            const recursiveKeyword = this.word(c.i, 'RECURSIVE');
+            if (recursiveKeyword) c.i++;
+            const selfIsRecursive = recursiveKeyword || this.dialect.recursive.keyword === 'WITH';
             do {
                 if (!this.isName(c.i) || c.i >= b) this.unexpected(c.i, 'Expected a name for the WITH query here.');
                 const cte = createCte();
                 cte.name = this.text(c.i, c.i + 1);
                 c.i++;
-                if (this.punct(c.i, '(')) this.fail('Column names after a WITH query\'s name aren\'t supported yet; name the columns inside its SELECT.', c.i);
+                if (this.punct(c.i, '(')) {
+                    const close = this.match[c.i];
+                    const columns = this.commas(c.i + 1, close);
+                    if (!columns.length || columns.some(([x, y]) => y - x !== 1 || !this.isName(x))) this.fail('The column names after a WITH query\'s name should be names separated by commas.', c.i);
+                    cte.columns = columns.map(([x, y]) => this.text(x, y)).join(', ');
+                    c.i = close + 1;
+                }
                 if (!this.word(c.i, 'AS')) this.unexpected(c.i, 'Expected AS after the WITH query\'s name.');
                 c.i++;
                 if (this.word(c.i, 'MATERIALIZED', 'NOT')) this.fail('MATERIALIZED isn\'t supported in the builder.', c.i);
                 if (!this.isSubquery(c.i)) this.unexpected(c.i, 'Expected a SELECT in parentheses here.');
                 const close = this.match[c.i];
                 cte.query = this.query(c.i + 1, close, depth + 1);
+                cte.recursive = selfIsRecursive && refersToItself(cte);
                 c.i = close + 1;
                 ctes.push(cte);
             } while (this.eat(c, ','));
