@@ -1663,7 +1663,23 @@ describe('dialects in the UI', () => {
         const filter = $('#example-filter');
         filter.value = 'all';
         filter.dispatchEvent(new Event('change', { bubbles: true }));
-        expect(names()).toHaveLength(22);
+        expect(names()).toHaveLength(26);
+    });
+
+    test('the pattern examples load as their query type', async () => {
+        $('#tab-examples').click();
+        const topic = $('#example-topic');
+        topic.value = 'Window functions';
+        topic.dispatchEvent(new Event('change', { bubbles: true }));
+        const names = $$('#example-list .library-name').map(n => n.textContent);
+        expect(names).toEqual(expect.arrayContaining(['Latest row per group', '7-day moving average', 'Runs of consecutive numbers (gaps and islands)']));
+        topic.value = 'all';
+        topic.dispatchEvent(new Event('change', { bubbles: true }));
+        $('#example-list [data-action="example-load"][data-id="delete-duplicates"]').click();
+        await settle();
+        expect($('input[name="query-type"][value="delete"]').checked).toBe(true);
+        expect(sql()).toMatch(/^DELETE FROM contacts\nWHERE email IS NOT NULL\n {4}AND id NOT IN \(/);
+        expect($$('#issues-list .issue-warning, #issues-list .issue-error')).toEqual([]);
     });
 
     test('examples show their level and topic and can be filtered by topic', () => {

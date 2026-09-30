@@ -580,6 +580,94 @@ ORDER BY: Sorts the final result.
   + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
 `;
 
+exports[`explanation text for every example > delete-duplicates in generic: advanced 1`] = `
+"Deletes the rows of contacts where email is not NULL and id is not in the result of a subquery.
+DELETE FROM: The table rows are removed from.
+  + Running it inside a transaction (BEGIN … COMMIT) lets you check how many rows it affected and ROLLBACK if that looks wrong.
+WHERE: Picks the rows to delete.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them."
+`;
+
+exports[`explanation text for every example > delete-duplicates in generic: beginner 1`] = `
+"Deletes the rows of contacts where email is not NULL and id is not in the result of a subquery.
+DELETE FROM: The table rows are removed from.
+WHERE: Picks the rows to delete."
+`;
+
+exports[`explanation text for every example > delete-duplicates in generic: developer 1`] = `
+"Deletes the rows of contacts where email is not NULL and id is not in the result of a subquery.
+DELETE FROM: The table rows are removed from.
+  + Running it inside a transaction (BEGIN … COMMIT) lets you check how many rows it affected and ROLLBACK if that looks wrong.
+WHERE: Picks the rows to delete.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them."
+`;
+
+exports[`explanation text for every example > delete-duplicates in mysql: advanced 1`] = `
+"Deletes the rows of contacts where email is not NULL and id is not in the result of a subquery.
+DELETE FROM: The table rows are removed from.
+  + Running it inside a transaction (BEGIN … COMMIT) lets you check how many rows it affected and ROLLBACK if that looks wrong.
+WHERE: Picks the rows to delete.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them."
+`;
+
+exports[`explanation text for every example > delete-duplicates in mysql: beginner 1`] = `
+"Deletes the rows of contacts where email is not NULL and id is not in the result of a subquery.
+DELETE FROM: The table rows are removed from.
+WHERE: Picks the rows to delete."
+`;
+
+exports[`explanation text for every example > delete-duplicates in mysql: developer 1`] = `
+"Deletes the rows of contacts where email is not NULL and id is not in the result of a subquery.
+DELETE FROM: The table rows are removed from.
+  + Running it inside a transaction (BEGIN … COMMIT) lets you check how many rows it affected and ROLLBACK if that looks wrong.
+WHERE: Picks the rows to delete.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them."
+`;
+
+exports[`explanation text for every example > delete-duplicates in postgresql: advanced 1`] = `
+"Deletes the rows of contacts where email is not NULL and id is not in the result of a subquery.
+DELETE FROM: The table rows are removed from.
+  + Running it inside a transaction (BEGIN … COMMIT) lets you check how many rows it affected and ROLLBACK if that looks wrong.
+WHERE: Picks the rows to delete.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them."
+`;
+
+exports[`explanation text for every example > delete-duplicates in postgresql: beginner 1`] = `
+"Deletes the rows of contacts where email is not NULL and id is not in the result of a subquery.
+DELETE FROM: The table rows are removed from.
+WHERE: Picks the rows to delete."
+`;
+
+exports[`explanation text for every example > delete-duplicates in postgresql: developer 1`] = `
+"Deletes the rows of contacts where email is not NULL and id is not in the result of a subquery.
+DELETE FROM: The table rows are removed from.
+  + Running it inside a transaction (BEGIN … COMMIT) lets you check how many rows it affected and ROLLBACK if that looks wrong.
+WHERE: Picks the rows to delete.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them."
+`;
+
+exports[`explanation text for every example > delete-duplicates in sqlserver: advanced 1`] = `
+"Deletes the rows of contacts where email is not NULL and id is not in the result of a subquery.
+DELETE FROM: The table rows are removed from.
+  + Running it inside a transaction (BEGIN … COMMIT) lets you check how many rows it affected and ROLLBACK if that looks wrong.
+WHERE: Picks the rows to delete.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them."
+`;
+
+exports[`explanation text for every example > delete-duplicates in sqlserver: beginner 1`] = `
+"Deletes the rows of contacts where email is not NULL and id is not in the result of a subquery.
+DELETE FROM: The table rows are removed from.
+WHERE: Picks the rows to delete."
+`;
+
+exports[`explanation text for every example > delete-duplicates in sqlserver: developer 1`] = `
+"Deletes the rows of contacts where email is not NULL and id is not in the result of a subquery.
+DELETE FROM: The table rows are removed from.
+  + Running it inside a transaction (BEGIN … COMMIT) lets you check how many rows it affected and ROLLBACK if that looks wrong.
+WHERE: Picks the rows to delete.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them."
+`;
+
 exports[`explanation text for every example > delete-old in generic: advanced 1`] = `
 "Deletes the rows of audit_log where created_at is less than '2025-01-01'.
 DELETE FROM: The table rows are removed from.
@@ -958,6 +1046,154 @@ ORDER BY: Sorts the final result.
   + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
 TOP: Returns only the first rows of the sorted result.
   + The limit is applied after sorting, so it keeps the first rows of the sorted result."
+`;
+
+exports[`explanation text for every example > gaps-and-islands in generic: advanced 1`] = `
+"Returns the lowest invoice_no, the highest invoice_no and the number of rows from numbered, one row per invoice_no - rn, sorted by run_start.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+FROM: Picks where the rows come from.
+GROUP BY: Puts rows with the same values into one group; aggregates like COUNT or SUM are worked out per group.
+  + Every selected column has to be in GROUP BY or inside an aggregate. Rows with NULL in a grouped column form one group together.
+SELECT: Works out the output columns.
+  + COUNT(*) counts rows; COUNT(column) and the other aggregates skip NULLs.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
+  + Where NULLs sort depends on the database. Some accept NULLS FIRST or NULLS LAST; sorting on a CASE works everywhere."
+`;
+
+exports[`explanation text for every example > gaps-and-islands in generic: beginner 1`] = `
+"Returns the lowest invoice_no, the highest invoice_no and the number of rows from numbered, one row per invoice_no - rn, sorted by run_start.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+FROM: Picks where the rows come from.
+GROUP BY: Puts rows with the same values into one group; aggregates like COUNT or SUM are worked out per group.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result."
+`;
+
+exports[`explanation text for every example > gaps-and-islands in generic: developer 1`] = `
+"Returns the lowest invoice_no, the highest invoice_no and the number of rows from numbered, one row per invoice_no - rn, sorted by run_start.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+FROM: Picks where the rows come from.
+GROUP BY: Puts rows with the same values into one group; aggregates like COUNT or SUM are worked out per group.
+  + Every selected column has to be in GROUP BY or inside an aggregate. Rows with NULL in a grouped column form one group together.
+SELECT: Works out the output columns.
+  + COUNT(*) counts rows; COUNT(column) and the other aggregates skip NULLs.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
+`;
+
+exports[`explanation text for every example > gaps-and-islands in mysql: advanced 1`] = `
+"Returns the lowest invoice_no, the highest invoice_no and the number of rows from numbered, one row per invoice_no - rn, sorted by run_start.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+FROM: Picks where the rows come from.
+GROUP BY: Puts rows with the same values into one group; aggregates like COUNT or SUM are worked out per group.
+  + Every selected column has to be in GROUP BY or inside an aggregate. Rows with NULL in a grouped column form one group together.
+SELECT: Works out the output columns.
+  + COUNT(*) counts rows; COUNT(column) and the other aggregates skip NULLs.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
+  + MySQL sorts NULLs first in ascending order and last in descending order."
+`;
+
+exports[`explanation text for every example > gaps-and-islands in mysql: beginner 1`] = `
+"Returns the lowest invoice_no, the highest invoice_no and the number of rows from numbered, one row per invoice_no - rn, sorted by run_start.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+FROM: Picks where the rows come from.
+GROUP BY: Puts rows with the same values into one group; aggregates like COUNT or SUM are worked out per group.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result."
+`;
+
+exports[`explanation text for every example > gaps-and-islands in mysql: developer 1`] = `
+"Returns the lowest invoice_no, the highest invoice_no and the number of rows from numbered, one row per invoice_no - rn, sorted by run_start.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+FROM: Picks where the rows come from.
+GROUP BY: Puts rows with the same values into one group; aggregates like COUNT or SUM are worked out per group.
+  + Every selected column has to be in GROUP BY or inside an aggregate. Rows with NULL in a grouped column form one group together.
+SELECT: Works out the output columns.
+  + COUNT(*) counts rows; COUNT(column) and the other aggregates skip NULLs.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
+`;
+
+exports[`explanation text for every example > gaps-and-islands in postgresql: advanced 1`] = `
+"Returns the lowest invoice_no, the highest invoice_no and the number of rows from numbered, one row per invoice_no - rn, sorted by run_start.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+FROM: Picks where the rows come from.
+GROUP BY: Puts rows with the same values into one group; aggregates like COUNT or SUM are worked out per group.
+  + Every selected column has to be in GROUP BY or inside an aggregate. Rows with NULL in a grouped column form one group together.
+SELECT: Works out the output columns.
+  + COUNT(*) counts rows; COUNT(column) and the other aggregates skip NULLs.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
+  + PostgreSQL sorts NULLs last in ascending order and first in descending order; NULLS FIRST or NULLS LAST changes that."
+`;
+
+exports[`explanation text for every example > gaps-and-islands in postgresql: beginner 1`] = `
+"Returns the lowest invoice_no, the highest invoice_no and the number of rows from numbered, one row per invoice_no - rn, sorted by run_start.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+FROM: Picks where the rows come from.
+GROUP BY: Puts rows with the same values into one group; aggregates like COUNT or SUM are worked out per group.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result."
+`;
+
+exports[`explanation text for every example > gaps-and-islands in postgresql: developer 1`] = `
+"Returns the lowest invoice_no, the highest invoice_no and the number of rows from numbered, one row per invoice_no - rn, sorted by run_start.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+FROM: Picks where the rows come from.
+GROUP BY: Puts rows with the same values into one group; aggregates like COUNT or SUM are worked out per group.
+  + Every selected column has to be in GROUP BY or inside an aggregate. Rows with NULL in a grouped column form one group together.
+SELECT: Works out the output columns.
+  + COUNT(*) counts rows; COUNT(column) and the other aggregates skip NULLs.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
+`;
+
+exports[`explanation text for every example > gaps-and-islands in sqlserver: advanced 1`] = `
+"Returns the lowest invoice_no, the highest invoice_no and the number of rows from numbered, one row per invoice_no - rn, sorted by run_start.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+FROM: Picks where the rows come from.
+GROUP BY: Puts rows with the same values into one group; aggregates like COUNT or SUM are worked out per group.
+  + Every selected column has to be in GROUP BY or inside an aggregate. Rows with NULL in a grouped column form one group together.
+SELECT: Works out the output columns.
+  + COUNT(*) counts rows; COUNT(column) and the other aggregates skip NULLs.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
+  + SQL Server sorts NULLs first in ascending order and last in descending order."
+`;
+
+exports[`explanation text for every example > gaps-and-islands in sqlserver: beginner 1`] = `
+"Returns the lowest invoice_no, the highest invoice_no and the number of rows from numbered, one row per invoice_no - rn, sorted by run_start.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+FROM: Picks where the rows come from.
+GROUP BY: Puts rows with the same values into one group; aggregates like COUNT or SUM are worked out per group.
+SELECT: Works out the output columns.
+ORDER BY: Sorts the final result."
+`;
+
+exports[`explanation text for every example > gaps-and-islands in sqlserver: developer 1`] = `
+"Returns the lowest invoice_no, the highest invoice_no and the number of rows from numbered, one row per invoice_no - rn, sorted by run_start.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+FROM: Picks where the rows come from.
+GROUP BY: Puts rows with the same values into one group; aggregates like COUNT or SUM are worked out per group.
+  + Every selected column has to be in GROUP BY or inside an aggregate. Rows with NULL in a grouped column form one group together.
+SELECT: Works out the output columns.
+  + COUNT(*) counts rows; COUNT(column) and the other aggregates skip NULLs.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
 `;
 
 exports[`explanation text for every example > insert-rows in generic: advanced 1`] = `
@@ -1404,6 +1640,258 @@ HAVING: Keeps only the groups that match, after the aggregates are worked out.
   + Conditions that don't use an aggregate can go in WHERE instead, which removes rows before they are grouped.
 SELECT: Works out the output columns.
   + COUNT(*) counts rows; COUNT(column) and the other aggregates skip NULLs.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
+`;
+
+exports[`explanation text for every example > latest-per-group in generic: advanced 1`] = `
+"Returns id, customer_id, ordered_at and total from numbered, where rn is 1.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+FROM: Picks where the rows come from.
+WHERE: Keeps only the rows that match, before any grouping.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them.
+  + WHERE can't use aggregates such as COUNT or SUM; those filters go in HAVING.
+SELECT: Works out the output columns."
+`;
+
+exports[`explanation text for every example > latest-per-group in generic: beginner 1`] = `
+"Returns id, customer_id, ordered_at and total from numbered, where rn is 1.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+FROM: Picks where the rows come from.
+WHERE: Keeps only the rows that match, before any grouping.
+SELECT: Works out the output columns."
+`;
+
+exports[`explanation text for every example > latest-per-group in generic: developer 1`] = `
+"Returns id, customer_id, ordered_at and total from numbered, where rn is 1.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+FROM: Picks where the rows come from.
+WHERE: Keeps only the rows that match, before any grouping.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them.
+  + WHERE can't use aggregates such as COUNT or SUM; those filters go in HAVING.
+SELECT: Works out the output columns."
+`;
+
+exports[`explanation text for every example > latest-per-group in mysql: advanced 1`] = `
+"Returns id, customer_id, ordered_at and total from numbered, where rn is 1.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+FROM: Picks where the rows come from.
+WHERE: Keeps only the rows that match, before any grouping.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them.
+  + WHERE can't use aggregates such as COUNT or SUM; those filters go in HAVING.
+SELECT: Works out the output columns."
+`;
+
+exports[`explanation text for every example > latest-per-group in mysql: beginner 1`] = `
+"Returns id, customer_id, ordered_at and total from numbered, where rn is 1.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+FROM: Picks where the rows come from.
+WHERE: Keeps only the rows that match, before any grouping.
+SELECT: Works out the output columns."
+`;
+
+exports[`explanation text for every example > latest-per-group in mysql: developer 1`] = `
+"Returns id, customer_id, ordered_at and total from numbered, where rn is 1.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+FROM: Picks where the rows come from.
+WHERE: Keeps only the rows that match, before any grouping.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them.
+  + WHERE can't use aggregates such as COUNT or SUM; those filters go in HAVING.
+SELECT: Works out the output columns."
+`;
+
+exports[`explanation text for every example > latest-per-group in postgresql: advanced 1`] = `
+"Returns id, customer_id, ordered_at and total from numbered, where rn is 1.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+FROM: Picks where the rows come from.
+WHERE: Keeps only the rows that match, before any grouping.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them.
+  + WHERE can't use aggregates such as COUNT or SUM; those filters go in HAVING.
+SELECT: Works out the output columns."
+`;
+
+exports[`explanation text for every example > latest-per-group in postgresql: beginner 1`] = `
+"Returns id, customer_id, ordered_at and total from numbered, where rn is 1.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+FROM: Picks where the rows come from.
+WHERE: Keeps only the rows that match, before any grouping.
+SELECT: Works out the output columns."
+`;
+
+exports[`explanation text for every example > latest-per-group in postgresql: developer 1`] = `
+"Returns id, customer_id, ordered_at and total from numbered, where rn is 1.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+FROM: Picks where the rows come from.
+WHERE: Keeps only the rows that match, before any grouping.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them.
+  + WHERE can't use aggregates such as COUNT or SUM; those filters go in HAVING.
+SELECT: Works out the output columns."
+`;
+
+exports[`explanation text for every example > latest-per-group in sqlserver: advanced 1`] = `
+"Returns id, customer_id, ordered_at and total from numbered, where rn is 1.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+FROM: Picks where the rows come from.
+WHERE: Keeps only the rows that match, before any grouping.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them.
+  + WHERE can't use aggregates such as COUNT or SUM; those filters go in HAVING.
+SELECT: Works out the output columns."
+`;
+
+exports[`explanation text for every example > latest-per-group in sqlserver: beginner 1`] = `
+"Returns id, customer_id, ordered_at and total from numbered, where rn is 1.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+FROM: Picks where the rows come from.
+WHERE: Keeps only the rows that match, before any grouping.
+SELECT: Works out the output columns."
+`;
+
+exports[`explanation text for every example > latest-per-group in sqlserver: developer 1`] = `
+"Returns id, customer_id, ordered_at and total from numbered, where rn is 1.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+FROM: Picks where the rows come from.
+WHERE: Keeps only the rows that match, before any grouping.
+  + A comparison with NULL is neither true nor false, so rows with NULL in a compared column are left out; IS NULL finds them.
+  + WHERE can't use aggregates such as COUNT or SUM; those filters go in HAVING.
+SELECT: Works out the output columns."
+`;
+
+exports[`explanation text for every example > moving-average in generic: advanced 1`] = `
+"Returns sale_date, total and avg_7_days from daily, sorted by sale_date.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns. Window functions (AVG) are calculated over the remaining rows without merging them.
+  + avg_7_days uses the current row and the 6 rows before it.
+  + Window functions run after WHERE, GROUP BY and HAVING, so they can't be filtered there; put this query in a CTE and filter the outer query.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
+  + Where NULLs sort depends on the database. Some accept NULLS FIRST or NULLS LAST; sorting on a CASE works everywhere."
+`;
+
+exports[`explanation text for every example > moving-average in generic: beginner 1`] = `
+"Returns sale_date, total and avg_7_days from daily, sorted by sale_date.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns. Window functions (AVG) are calculated over the remaining rows without merging them.
+ORDER BY: Sorts the final result."
+`;
+
+exports[`explanation text for every example > moving-average in generic: developer 1`] = `
+"Returns sale_date, total and avg_7_days from daily, sorted by sale_date.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns. Window functions (AVG) are calculated over the remaining rows without merging them.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
+`;
+
+exports[`explanation text for every example > moving-average in mysql: advanced 1`] = `
+"Returns sale_date, total and avg_7_days from daily, sorted by sale_date.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns. Window functions (AVG) are calculated over the remaining rows without merging them.
+  + avg_7_days uses the current row and the 6 rows before it.
+  + Window functions run after WHERE, GROUP BY and HAVING, so they can't be filtered there; put this query in a CTE and filter the outer query.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
+  + MySQL sorts NULLs first in ascending order and last in descending order."
+`;
+
+exports[`explanation text for every example > moving-average in mysql: beginner 1`] = `
+"Returns sale_date, total and avg_7_days from daily, sorted by sale_date.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns. Window functions (AVG) are calculated over the remaining rows without merging them.
+ORDER BY: Sorts the final result."
+`;
+
+exports[`explanation text for every example > moving-average in mysql: developer 1`] = `
+"Returns sale_date, total and avg_7_days from daily, sorted by sale_date.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns. Window functions (AVG) are calculated over the remaining rows without merging them.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
+`;
+
+exports[`explanation text for every example > moving-average in postgresql: advanced 1`] = `
+"Returns sale_date, total and avg_7_days from daily, sorted by sale_date.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns. Window functions (AVG) are calculated over the remaining rows without merging them.
+  + avg_7_days uses the current row and the 6 rows before it.
+  + Window functions run after WHERE, GROUP BY and HAVING, so they can't be filtered there; put this query in a CTE and filter the outer query.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
+  + PostgreSQL sorts NULLs last in ascending order and first in descending order; NULLS FIRST or NULLS LAST changes that."
+`;
+
+exports[`explanation text for every example > moving-average in postgresql: beginner 1`] = `
+"Returns sale_date, total and avg_7_days from daily, sorted by sale_date.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns. Window functions (AVG) are calculated over the remaining rows without merging them.
+ORDER BY: Sorts the final result."
+`;
+
+exports[`explanation text for every example > moving-average in postgresql: developer 1`] = `
+"Returns sale_date, total and avg_7_days from daily, sorted by sale_date.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns. Window functions (AVG) are calculated over the remaining rows without merging them.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
+`;
+
+exports[`explanation text for every example > moving-average in sqlserver: advanced 1`] = `
+"Returns sale_date, total and avg_7_days from daily, sorted by sale_date.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+  + The database may copy a named query into the main query or work it out once; the result is the same either way.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns. Window functions (AVG) are calculated over the remaining rows without merging them.
+  + avg_7_days uses the current row and the 6 rows before it.
+  + Window functions run after WHERE, GROUP BY and HAVING, so they can't be filtered there; put this query in a CTE and filter the outer query.
+ORDER BY: Sorts the final result.
+  + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable.
+  + SQL Server sorts NULLs first in ascending order and last in descending order."
+`;
+
+exports[`explanation text for every example > moving-average in sqlserver: beginner 1`] = `
+"Returns sale_date, total and avg_7_days from daily, sorted by sale_date.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns. Window functions (AVG) are calculated over the remaining rows without merging them.
+ORDER BY: Sorts the final result."
+`;
+
+exports[`explanation text for every example > moving-average in sqlserver: developer 1`] = `
+"Returns sale_date, total and avg_7_days from daily, sorted by sale_date.
+WITH: Defines named queries first, so the rest of the query can use them like tables.
+  + Each named query exists only while this statement runs; it is not stored.
+FROM: Picks where the rows come from.
+SELECT: Works out the output columns. Window functions (AVG) are calculated over the remaining rows without merging them.
 ORDER BY: Sorts the final result.
   + Rows with equal sort values can come back in any order; a unique column (such as id) as the last sort key makes the order stable."
 `;

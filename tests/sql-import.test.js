@@ -65,7 +65,7 @@ describe('round trip: every example, in every dialect', () => {
 
     test.each(DIALECTS)('%s: INSERT, UPDATE and DELETE examples come back exactly, as the same query type', (dialect) => {
         const others = EXAMPLES.filter(e => e.build().type !== 'select');
-        expect(others.map(e => e.build().type).sort()).toEqual(['delete', 'insert', 'insert', 'insert', 'update']);
+        expect(others.map(e => e.build().type).sort()).toEqual(['delete', 'delete', 'insert', 'insert', 'insert', 'update']);
         for (const example of others) {
             const ws = example.build();
             for (const pretty of [true, false]) {
