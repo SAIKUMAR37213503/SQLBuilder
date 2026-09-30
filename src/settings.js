@@ -4,6 +4,8 @@ import { DIALECTS, DEFAULT_DIALECT } from './dialects.js';
 
 export const THEMES = ['system', 'light', 'dark'];
 export const OUTPUT_MODES = ['formatted', 'compact'];
+// How much the Query structure panel explains (see explain.js)
+export const EXPLAIN_LEVELS = ['beginner', 'developer', 'advanced'];
 
 export const DEFAULT_SETTINGS = Object.freeze({
     dialect: DEFAULT_DIALECT,
@@ -13,7 +15,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     restoreSession: true,
     theme: 'system',
     outputMode: 'formatted',
-    wrapOutput: false
+    wrapOutput: false,
+    explainLevel: 'beginner'
 });
 
 const SETTINGS_KEY = 'settings';
@@ -31,7 +34,8 @@ export function sanitizeSettings(input) {
         restoreSession: bool('restoreSession'),
         theme: oneOf('theme', THEMES),
         outputMode: oneOf('outputMode', OUTPUT_MODES),
-        wrapOutput: bool('wrapOutput')
+        wrapOutput: bool('wrapOutput'),
+        explainLevel: oneOf('explainLevel', EXPLAIN_LEVELS)
     };
 }
 

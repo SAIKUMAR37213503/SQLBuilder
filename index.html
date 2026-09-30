@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=7326115e5df9">
+    <link rel="stylesheet" href="style.css?v=5136bed7268b">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -96,7 +96,16 @@
                     <pre id="sql-output" class="sql-output" tabindex="0" aria-label="Generated SQL" aria-describedby="output-state"><code id="sql-code"></code></pre>
                     <details class="structure" id="structure" hidden>
                         <summary class="structure-summary"><span class="structure-title">Query structure</span> <span class="complexity" id="complexity"></span></summary>
+                        <p class="structure-sentence" id="structure-sentence"></p>
                         <ul class="structure-insights" id="structure-insights" aria-label="Query insights: how many parts the query has"></ul>
+                        <div class="structure-levels">
+                            <span class="structure-levels-label" id="explain-level-label">Explain for</span>
+                            <div class="segmented" role="group" aria-labelledby="explain-level-label">
+                                <button type="button" class="segment" data-explain-level="beginner" aria-pressed="true">Beginner</button>
+                                <button type="button" class="segment" data-explain-level="developer" aria-pressed="false">Developer</button>
+                                <button type="button" class="segment" data-explain-level="advanced" aria-pressed="false">Advanced</button>
+                            </div>
+                        </div>
                         <p class="structure-intro">The order a database works through this query, which differs from the order it is written. Select a step to edit it.</p>
                         <ol class="structure-steps" id="structure-steps"></ol>
                         <p class="structure-notes" id="structure-notes"></p>
@@ -403,6 +412,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=1d437c910380" defer></script>
+    <script src="dist/sqlbuilder.js?v=cc75bf5932de" defer></script>
 </body>
 </html>

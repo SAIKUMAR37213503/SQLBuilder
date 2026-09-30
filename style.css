@@ -800,6 +800,10 @@ kbd {
 .structure-clause { font-family: var(--font-mono); font-size: 0.85rem; font-weight: 700; color: var(--tok-keyword); }
 .structure-detail { color: var(--text-2); font-size: 0.85rem; overflow-wrap: anywhere; }
 .structure-explain { margin: 0 0 0.2rem 2.25rem; color: var(--text-muted); font-size: 0.8rem; }
+.structure-more { margin: 0.15rem 0 0.2rem 2.25rem; padding-left: 0.5rem; border-left: 2px solid var(--border); color: var(--text-2); font-size: 0.8rem; }
+.structure-sentence { margin: 0.6rem 0 0; padding: 0 0.75rem; color: var(--text); font-size: 0.85rem; overflow-wrap: anywhere; }
+.structure-levels { display: flex; flex-wrap: wrap; gap: 0.35rem 0.6rem; align-items: center; padding: 0 0.75rem; margin-bottom: 0.5rem; }
+.structure-levels-label { color: var(--text-muted); font-size: 0.8rem; font-weight: 600; }
 
 .issues { margin-top: 0.75rem; }
 .issues-heading { font-size: 0.9rem; font-weight: 650; }

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { startApp } from '../src/app.js';
 import { createStorage, createMemoryBackend, STORAGE_PREFIX } from '../src/storage.js';
+import { getDialect } from '../src/dialects.js';
 
 const html = readFileSync(join(import.meta.dirname, '..', 'index.html'), 'utf8');
 const bodyHtml = html.replace(/^[\s\S]*?<html[^>]*>/i, '').replace(/<\/html>\s*$/i, '');
@@ -1411,6 +1412,30 @@ describe('query structure panel', () => {
         type('delete.table', 'audit_log');
         await settle();
         expect($('#structure-insights').hidden).toBe(true);
+    });
+
+    test('explains more at the Developer and Advanced levels, and remembers the level', async () => {
+        const more = () => $$('#structure-steps .structure-more').map(n => n.textContent);
+        const pressed = () => $$('[data-explain-level]').filter(b => b.getAttribute('aria-pressed') === 'true').map(b => b.dataset.explainLevel);
+        await loadExample('page-results');
+        expect($('#structure-sentence').textContent).toBe('Returns id, name and email from customers, sorted by name then id, rows 41 to 60.');
+        expect(pressed()).toEqual(['beginner']);
+        expect(more()).toEqual([]);
+        $('[data-explain-level="developer"]').click();
+        await settle();
+        expect(pressed()).toEqual(['developer']);
+        expect(more()).toContain('The limit is applied after sorting, so it keeps the first rows of the sorted result.');
+        expect(more().some(t => t.includes('NULLs'))).toBe(false);
+        $('[data-explain-level="advanced"]').click();
+        await settle();
+        expect(more()).toContain(getDialect('generic').explain.nullsOrder);
+        pickDialect('sqlserver');
+        await settle();
+        expect(more()).toContain(getDialect('sqlserver').explain.pagination);
+        // Kept across restarts
+        boot(backend);
+        await loadExample('page-results');
+        expect(pressed()).toEqual(['advanced']);
     });
 
     test('follows the dialect and query type', async () => {

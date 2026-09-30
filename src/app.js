@@ -10,6 +10,7 @@ import {
 import { generateSQL } from './generator.js';
 import { describeStructure } from './structure.js';
 import { describeInsights } from './analysis.js';
+import { levelNotes, summarizeWorkspace } from './explain.js';
 import { compareDialects } from './dialect-compare.js';
 import { validateWorkspace, hasErrors, summarize } from './validation.js';
 import { listDialects, getDialect } from './dialects.js';
@@ -116,6 +117,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         save: $('save-btn'),
         structureSteps: $('structure-steps'),
         structureInsights: $('structure-insights'),
+        structureSentence: $('structure-sentence'),
+        explainButtons: $$('[data-explain-level]'),
         structureNotes: $('structure-notes'),
         issuesSummary: $('issues-summary'),
         issuesList: $('issues-list'),
@@ -435,7 +438,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         el.complexity.textContent = parts.length ? `· ${parts.join(' · ')}` : '';
         renderInsights();
 
-        const { steps, notes } = describeStructure(state.workspace, getDialect(state.settings.dialect));
+        const dialect = getDialect(state.settings.dialect);
+        const { steps, notes } = describeStructure(state.workspace, dialect);
+        const more = levelNotes(state.workspace, dialect, state.settings.explainLevel);
+        el.structureSentence.textContent = summarizeWorkspace(state.workspace, dialect);
+        el.explainButtons.forEach(btn => btn.setAttribute('aria-pressed', String(btn.dataset.explainLevel === state.settings.explainLevel)));
         el.structureSteps.replaceChildren(...steps.map((step, i) =>
             h('li', { class: 'structure-step' },
                 h('button', {
@@ -446,7 +453,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                 h('span', { class: 'structure-index', 'aria-hidden': 'true' }, String(i + 1)),
                 h('span', { class: 'structure-clause' }, step.clause),
                 h('span', { class: 'structure-detail' }, step.detail)),
-                h('p', { class: 'structure-explain' }, step.explanation))));
+                h('p', { class: 'structure-explain' }, step.explanation),
+                ...(more[step.key] || []).map(text => h('p', { class: 'structure-more' }, text)))));
         el.structureNotes.textContent = notes.join(' ');
     }
 
@@ -1784,6 +1792,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         selectContents(el.code);
     });
     el.modeButtons.forEach(btn => btn.addEventListener('click', () => updateSettings({ outputMode: btn.dataset.outputMode })));
+    el.explainButtons.forEach(btn => btn.addEventListener('click', () => updateSettings({ explainLevel: btn.dataset.explainLevel })));
     el.wrap.addEventListener('click', () => updateSettings({ wrapOutput: !state.settings.wrapOutput }));
 
     el.issuesList.addEventListener('click', (event) => {

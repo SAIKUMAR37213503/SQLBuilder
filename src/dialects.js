@@ -57,6 +57,10 @@
 //
 // ui                         wording for dialect-specific builder fields
 //   limitLabel, limitHint    the row-limit field (LIMIT, or TOP on SQL Server)
+//
+// explain                    sentences for the Advanced explanation level
+//   nullsOrder               where NULLs go in ORDER BY
+//   pagination               how the row limit and offset work
 
 const escapeSingleQuotes = (text) => text.replace(/'/g, "''");
 
@@ -107,6 +111,7 @@ function defineDialect(spec) {
         minVersions: Object.freeze({ ...spec.minVersions }),
         syntax: Object.freeze({ backslashEscapes: false, hashComments: false, ...spec.syntax }),
         ui: Object.freeze({ limitLabel: 'LIMIT', limitHint: '', ...spec.ui }),
+        explain: Object.freeze({ nullsOrder: '', pagination: '', ...spec.explain }),
         notes: Object.freeze([...(spec.notes || [])])
     });
 }
@@ -121,6 +126,10 @@ export const DIALECTS = {
         paginate: limitOffsetPagination,
         parameter: (name) => (NAMED_RE.test(name) ? `:${name}` : '?'),
         insertedValue: null,
+        explain: {
+            nullsOrder: 'Where NULLs sort depends on the database. Some accept NULLS FIRST or NULLS LAST; sorting on a CASE works everywhere.',
+            pagination: 'LIMIT … OFFSET is widely supported; the SQL standard spelling is OFFSET n ROWS FETCH FIRST n ROWS ONLY.'
+        },
         notes: ['Parameters are written as ? (or :name when named).', 'Upserts need a specific dialect (PostgreSQL or MySQL).']
     }),
     sqlserver: defineDialect({
@@ -158,6 +167,10 @@ export const DIALECTS = {
             valueFunctionsNeedOrderBy: true,
             frameNeedsOrderBy: true
         },
+        explain: {
+            nullsOrder: 'SQL Server sorts NULLs first in ascending order and last in descending order.',
+            pagination: 'SQL Server writes a plain row limit as TOP n. With an offset or a UNION it uses OFFSET … ROWS FETCH NEXT n ROWS ONLY, which needs ORDER BY, so the builder adds ORDER BY (SELECT NULL) when there is none.'
+        },
         notes: ['Booleans are written as 1/0.', 'LIMIT becomes TOP, or OFFSET … FETCH when an offset or set operation is used.', 'No INTERSECT ALL / EXCEPT ALL or NTH_VALUE.', 'Parameters are written as @name (or @p1, @p2, … when unnamed).', 'Upserts (MERGE) are not supported yet.']
     }),
     postgresql: defineDialect({
@@ -174,6 +187,10 @@ export const DIALECTS = {
         parameters: {
             names: 'numbered',
             ignoredNote: 'PostgreSQL parameters are numbered ($1, $2, … in order), so parameter names aren\'t part of the SQL. Enter a number instead of a name to choose the position.'
+        },
+        explain: {
+            nullsOrder: 'PostgreSQL sorts NULLs last in ascending order and first in descending order; NULLS FIRST or NULLS LAST changes that.',
+            pagination: 'PostgreSQL applies LIMIT and OFFSET after sorting. OFFSET still reads the rows it skips, so later pages read more rows.'
         },
         notes: ['Parameters are numbered: $1, $2, … in order.', 'Upsert: ON CONFLICT … DO NOTHING / DO UPDATE.']
     }),
@@ -201,6 +218,10 @@ export const DIALECTS = {
         // INTERSECT / EXCEPT exist since MySQL 8.0.31
         minVersions: { INTERSECT: '8.0.31', EXCEPT: '8.0.31' },
         syntax: { backslashEscapes: true, hashComments: true },
+        explain: {
+            nullsOrder: 'MySQL sorts NULLs first in ascending order and last in descending order.',
+            pagination: 'MySQL applies LIMIT and OFFSET after sorting. OFFSET needs a LIMIT, so “all remaining rows” is written as LIMIT 18446744073709551615.'
+        },
         notes: ['FULL JOIN is not supported by MySQL.', 'Window functions need MySQL 8.0+; INTERSECT / EXCEPT need 8.0.31+.', 'Parameters are written as ?.', 'Upsert: ON DUPLICATE KEY UPDATE.']
     })
 };
