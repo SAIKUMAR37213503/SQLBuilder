@@ -80,6 +80,7 @@ export function renderTemplateList(list, templates, { total = templates.length, 
                 : action('Pin', 'template-pin', t.id, { label: `Pin template ${t.name} to the top` }),
             action('Rename', 'template-rename', t.id, { label: `Rename template ${t.name}` }),
             action('Duplicate', 'template-duplicate', t.id, { label: `Duplicate template ${t.name}` }),
+            t.versions?.length ? action(`Versions (${t.versions.length})`, 'template-versions', t.id, { label: `Earlier versions of template ${t.name} (${t.versions.length})` }) : null,
             action('Delete', 'template-delete', t.id, { label: `Delete template ${t.name}`, variant: 'danger-ghost' })
         )
     )));

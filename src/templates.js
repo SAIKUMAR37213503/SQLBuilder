@@ -1,7 +1,7 @@
 // Saved query templates (user-named workspaces), kept in localStorage.
 
 import { createId } from './storage.js';
-import { normalizeWorkspace } from './serialization.js';
+import { normalizeWorkspace, readVersions, TEMPLATE_VERSION_LIMIT } from './serialization.js';
 import { withModelVersion } from './model.js';
 import { DIALECTS } from './dialects.js';
 
@@ -9,6 +9,9 @@ export const TEMPLATE_LIMIT = 200;
 export const TEMPLATE_NAME_MAX = 80;
 export const TEMPLATE_DESCRIPTION_MAX = 200;
 export const TEMPLATE_CATEGORY_MAX = 40;
+export { TEMPLATE_VERSION_LIMIT };
+/** Earlier versions kept across all templates; past this the oldest go first. */
+export const TEMPLATE_VERSIONS_TOTAL = 300;
 
 const cleanText = (text, max) => (typeof text === 'string' ? text.trim().replace(/\s+/g, ' ').slice(0, max) : '');
 
@@ -29,6 +32,8 @@ export function templateDetails({ dialect, description, category } = {}) {
 }
 const TEMPLATES_KEY = 'templates';
 
+const versionsField = (/** @type {any[]} */ versions) => (versions.length ? { versions } : {});
+
 export class TemplateError extends Error {}
 
 export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
@@ -47,7 +52,8 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
                     updatedAt: Number(t.updatedAt) || 0,
                     ...templateDetails(t),
                     ...(t.pinned === true ? { pinned: true } : {}),
-                    workspace: normalizeWorkspace(t.workspace)
+                    workspace: normalizeWorkspace(t.workspace),
+                    ...versionsField(readVersions(t.versions))
                 }];
             } catch {
                 return [];
@@ -57,7 +63,12 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
 
     function persist() {
         // Stored with the model version each query needs (see model.js)
-        if (!storage.set(TEMPLATES_KEY, templates.map(t => ({ ...t, workspace: withModelVersion(t.workspace) })))) {
+        const stored = templates.map(t => ({
+            ...t,
+            workspace: withModelVersion(t.workspace),
+            ...(t.versions ? { versions: t.versions.map((/** @type {any} */ v) => ({ ...v, workspace: withModelVersion(v.workspace) })) } : {})
+        }));
+        if (!storage.set(TEMPLATES_KEY, stored)) {
             throw new TemplateError(storage.available
                 ? 'Browser storage is full; delete some templates or history first.'
                 : 'Browser storage is unavailable, so templates can\'t be saved.');
@@ -91,6 +102,24 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
             templates = before;
             throw error;
         }
+    }
+
+    // The version a template is about to replace
+    const versionOf = (/** @type {any} */ t) => ({ savedAt: t.updatedAt || now(), ...templateDetails({ dialect: t.dialect }), workspace: t.workspace });
+
+    /** A copy of a template with these earlier versions (none: no field). */
+    function withVersions(t, versions) {
+        const copy = { ...t };
+        delete copy.versions;
+        return { ...copy, ...versionsField(versions) };
+    }
+
+    /** Drops the oldest versions, across templates, beyond the overall limit. */
+    function capVersions(list) {
+        const all = list.flatMap(t => t.versions || []);
+        if (all.length <= TEMPLATE_VERSIONS_TOTAL) return list;
+        const drop = new Set(all.slice().sort((a, b) => a.savedAt - b.savedAt).slice(0, all.length - TEMPLATE_VERSIONS_TOTAL));
+        return list.map(t => (t.versions?.some((/** @type {any} */ v) => drop.has(v)) ? withVersions(t, t.versions.filter((/** @type {any} */ v) => !drop.has(v))) : t));
     }
 
     function find(id) {
@@ -133,16 +162,66 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
          */
         update(id, workspace, { dialect } = {}) {
             const existing = find(id);
-            const updated = {
-                ...existing,
-                ...templateDetails({ dialect }),
-                updatedAt: now(),
-                workspace: structuredClone(workspace)
+            const changed = JSON.stringify(existing.workspace) !== JSON.stringify(workspace);
+            const save = (/** @type {any[]} */ versions) => {
+                const updated = withVersions({
+                    ...existing,
+                    ...templateDetails({ dialect }),
+                    updatedAt: now(),
+                    workspace: structuredClone(workspace)
+                }, versions);
+                withTransaction(() => {
+                    templates = capVersions(templates.map(t => (t.id === id ? updated : t)));
+                });
+                return /** @type {any} */ (templates.find(t => t.id === id));
             };
+            const earlier = existing.versions || [];
+            // The query it replaces becomes a version. Saving never fails
+            // for want of room for one: then it saves without it.
+            if (!changed) return { ...save(earlier), keptVersion: false };
+            try {
+                return { ...save([versionOf(existing), ...earlier].slice(0, TEMPLATE_VERSION_LIMIT)), keptVersion: true };
+            } catch (error) {
+                if (!(error instanceof TemplateError) || !storage.available) throw error;
+                return { ...save(earlier), keptVersion: false };
+            }
+        },
+
+        /**
+         * Makes an earlier version the template's query again. The query it
+         * replaces is kept as a version, so this can be undone the same way.
+         * @param {string} id
+         * @param {number} index the version, newest first
+         */
+        restoreVersion(id, index) {
+            const existing = find(id);
+            const versions = existing.versions || [];
+            const chosen = versions[index];
+            if (!chosen) throw new TemplateError('That version no longer exists.');
+            const base = { ...existing };
+            delete base.dialect;
+            const restored = withVersions({
+                ...base,
+                ...templateDetails({ dialect: chosen.dialect }),
+                updatedAt: now(),
+                workspace: structuredClone(chosen.workspace)
+            }, [versionOf(existing), ...versions.filter((_, i) => i !== index)].slice(0, TEMPLATE_VERSION_LIMIT));
             withTransaction(() => {
-                templates = templates.map(t => (t.id === id ? updated : t));
+                templates = templates.map(t => (t.id === id ? restored : t));
             });
-            return updated;
+            return restored;
+        },
+
+        /** Deletes one earlier version. */
+        deleteVersion(id, index) {
+            const existing = find(id);
+            const versions = existing.versions || [];
+            if (!versions[index]) throw new TemplateError('That version no longer exists.');
+            const changed = withVersions(existing, versions.filter((_, i) => i !== index));
+            withTransaction(() => {
+                templates = templates.map(t => (t.id === id ? changed : t));
+            });
+            return changed;
         },
 
         /** Pins a template to the top of the list, or unpins it. */
@@ -214,9 +293,11 @@ export function createTemplateStore(storage, { now = () => Date.now() } = {}) {
                         updatedAt: Number(item.updatedAt) || time,
                         ...templateDetails(item),
                         ...(item.pinned === true ? { pinned: true } : {}),
-                        workspace: structuredClone(item.workspace)
+                        workspace: structuredClone(item.workspace),
+                        ...versionsField(readVersions(item.versions))
                     }];
                 }
+                templates = capVersions(templates);
             });
             return { added: fresh.length, skipped };
         },

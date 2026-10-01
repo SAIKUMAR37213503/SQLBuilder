@@ -324,6 +324,41 @@ const exportTemplate = ({ name, dialect, description, category, pinned, workspac
     workspace: withModelVersion(workspace), createdAt, updatedAt
 });
 
+// A backup also keeps each template's earlier versions; a templates file,
+// made for sharing, doesn't
+const backupTemplate = (/** @type {any} */ t) => ({
+    ...exportTemplate(t),
+    ...(t.versions?.length
+        ? { versions: t.versions.map((/** @type {any} */ v) => ({ savedAt: v.savedAt, ...(v.dialect ? { dialect: v.dialect } : {}), workspace: withModelVersion(v.workspace) })) }
+        : {})
+});
+
+/** Earlier versions kept per template. */
+export const TEMPLATE_VERSION_LIMIT = 10;
+
+/**
+ * A template's earlier versions from storage or a backup, newest first.
+ * Read as untrusted: a damaged version (or one from a newer app) is left
+ * out rather than failing the whole template, and at most
+ * TEMPLATE_VERSION_LIMIT are kept.
+ * @param {any} list
+ * @returns {{ savedAt: number, dialect?: string, workspace: any }[]}
+ */
+export function readVersions(list) {
+    if (!Array.isArray(list)) return [];
+    const out = [];
+    for (const v of list.slice(0, MAX_LIST)) {
+        if (!isObject(v) || !time(v.savedAt)) continue;
+        try {
+            const dialect = typeof v.dialect === 'string' && Object.hasOwn(DIALECTS, v.dialect) ? { dialect: v.dialect } : {};
+            out.push({ savedAt: v.savedAt, ...dialect, workspace: normalizeWorkspace(v.workspace) });
+        } catch {
+            // skip a damaged version
+        }
+    }
+    return out.sort((a, b) => b.savedAt - a.savedAt).slice(0, TEMPLATE_VERSION_LIMIT);
+}
+
 // Files say the newest model version any query in them uses
 const newestVersion = (workspaces) => Math.max(workspaceVersion(null), ...workspaces.map(workspaceVersion));
 
@@ -348,12 +383,14 @@ function readTemplate(t, i, { withDates = false } = {}) {
     const dates = withDates
         ? { ...(time(t.createdAt) ? { createdAt: t.createdAt } : {}), ...(time(t.updatedAt) ? { updatedAt: t.updatedAt } : {}) }
         : {};
+    const versions = withDates ? readVersions(t.versions) : [];
     try {
         return {
             name, ...optional('dialect'), ...optional('description'), ...optional('category'),
             ...(t.pinned === true ? { pinned: true } : {}),
             ...dates,
-            workspace: normalizeWorkspace(t.workspace)
+            workspace: normalizeWorkspace(t.workspace),
+            ...(versions.length ? { versions } : {})
         };
     } catch (error) {
         throw new ImportError(`Template “${name}”: ${describeError(error)}`);
@@ -396,7 +433,7 @@ export function createBackup({ templates, history, settings, schema = [] }) {
         modelVersion: newestVersion([...templates, ...history].map(item => item.workspace)),
         exportedAt: new Date().toISOString(),
         settings: sanitizeSettings(settings),
-        templates: templates.map(exportTemplate),
+        templates: templates.map(backupTemplate),
         history: history.map(({ timestamp, type, dialect, sql, workspace }) => ({ timestamp, type, dialect, sql, workspace: withModelVersion(workspace) })),
         schema: { tables: schema.map(exportTable) }
     };

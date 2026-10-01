@@ -45,6 +45,8 @@ import { describeFlow, hasFlow } from './flow.js';
 import { EXERCISES, findExercise, answerWorkspace, startWorkspace, practiceTables } from './exercises.js';
 import { checkExercise, createPracticeStore } from './practice.js';
 import { renderExerciseList, renderPracticePanel } from './ui/practice.js';
+import { diffLines } from './versions.js';
+import { renderVersionList, renderVersionCompare } from './ui/versions.js';
 import { previewSqlImport, guessDialect } from './sql-import.js';
 import { renderSqlImportPreview } from './ui/sql-import.js';
 import { createWebPlatform } from './platform/web.js';
@@ -161,6 +163,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         schemaImportDialog: $('schema-import-dialog'),
         sqlImportDialog: $('sql-import-dialog'),
         compareDialog: $('compare-dialog'),
+        versionsDialog: $('versions-dialog'),
         compare: $('compare-btn'),
         libraryPanel: /** @type {any} */ (doc.querySelector('.library-panel')),
         fileInput: $('file-input'),
@@ -1406,6 +1409,99 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         announceDialect();
     }
 
+    /** A template's earlier versions: compare each with the current query, restore or delete it. */
+    async function openVersions(id) {
+        const dialog = el.versionsDialog;
+        const list = dialog.querySelector('#versions-list');
+        const output = dialog.querySelector('#versions-compare');
+        /** @type {number | null} */
+        let selected = null;
+        // Both sides written with the same settings, formatted, so a
+        // difference is a change to the query
+        const sqlOf = (workspace) => {
+            try {
+                return generateSQL(workspace, generationOptions(true));
+            } catch {
+                return '';
+            }
+        };
+        const render = (focusAction = null, focusIndex = null) => {
+            const template = templates.get(id);
+            if (!template || !template.versions?.length) {
+                closeDialog(dialog, 'cancel');
+                return;
+            }
+            if (selected !== null && selected >= template.versions.length) selected = null;
+            const current = sqlOf(template.workspace);
+            const diffs = template.versions.map((/** @type {any} */ v) => diffLines(sqlOf(v.workspace), current));
+            dialog.querySelector('#versions-title').textContent = `Versions of “${template.name}”`;
+            renderVersionList(list, template, { dialectLabel: (d) => (d ? getDialect(d).label : 'Any dialect'), diffs, selected });
+            renderVersionCompare(output, selected === null ? null : template.versions[selected], selected === null ? null : diffs[selected]);
+            if (focusAction) {
+                const index = Math.min(focusIndex ?? 0, template.versions.length - 1);
+                (list.querySelector(`[data-action="${focusAction}"][data-index="${index}"]`) || list.querySelector('button'))?.focus();
+            }
+        };
+        const onClick = async (event) => {
+            const btn = event.target.closest('button[data-action]');
+            if (!btn || !list.contains(btn)) return;
+            const index = Number(btn.dataset.index);
+            const template = templates.get(id);
+            const version = template?.versions?.[index];
+            if (!version) return;
+            try {
+                switch (btn.dataset.action) {
+                    case 'version-compare':
+                        selected = selected === index ? null : index;
+                        render('version-compare', index);
+                        break;
+                    case 'version-restore': {
+                        const restored = templates.restoreVersion(id, index);
+                        closeDialog(dialog, 'confirm');
+                        const switched = switchDialect(restored.dialect);
+                        replaceWorkspace(structuredClone(restored.workspace),
+                            `Restored the version of “${restored.name}” from ${formatTime(version.savedAt)}${switched}. The query it replaced is kept as a version.`, restored.id);
+                        renderTemplates();
+                        break;
+                    }
+                    case 'version-delete': {
+                        const ok = await confirmDialog(el.confirmDialog, {
+                            title: 'Delete this version?',
+                            message: `The version of “${template.name}” saved ${formatTime(version.savedAt)} will be deleted. The current query doesn't change.`,
+                            confirmText: 'Delete version'
+                        });
+                        if (!ok) return;
+                        templates.deleteVersion(id, index);
+                        if (selected === index) selected = null;
+                        else if (selected !== null && selected > index) selected--;
+                        renderTemplates();
+                        render('version-delete', index);
+                        toast('Version deleted.');
+                        break;
+                    }
+                    default:
+                }
+            } catch (error) {
+                toast(error instanceof TemplateError ? error.message : 'Something went wrong.', 'error');
+            }
+        };
+        if (!templates.get(id)?.versions?.length) return;
+        render();
+        list.addEventListener('click', onClick);
+        let result;
+        try {
+            result = await showDialog(dialog, () => list.querySelector('button')?.focus());
+        } finally {
+            list.removeEventListener('click', onClick);
+            renderVersionCompare(output, null, null);
+        }
+        // The list was redrawn while the dialog was open: back to this template's buttons
+        if (result !== 'confirm' && !el.templateList.contains(doc.activeElement)) {
+            const item = (action) => el.templateList.querySelector(`[data-action="${action}"][data-id="${cssEscape(id)}"]`);
+            (item('template-versions') || item('template-load'))?.focus();
+        }
+    }
+
     function switchDialect(dialect) {
         if (!dialect || dialect === state.settings.dialect || !listDialects().some(d => d.id === dialect)) return '';
         updateSettings({ dialect });
@@ -1444,6 +1540,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     renderTemplates();
                     break;
                 }
+                case 'template-versions':
+                    await openVersions(id);
+                    break;
                 case 'template-rename': {
                     const template = templates.get(id);
                     if (!template) return;
@@ -1717,10 +1816,13 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             return;
         }
         try {
+            const changed = JSON.stringify(current.workspace) !== JSON.stringify(state.workspace);
             const saved = templates.update(current.id, state.workspace, { dialect: state.settings.dialect });
             renderTemplates();
             renderQueryName();
-            toast(`Saved “${saved.name}”.`, 'success');
+            toast(changed && !saved.keptVersion
+                ? `Saved “${saved.name}”. There wasn't room in browser storage to keep the previous version.`
+                : `Saved “${saved.name}”.`, 'success');
         } catch (error) {
             toast(error instanceof TemplateError ? error.message : 'The query could not be saved.', 'error');
         }
@@ -1796,7 +1898,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             suggester.close();
             return true;
         }
-        const dialogs = [el.confirmDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
+        const dialogs = [el.confirmDialog, el.versionsDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
         const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
         if (open) {
             closeDialog(open, 'cancel');
@@ -2151,7 +2253,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     }, 150));
 
     [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog, el.paletteDialog, el.backupDialog,
-        el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog].forEach(enhanceDialog);
+        el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.versionsDialog].forEach(enhanceDialog);
 
     bindShortcuts(doc, signal, {
         generate,

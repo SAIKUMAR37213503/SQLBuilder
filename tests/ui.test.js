@@ -2749,3 +2749,87 @@ describe('practice', () => {
         expect(toast()).toBe('Practice progress cleared.');
     });
 });
+
+describe('template versions', () => {
+    const saveVersions = async () => {
+        await fillSimpleSelect('orders', 'id');
+        $('#template-save-btn').click();
+        await answerTemplate('Orders');
+        type('select.from.table', 'invoices');
+        await settle();
+        $('#save-btn').click();
+        await settle();
+        type('select.columns.0.expr', 'total');
+        await settle();
+        $('#save-btn').click();
+        await settle();
+    };
+    const versionsButton = () => $('#template-list [data-action="template-versions"]');
+    const dialog = () => $('#versions-dialog');
+    const rows = () => $$('#versions-list .version-item').map(li => li.querySelector('.version-change')?.textContent ?? 'current');
+
+    test('Save keeps earlier versions, listed with what changed', async () => {
+        await saveVersions();
+        expect(toast()).toBe('Saved “Orders”.');
+        expect(versionsButton().textContent).toBe('Versions (2)');
+        versionsButton().click();
+        await settle();
+        expect(dialog().hasAttribute('open')).toBe(true);
+        expect($('#versions-title').textContent).toBe('Versions of “Orders”');
+        expect(rows()).toEqual(['current', '1 line added, 1 removed', '2 lines added, 2 removed']);
+        expect(document.activeElement.dataset.action).toBe('version-compare');
+    });
+
+    test('compare shows the changes line by line', async () => {
+        await saveVersions();
+        versionsButton().click();
+        await settle();
+        $('#versions-list [data-action="version-compare"][data-index="1"]').click();
+        expect($('#versions-compare .version-compare-title').textContent).toMatch(/to the current query: 2 lines added, 2 removed\.$/);
+        const lines = $$('#versions-compare .diff-line').map(l => [l.classList[1], l.lastChild.textContent]);
+        expect(lines).toEqual([
+            ['diff-removed', 'SELECT id\n'], ['diff-removed', 'FROM orders;\n'], ['diff-added', 'SELECT total\n'], ['diff-added', 'FROM invoices;\n']
+        ]);
+        expect($('#versions-list [data-index="1"][data-action="version-compare"]').getAttribute('aria-pressed')).toBe('true');
+        expect(document.activeElement.dataset.index).toBe('1');
+        // Pressing it again hides the changes
+        $('#versions-list [data-action="version-compare"][data-index="1"]').click();
+        expect($('#versions-compare').children).toHaveLength(0);
+    });
+
+    test('restore loads the version and keeps the replaced query', async () => {
+        await saveVersions();
+        versionsButton().click();
+        await settle();
+        $('#versions-list [data-action="version-restore"][data-index="1"]').click();
+        await settle();
+        expect(dialog().hasAttribute('open')).toBe(false);
+        expect(sql()).toBe('SELECT id\nFROM orders;');
+        expect(toast()).toMatch(/^Restored the version of “Orders” from .+\. The query it replaced is kept as a version\.$/);
+        expect($('.query-name-text').textContent).toBe('Orders');
+        expect(app.templates.list()[0].versions.map(v => v.workspace.select.from.table)).toEqual(['invoices', 'invoices']);
+        // Undo brings back what the builder had
+        app.undo();
+        await settle();
+        expect(sql()).toBe('SELECT total\nFROM invoices;');
+    });
+
+    test('delete asks first, and the last one closes the dialog', async () => {
+        await saveVersions();
+        versionsButton().click();
+        await settle();
+        $('#versions-list [data-action="version-delete"][data-index="0"]').click();
+        await answerConfirm();
+        expect(toast()).toBe('Version deleted.');
+        expect(rows()).toEqual(['current', '2 lines added, 2 removed']);
+        expect(document.activeElement.dataset.action).toBe('version-delete');
+        $('#versions-list [data-action="version-delete"][data-index="0"]').click();
+        await answerConfirm(false);
+        expect(rows()).toHaveLength(2);
+        $('#versions-list [data-action="version-delete"][data-index="0"]').click();
+        await answerConfirm();
+        expect(dialog().hasAttribute('open')).toBe(false);
+        expect(versionsButton()).toBe(null);
+        expect(document.activeElement).toBe($('#template-list [data-action="template-load"]'));
+    });
+});

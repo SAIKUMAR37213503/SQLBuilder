@@ -9,7 +9,7 @@ import { generateSQL } from '../src/generator.js';
 import { createStorage, createMemoryBackend } from '../src/storage.js';
 import { readDdl } from '../src/ddl.js';
 
-const DIALECTS = ['generic', 'sqlserver', 'postgres', 'mysql'];
+const DIALECTS = ['generic', 'sqlserver', 'postgresql', 'mysql'];
 
 const errorsIn = (ws, dialect = 'generic') => validateWorkspace(ws, { dialect }).filter(i => i.level === 'error').length;
 
@@ -113,7 +113,7 @@ describe('other correct answers pass', () => {
         ['most-expensive', 'SELECT TOP 5 name, price FROM products ORDER BY price DESC', 'sqlserver'],
         ['most-expensive', 'SELECT name, price FROM products ORDER BY price DESC OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY', 'sqlserver'],
         ['shipped-this-year', "SELECT id, status, placed_at FROM orders WHERE (status = 'shipped' OR status = 'delivered') AND placed_at BETWEEN '2026-01-01' AND '2026-12-31'"],
-        ['shipped-this-year', "SELECT * , status, placed_at FROM orders WHERE placed_at >= DATE '2026-01-01' AND status IN ('delivered', 'shipped')", 'postgres'],
+        ['shipped-this-year', "SELECT * , status, placed_at FROM orders WHERE placed_at >= DATE '2026-01-01' AND status IN ('delivered', 'shipped')", 'postgresql'],
         ['orders-per-customer', 'SELECT customers.name, COUNT(*) AS n FROM orders JOIN customers ON customers.id = orders.customer_id GROUP BY customers.name'],
         ['orders-per-customer', 'SELECT c.name, COUNT(o.id) FROM customers c LEFT JOIN orders o ON o.customer_id = c.id GROUP BY c.id, c.name'],
         ['revenue-per-category', 'SELECT p.category, SUM(oi.quantity * oi.unit_price) FROM products p JOIN order_items oi ON oi.product_id = p.id GROUP BY p.category ORDER BY SUM(oi.quantity * oi.unit_price) DESC'],

@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=4900bef99280">
+    <link rel="stylesheet" href="style.css?v=e079fb33e8b9">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -420,6 +420,18 @@
         </form>
     </dialog>
 
+    <dialog id="versions-dialog" class="dialog dialog-wide" aria-labelledby="versions-title" aria-describedby="versions-intro">
+        <form method="dialog" class="dialog-body">
+            <h2 id="versions-title" class="dialog-title">Versions</h2>
+            <p class="dialog-message" id="versions-intro">Each Save keeps the query it replaces, up to 10 per template. Restoring a version keeps the current query as a version too.</p>
+            <ul class="versions-list" id="versions-list" aria-label="Versions, newest first"></ul>
+            <div class="versions-compare" id="versions-compare" aria-live="polite"></div>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-secondary" value="cancel">Close</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="backup-dialog" class="dialog dialog-sm" aria-labelledby="backup-title" aria-describedby="backup-summary">
         <form method="dialog" class="dialog-body">
             <h2 id="backup-title" class="dialog-title">Restore from backup</h2>
@@ -472,6 +484,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=575ba97558f4" defer></script>
+    <script src="dist/sqlbuilder.js?v=932e5c690cb1" defer></script>
 </body>
 </html>

@@ -1242,3 +1242,30 @@ kbd {
 .practice-answer-sql { margin: 0; max-height: 16rem; overflow: auto; white-space: pre; }
 .practice-note { color: var(--text-2); font-size: 0.8rem; }
 .practice-done { border-color: var(--success); color: var(--success); }
+
+/* ------------------------------------------------------------ versions */
+
+.versions-list { display: grid; gap: 0.4rem; margin: 0; padding: 0; list-style: none; max-height: 18rem; overflow: auto; }
+.version-item { display: grid; gap: 0.35rem; padding: 0.5rem 0.65rem; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.version-item.is-selected { border-color: var(--accent); }
+.version-current { background: var(--surface-2); }
+.version-change { color: var(--text-2); }
+.versions-compare { display: grid; gap: 0.4rem; min-width: 0; }
+.versions-compare:empty { display: none; }
+.version-compare-title { margin: 0; font-weight: 600; }
+.version-diff {
+    margin: 0;
+    max-height: 22rem;
+    overflow: auto;
+    padding: 0.5rem 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    white-space: pre;
+}
+.diff-line { display: block; padding: 0 0.6rem; }
+.diff-added { background: color-mix(in srgb, var(--success) 16%, transparent); }
+.diff-removed { background: color-mix(in srgb, var(--danger) 14%, transparent); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--danger) 60%, transparent); }
+.diff-mark { color: var(--text-2); user-select: none; }
