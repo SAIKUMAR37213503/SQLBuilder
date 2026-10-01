@@ -185,8 +185,8 @@ function checkField(workspace, path, value, tables, add) {
     }
 }
 
-// Does `columns` include all of a primary or unique key of `table`?
-function coversKey(table, columns) {
+/** Does `columns` include all of a primary or unique key of `table`? */
+export function coversKey(table, columns) {
     const have = new Set(columns.map(key));
     return [table.primaryKey, ...table.unique].some((/** @type {string[]} */ k) => k.length > 0 && k.every(c => have.has(key(c))));
 }

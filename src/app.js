@@ -39,6 +39,8 @@ import { openPalette } from './ui/palette.js';
 import { createSuggester } from './ui/suggest.js';
 import { fieldContext, suggest } from './suggest.js';
 import { analyzeJoin, applyJoinCandidate, isEmptyGroup, checkSchema } from './joins.js';
+import { describeRelations } from './diagram.js';
+import { renderDiagram } from './ui/diagram.js';
 import { previewSqlImport, guessDialect } from './sql-import.js';
 import { renderSqlImportPreview } from './ui/sql-import.js';
 import { createWebPlatform } from './platform/web.js';
@@ -120,6 +122,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         structureSentence: $('structure-sentence'),
         explainButtons: $$('[data-explain-level]'),
         structureNotes: $('structure-notes'),
+        diagram: $('diagram'),
+        diagramScroll: $('diagram-scroll'),
+        diagramLinks: $('diagram-links'),
         issuesSummary: $('issues-summary'),
         issuesList: $('issues-list'),
         issues: /** @type {any} */ (doc.querySelector('.issues')),
@@ -457,6 +462,21 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                 h('p', { class: 'structure-explain' }, step.explanation),
                 ...(more[step.key] || []).map(text => h('p', { class: 'structure-more' }, text)))));
         el.structureNotes.textContent = notes.join(' ');
+        renderDiagramPanel();
+    }
+
+    /** The tables and joins diagram: shown when the main SELECT has a join, drawn while open. */
+    function renderDiagramPanel() {
+        const select = state.workspace.type === 'select' ? state.workspace.select : null;
+        el.diagram.hidden = !select || select.joins.length === 0;
+        if (el.diagram.hidden || !el.diagram.open) return;
+        const { svg, links } = renderDiagram(describeRelations(select, { tables: schema.list() }));
+        const first = el.diagramScroll.childElementCount === 0;
+        el.diagramScroll.replaceChildren(svg);
+        el.diagramLinks.replaceChildren(links);
+        // On a narrow screen the drawing scrolls sideways; start at its middle,
+        // where the FROM table is
+        if (first) el.diagramScroll.scrollLeft = Math.max(0, (el.diagramScroll.scrollWidth - el.diagramScroll.clientWidth) / 2);
     }
 
     /** The insights row: how many parts a SELECT has, and a rough band. */
@@ -1831,6 +1851,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         const btn = event.target.closest('button[data-action="structure-jump"]');
         if (btn) jumpTo({ section: btn.dataset.section, path: btn.dataset.path });
     });
+    el.diagramLinks.addEventListener('click', (event) => {
+        const btn = event.target.closest('button[data-action="structure-jump"]');
+        if (btn) goToField(btn.dataset.path);
+    });
+    el.diagram.addEventListener('toggle', () => renderDiagramPanel());
 
     doc.addEventListener('click', (event) => {
         const cmd = /** @type {any} */ (event.target).closest('[data-command]');

@@ -1477,6 +1477,80 @@ describe('template library', () => {
     });
 });
 
+describe('tables and joins diagram', () => {
+    const openDiagram = async () => {
+        $('#structure').open = true;
+        const diagram = $('#diagram');
+        diagram.open = true;
+        diagram.dispatchEvent(new Event('toggle'));
+        await settle();
+    };
+    const links = () => $$('#diagram-links .diagram-jump').map(n => n.textContent);
+
+    test('shows only for a SELECT with a join, and draws while open', async () => {
+        await fillSimpleSelect();
+        expect($('#diagram').hidden).toBe(true);
+        $('#example-list [data-action="example-load"][data-id="join-aggregate"]').click();
+        await settle();
+        expect($('#diagram').hidden).toBe(false);
+        expect($('#diagram-scroll').children).toHaveLength(0);
+        await openDiagram();
+        const svg = $('#diagram-scroll svg');
+        expect(svg.getAttribute('aria-hidden')).toBe('true');
+        expect($$('#diagram-scroll .diagram-node')).toHaveLength(2);
+        expect($$('#diagram-scroll .diagram-title').map(n => n.textContent)).toEqual(['customers', 'orders']);
+        expect(links()).toEqual(['customers c to orders o: LEFT JOIN on c.id = o.customer_id']);
+        expect($('#diagram-scroll').getAttribute('role')).toBe('region');
+        expect($('#diagram-scroll').tabIndex).toBe(0);
+    });
+
+    test('follows edits, and a link opens its join', async () => {
+        $('#example-list [data-action="example-load"][data-id="join-aggregate"]').click();
+        await settle();
+        await openDiagram();
+        type('select.joins.0.source.alias', 'ord');
+        type('select.joins.0.on.items.0.left', 'ord.customer_id');
+        await settle();
+        expect(links()[0]).toBe('customers c to orders ord: LEFT JOIN on c.id = ord.customer_id');
+        $('#diagram-links .diagram-jump').click();
+        expect(document.activeElement.dataset.path).toBe('select.joins.0.type');
+        $('[data-action="remove-item"][data-path="select.joins.0"]').click();
+        await settle();
+        expect($('#diagram').hidden).toBe(true);
+    });
+
+    test('uses the schema for keys, and names are drawn as text', async () => {
+        boot(createMemoryBackend({
+            [`${STORAGE_PREFIX}schema`]: JSON.stringify({ tables: [
+                { name: 'customers', columns: [{ name: 'id' }, { name: 'name' }], primaryKey: ['id'] },
+                { name: 'orders', columns: [{ name: 'id' }, { name: 'customer_id' }], primaryKey: ['id'], foreignKeys: [{ columns: ['customer_id'], refTable: 'customers', refColumns: ['id'] }] }
+            ] })
+        }));
+        type('select.from.table', 'customers');
+        type('select.from.alias', '<img src=x onerror=alert(1)>');
+        type('select.columns.0.expr', 'name');
+        add('select.joins', 'join');
+        await settle();
+        type('select.joins.0.source.table', 'orders');
+        type('select.joins.0.source.alias', 'o');
+        await settle();
+        await openDiagram();
+        expect($('#diagram-scroll img')).toBeNull();
+        expect($$('#diagram-scroll .diagram-subtitle').map(n => n.textContent)[0]).toMatch(/^<img src=x onerror=alert\(1\)> /);
+        expect(links()[0]).toBe('orders o: INNER JOIN, but ON names no column of an earlier table');
+        // The alias, not the table name, names the FROM table now
+        type('select.joins.0.on.items.0.left', 'o.customer_id');
+        type('select.joins.0.on.items.0.value', 'customers.id');
+        choose('select.joins.0.on.items.0.valueType', 'column');
+        await settle();
+        expect(links()[0]).toBe('orders o: INNER JOIN, but ON names no column of an earlier table');
+        type('select.from.alias', '');
+        await settle();
+        expect(links()).toEqual(['customers to orders o: INNER JOIN on customers.id = o.customer_id · one to many · a foreign key in your schema']);
+        expect($$('#diagram-scroll .diagram-column').map(n => n.textContent)).toEqual(['id  PK', 'customer_id  FK']);
+    });
+});
+
 describe('query structure panel', () => {
     const loadExample = async (id) => {
         $(`#example-list [data-action="example-load"][data-id="${id}"]`).click();

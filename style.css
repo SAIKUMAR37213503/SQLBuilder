@@ -815,6 +815,49 @@ kbd {
 .structure-detail { color: var(--text-2); font-size: 0.85rem; overflow-wrap: anywhere; }
 .structure-explain { margin: 0 0 0.2rem 2.25rem; color: var(--text-muted); font-size: 0.8rem; }
 .structure-more { margin: 0.15rem 0 0.2rem 2.25rem; padding-left: 0.5rem; border-left: 2px solid var(--border); color: var(--text-2); font-size: 0.8rem; }
+/* Tables and joins diagram (inside Query structure) */
+.diagram { margin: 0.4rem 0.75rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.diagram-summary { display: flex; gap: 0.35rem; align-items: center; min-height: 2.5rem; padding: 0.35rem 0.6rem; font-size: 0.85rem; font-weight: 650; cursor: pointer; list-style: none; }
+.diagram-summary::-webkit-details-marker { display: none; }
+.diagram-summary::before { content: "▸"; color: var(--text-muted); transition: transform var(--transition); }
+.diagram[open] > .diagram-summary::before { transform: rotate(90deg); }
+.diagram-summary:hover { background: var(--surface-2); }
+.diagram-intro { margin: 0 0 0.4rem; padding: 0 0.6rem; color: var(--text-muted); font-size: 0.8rem; }
+.diagram-scroll { overflow-x: auto; padding: 0 0.6rem; }
+.diagram-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.diagram-svg { display: block; margin: 0 auto; max-width: none; font-family: var(--font-mono); }
+.diagram-node rect { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1; }
+.diagram-known rect { stroke: var(--accent); }
+.diagram-cte rect, .diagram-subquery rect { stroke-dasharray: 5 3; }
+.diagram-title { fill: var(--text); font-size: 12px; font-weight: 700; }
+.diagram-subtitle { fill: var(--text-muted); font-size: 11px; }
+.diagram-column { fill: var(--text-2); font-size: 11px; }
+.diagram-rule { stroke: var(--border); }
+.diagram-edge path { fill: none; stroke: var(--text-muted); stroke-width: 1.5; }
+.diagram-edge-fk path { stroke: var(--accent); }
+.diagram-edge-many path { stroke: var(--warning); }
+.diagram-edge-unlinked path { stroke-dasharray: 4 4; }
+.diagram-arrow { fill: var(--text-muted); }
+.diagram-label-bg { fill: var(--surface-2); stroke: var(--border); }
+.diagram-label { fill: var(--text-2); font-size: 10.5px; }
+.diagram-links { display: grid; gap: 0.15rem; margin: 0.4rem 0 0.5rem; padding: 0 0.4rem; list-style: none; }
+.diagram-jump {
+    width: 100%;
+    min-height: 2.75rem;
+    padding: 0.35rem 0.4rem;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 0.8rem;
+    text-align: left;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+}
+.diagram-jump:hover { background: var(--surface-2); }
+.diagram-jump:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
 .structure-sentence { margin: 0.6rem 0 0; padding: 0 0.75rem; color: var(--text); font-size: 0.85rem; overflow-wrap: anywhere; }
 .structure-levels { display: flex; flex-wrap: wrap; gap: 0.35rem 0.6rem; align-items: center; padding: 0 0.75rem; margin-bottom: 0.5rem; }
 .structure-levels-label { color: var(--text-muted); font-size: 0.8rem; font-weight: 600; }
