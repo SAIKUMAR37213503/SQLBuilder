@@ -64,7 +64,8 @@ A custom SQL condition that contains a top-level `AND`/`OR` is wrapped in parent
 - Syntax highlighting (including parameter placeholders) and line numbers; the line numbers are never copied
 - Live preview while you type (can be switched off)
 - **Query structure**: a panel under the SQL that lists the parts of the query in the order a database works through them (for a SELECT: WITH, FROM, JOIN, WHERE, GROUP BY, HAVING, SELECT, UNION, ORDER BY, LIMIT/TOP), each with a one-line explanation. Selecting a step opens that part of the builder. Above the steps, an insights row counts the CTEs, joins, subqueries, combined queries, aggregates, window functions and filters, shows the nesting depth, and gives an overall band: simple, moderate or involved. A one-sentence summary above it says what the query does in plain words (“Returns department and the average salary from employees, where salary is greater than 50000, one row per department, sorted by AVG(salary) descending.”). An **Explain for** switch picks how much each step explains, and is remembered: **Beginner** (what each step does), **Developer** (how LEFT and other joins treat unmatched rows, repeated matches, NULLs in comparisons, NOT IN with a subquery, WHERE vs HAVING, what DISTINCT has to do, a WHERE condition that undoes a LEFT JOIN) and **Advanced** (window frames, including the RANGE default with ORDER BY, set-operation precedence, and the selected dialect's NULL ordering and pagination rules). The insights row describes structure only; it says nothing about speed.
-- **Tables and joins diagram** (inside Query structure, for a SELECT with joins): the main query's tables, CTEs and derived tables as boxes, with a link for each join drawn from its ON condition and labeled with the join type. With a schema, boxes mark key columns (PK, FK), links that follow a foreign key are highlighted, and each link says whether a row can match one row or many (“many : many” is highlighted, since rows can repeat). A join whose ON names no earlier table, and a CROSS JOIN, are drawn dashed. The same links are listed as text under the drawing; selecting one opens that join. The diagram is drawn locally as SVG with no layout library, and scrolls sideways on narrow screens.
+- **Query flow** (inside Query structure, for a SELECT with CTEs, subqueries or UNION parts): one box per part of the query, drawn above the part it feeds, with the main query at the bottom. Each box lists the tables it reads and what it does in order (JOIN, WHERE, GROUP BY, aggregates, HAVING, window functions, DISTINCT, ORDER BY, a row limit); links say how a part is used (CTE, a join, `IN`, `NOT EXISTS`, `UNION ALL` …). A recursive CTE's repeating part says so instead of linking to itself, and a CTE nothing uses says that too. The parts are listed as text under the drawing; selecting one opens that part in the builder, including sections it sits inside.
+- **Tables and joins diagram** (inside Query structure, for a SELECT with joins): the main query's tables, CTEs and derived tables as boxes, with a link for each join drawn from its ON condition and labeled with the join type. With a schema, boxes mark key columns (PK, FK), links that follow a foreign key are highlighted, and each link says whether a row can match one row or many (“many : many” is highlighted, since rows can repeat). A join whose ON names no earlier table, and a CROSS JOIN, are drawn dashed. The same links are listed as text under the drawing; selecting one opens that join. Both drawings are made on the device as SVG with no layout library; a link that skips a row passes between boxes, and a wide drawing scrolls sideways.
 - **Compare dialects** (Compare… next to the dialect picker, or the command palette): the current query as the selected dialect writes it next to another dialect's SQL, with each difference listed by line (“LIMIT 20 OFFSET 40” becomes “OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY”, TRUE becomes 1, `$1` becomes `?`) and the checks the other dialect would add, such as an upsert SQL Server can't express or `GETDATE()` in PostgreSQL. Nothing changes unless you choose Switch.
 - Copy, Select all, Download `.sql`. On Android, Download and Export open the share sheet so you can save to Files or Drive, or send to another app. A Share button shares the SQL text.
 
@@ -242,7 +243,8 @@ src/
 ├── sql-lexer.js      SQL tokens with positions, for reading pasted DDL and imported SQL
 ├── sql-import.js     Reads a SELECT into the model (recursive descent; refuses with line and column)
 ├── roundtrip.js      Compares imported SQL with the builder's SQL, token by token
-├── diagram.js        Tables and joins diagram: what to draw and where (no DOM)
+├── diagram.js        Tables and joins diagram, and the shared box-and-link layout (no DOM)
+├── flow.js           Query flow: which part of a SELECT feeds which (no DOM)
 ├── suggest.js        Which tables/columns a builder field can use (scope, aliases, CTEs)
 ├── joins.js          JOIN assistant (ON from foreign keys) and schema checks (tips/warnings)
 ├── storage.js        Guarded localStorage wrapper
@@ -260,7 +262,7 @@ src/
     ├── suggest.js    Suggestion list under builder fields (ARIA combobox)
     ├── sql-import.js Import SQL dialog preview (check result and differences)
     ├── compare.js    Compare dialects dialog (differences, checks, both SQLs)
-    ├── diagram.js    Draws the tables and joins diagram as SVG, with its list of links
+    ├── diagram.js    Draws the tables and joins diagram and the query flow as SVG, with their lists
     ├── theme.js, shortcuts.js, dom.js (safe element builder)
 ```
 

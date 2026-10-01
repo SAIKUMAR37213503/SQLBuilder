@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=3c32434c8057">
+    <link rel="stylesheet" href="style.css?v=bada1c4ed2db">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -109,6 +109,12 @@
                         <p class="structure-intro">The order a database works through this query, which differs from the order it is written. Select a step to edit it.</p>
                         <ol class="structure-steps" id="structure-steps"></ol>
                         <p class="structure-notes" id="structure-notes"></p>
+                        <details class="diagram" id="flow" hidden>
+                            <summary class="diagram-summary">Query flow</summary>
+                            <p class="diagram-intro">How the parts of the query feed each other: CTEs, derived tables, subqueries and UNION parts above the part that uses them, each with where it filters, groups and sorts. Select a part to edit it.</p>
+                            <div class="diagram-scroll" id="flow-scroll" tabindex="0" role="region" aria-label="Diagram of the query's parts (also listed below)"></div>
+                            <div id="flow-links"></div>
+                        </details>
                         <details class="diagram" id="diagram" hidden>
                             <summary class="diagram-summary">Tables and joins diagram</summary>
                             <p class="diagram-intro" id="diagram-intro">The main query's tables and how its ON conditions link them. Select a link to edit that join.</p>
@@ -449,6 +455,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=10c11d9eb20d" defer></script>
+    <script src="dist/sqlbuilder.js?v=8c9191c486c3" defer></script>
 </body>
 </html>

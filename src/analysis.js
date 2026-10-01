@@ -311,7 +311,8 @@ function groupSubqueries(group, visit) {
     });
 }
 
-const isAggregateColumn = (col) => (col.kind === 'column' && (Boolean(col.aggregate) || containsAggregateCall(col.expr)))
+/** Whether a column aggregates (COUNT etc., or an aggregate call inside it). */
+export const isAggregateColumn = (col) => (col.kind === 'column' && (Boolean(col.aggregate) || containsAggregateCall(col.expr)))
     || (col.kind === 'case' && col.cases.some(c => containsAggregateCall(c.when) || containsAggregateCall(c.then)));
 
 export const BANDS = ['simple', 'moderate', 'involved'];

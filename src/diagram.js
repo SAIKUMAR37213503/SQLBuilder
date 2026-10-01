@@ -180,10 +180,14 @@ export function cardinality(edge) {
 // ---------------------------------------------------------------------------
 
 export const LAYOUT = Object.freeze({
-    charWidth: 7.2, labelHalf: 56, minWidth: 120, maxWidth: 240, header: 40, row: 18, padding: 8, gapX: 28, gapY: 64, margin: 12, maxChars: 30
+    charWidth: 7.2, labelHalf: 56, passWidth: 12, minWidth: 120, maxWidth: 240, header: 40, row: 18, padding: 8, gapX: 28, gapY: 64, margin: 12, maxChars: 30
 });
 
-/** Shortens text to `max` characters with an ellipsis. */
+/**
+ * Shortens text to `max` characters with an ellipsis.
+ * @param {string} text
+ * @param {number} [max]
+ */
 export function clip(text, max = LAYOUT.maxChars) {
     const value = String(text);
     return value.length > max ? `${value.slice(0, max - 1)}…` : value;
@@ -201,54 +205,129 @@ export function nodeLines(n) {
 
 /**
  * @param {{ nodes: DiagramNode[], edges: DiagramEdge[] }} relations
- * @returns {{ width: number, height: number, boxes: { id: number, x: number, y: number, w: number, h: number }[],
- *   lines: { edge: number, x1: number, y1: number, x2: number, y2: number, lx: number, ly: number }[] }}
  */
-export function layoutDiagram({ nodes, edges }) {
+export function layoutDiagram(relations) {
+    return layoutGraph(relations, nodeLines);
+}
+
+/**
+ * Lays out any boxes-and-links drawing top to bottom. With rank 'sources'
+ * (the default), a box sits one row below the lowest box that links into it;
+ * with rank 'sink', a box sits one row above the highest box it links to, so
+ * everything converges on the bottom row. Links from a box to itself are left
+ * out, and a loop can't make the layout run forever. Labels sit just above
+ * where a link enters its box, or with labels 'source' just below where it
+ * leaves (for drawings where many links enter one box).
+ * @param {{ nodes: { id: number }[], edges: { from: number, to: number }[] }} graph
+ * @param {(node: any) => { title: string, subtitle: string, columns: string[] }} linesOf
+ * @param {{ rank?: 'sources' | 'sink', labels?: 'target' | 'source' }} [options]
+ * @returns {{ width: number, height: number, boxes: { id: number, x: number, y: number, w: number, h: number }[],
+ *   lines: { edge: number, x1: number, y1: number, x2: number, y2: number, lx: number, ly: number, via: number[][] }[] }}
+ *   via: points a link passes through between its ends, in pairs (top and bottom of a row)
+ */
+export function layoutGraph({ nodes, edges }, linesOf, { rank = 'sources', labels = 'target' } = {}) {
     const L = LAYOUT;
-    const layer = nodes.map(() => 0);
-    for (const n of nodes.slice(1)) {
-        const parents = edges.filter(e => e.to === n.id).map(e => e.from);
-        layer[n.id] = 1 + Math.max(0, ...parents.map(p => layer[p]));
-    }
+    const links = edges.filter(e => e.from !== e.to);
+    /** @type {number[]} */
+    const depth = [];
+    const visiting = new Set();
+    // sources: how many links lead into a box; sink: how many lead out of it
+    const depthOf = (/** @type {number} */ id) => {
+        if (depth[id] !== undefined) return depth[id];
+        if (visiting.has(id)) return 0;
+        visiting.add(id);
+        const next = rank === 'sink' ? links.filter(e => e.from === id).map(e => e.to) : links.filter(e => e.to === id).map(e => e.from);
+        depth[id] = next.length ? 1 + Math.max(...next.map(depthOf)) : 0;
+        visiting.delete(id);
+        return depth[id];
+    };
+    nodes.forEach(n => depthOf(n.id));
+    const deepest = Math.max(0, ...depth);
+    const layer = rank === 'sink' ? depth.map(d => deepest - d) : depth;
     const size = nodes.map(n => {
-        const lines = nodeLines(n);
+        const lines = linesOf(n);
         const longest = Math.max(...[lines.title, lines.subtitle, ...lines.columns].map(t => t.length));
         return {
             w: Math.round(Math.min(L.maxWidth, Math.max(L.minWidth, longest * L.charWidth + 2 * L.padding))),
             h: L.header + lines.columns.length * L.row + (lines.columns.length ? L.padding : 0)
         };
     });
-    const layers = [...new Set(layer)].sort((a, b) => a - b).map(k => nodes.filter(n => layer[n.id] === k).map(n => n.id));
-    const rowWidth = (/** @type {number[]} */ ids) => ids.reduce((sum, id) => sum + size[id].w, 0) + (ids.length - 1) * L.gapX;
-    const width = Math.max(...layers.map(rowWidth)) + 2 * L.margin;
+    const levels = [...new Set(layer)].sort((p, q) => p - q);
+    const row = (/** @type {number} */ id) => levels.indexOf(layer[id]);
+    // Each row holds boxes, plus a thin gap for every link that passes
+    // through it to a lower row, so a long link never runs behind a box
+    /** @type {{ box?: number, edge?: number, w: number }[][]} */
+    const rows = levels.map(k => nodes.filter(n => layer[n.id] === k).map(n => ({ box: n.id, w: size[n.id].w })));
+    links.forEach(e => {
+        for (let r = row(e.from) + 1; r < row(e.to); r++) rows[r].push({ edge: edges.indexOf(e), w: L.passWidth });
+    });
+    const rowWidth = (/** @type {{ w: number }[]} */ items) => items.reduce((sum, item) => sum + item.w, 0) + (items.length - 1) * L.gapX;
+    const width = Math.max(...rows.map(rowWidth)) + 2 * L.margin;
     /** @type {{ id: number, x: number, y: number, w: number, h: number }[]} */
     const boxes = [];
-    let y = L.margin;
-    for (const ids of layers) {
-        let x = (width - rowWidth(ids)) / 2;
-        for (const id of ids) {
-            boxes[id] = { id, x: Math.round(x), y, w: size[id].w, h: size[id].h };
-            x += size[id].w + L.gapX;
+    const centre = (/** @type {number} */ id) => boxes[id].x + boxes[id].w / 2;
+    const heights = rows.map(items => Math.max(0, ...items.filter(item => item.box !== undefined).map(item => size[/** @type {number} */ (item.box)].h)));
+    const tops = heights.map((_, r) => L.margin + heights.slice(0, r).reduce((sum, h) => sum + h + L.gapY, 0));
+    /** @type {Map<string, number>} where each passing link crosses each row */
+    const passX = new Map();
+    const passKey = (/** @type {number} */ edge, /** @type {number} */ r) => passX.get(`${edge}:${r}`);
+    // Rows are placed one after another, following the row already placed:
+    // top down when links run from sources, bottom up when they converge on
+    // one box. A box goes near the boxes it links with, a passing link near
+    // where it comes from or goes to.
+    const down = rank !== 'sink';
+    const order = down ? rows.map((_, r) => r) : rows.map((_, r) => rows.length - 1 - r);
+    order.forEach((r, n) => {
+        const near = n === 0 ? null : (down ? r - 1 : r + 1);
+        const keyed = rows[r].map((item, i) => {
+            if (near === null) return { item, key: i, i };
+            if (item.edge !== undefined) {
+                const e = edges[item.edge];
+                const end = down ? e.from : e.to;
+                return { item, key: passKey(item.edge, near) ?? centre(end), i };
+            }
+            const others = links
+                .filter(e => (down ? e.to === item.box && row(e.from) < r : e.from === item.box && row(e.to) > r))
+                .map(e => passKey(edges.indexOf(e), near) ?? centre(down ? e.from : e.to));
+            return { item, key: others.length ? others.reduce((sum, x) => sum + x, 0) / others.length : Infinity, i };
+        }).sort((p, q) => p.key - q.key || p.i - q.i);
+        let x = (width - rowWidth(rows[r])) / 2;
+        for (const { item } of keyed) {
+            if (item.box !== undefined) {
+                boxes[item.box] = { id: item.box, x: Math.round(x), y: tops[r], w: size[item.box].w, h: size[item.box].h };
+            } else {
+                passX.set(`${item.edge}:${r}`, Math.round(x + item.w / 2));
+            }
+            x += item.w + L.gapX;
         }
-        y += Math.max(...ids.map(id => size[id].h)) + L.gapY;
-    }
+    });
+    const y = tops[tops.length - 1] + heights[heights.length - 1] + L.gapY;
     const height = y - L.gapY + L.margin;
 
-    // Several links into one box enter its top side spread apart. Each label
-    // sits just above where its link enters, so labels of links from one
-    // table to boxes side by side don't overlap; labels into one box step up.
+    // Several links into one box enter its top side spread apart, and several
+    // links out of one box leave its bottom spread apart, each in the order of
+    // the box at the other end so they don't cross there. Labels into one box
+    // step up so they don't cover each other.
+    const byX = (/** @type {number} */ id) => boxes[id].x;
     const lines = edges.map((e, i) => {
         const a = boxes[e.from];
         const b = boxes[e.to];
-        const into = edges.filter(o => o.to === e.to);
-        const slot = (into.indexOf(e) + 1) / (into.length + 1);
-        const x1 = a.x + a.w / 2;
+        const into = links.filter(o => o.to === e.to).sort((p, q) => byX(p.from) - byX(q.from) || edges.indexOf(p) - edges.indexOf(q));
+        const out = links.filter(o => o.from === e.from).sort((p, q) => byX(p.to) - byX(q.to) || edges.indexOf(p) - edges.indexOf(q));
+        const x1 = labels === 'source' ? Math.round(a.x + a.w * (out.indexOf(e) + 1) / (out.length + 1)) : a.x + a.w / 2;
         const y1 = a.y + a.h;
-        const x2 = Math.round(b.x + b.w * slot);
+        const x2 = Math.round(b.x + b.w * (into.indexOf(e) + 1) / (into.length + 1));
         const y2 = b.y;
-        const lx = Math.round(Math.min(Math.max(x2, L.labelHalf), width - L.labelHalf));
-        return { edge: i, x1, y1, x2, y2, lx, ly: Math.round(y2 - 20 - into.indexOf(e) * 20) };
+        const at = labels === 'source' ? x1 : x2;
+        const lx = Math.round(Math.min(Math.max(at, L.labelHalf), width - L.labelHalf));
+        const ly = labels === 'source' ? y1 + 18 : y2 - 20 - into.indexOf(e) * 20;
+        // Where the link passes through rows on its way down
+        const via = [];
+        for (let r = row(e.from) + 1; r < row(e.to); r++) {
+            const x = /** @type {number} */ (passKey(i, r));
+            via.push([x, tops[r]], [x, tops[r] + heights[r]]);
+        }
+        return { edge: i, x1, y1, x2, y2, lx, ly: Math.round(ly), via };
     });
     return { width: Math.round(width), height: Math.round(height), boxes, lines };
 }

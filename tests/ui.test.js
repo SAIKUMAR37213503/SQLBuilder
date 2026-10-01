@@ -1477,6 +1477,60 @@ describe('template library', () => {
     });
 });
 
+describe('query flow', () => {
+    const openFlow = async () => {
+        $('#structure').open = true;
+        const flow = $('#flow');
+        flow.open = true;
+        flow.dispatchEvent(new Event('toggle'));
+        await settle();
+    };
+    const parts = () => $$('#flow-links .diagram-jump').map(n => n.textContent);
+
+    test('shows for a query with more than one part, and draws while open', async () => {
+        await fillSimpleSelect();
+        expect($('#flow').hidden).toBe(true);
+        $('#example-list [data-action="example-load"][data-id="cte"]').click();
+        await settle();
+        expect($('#flow').hidden).toBe(false);
+        expect($('#flow-scroll').children).toHaveLength(0);
+        await openFlow();
+        expect($('#flow-scroll svg').getAttribute('aria-hidden')).toBe('true');
+        expect($$('#flow-scroll .diagram-title').map(n => n.textContent)).toEqual(['Main query', 'dept_pay']);
+        expect(parts()).toEqual([
+            'Main query: uses dept_pay, WHERE: 1 condition, ORDER BY',
+            'dept_pay (CTE): reads employees, GROUP BY: 1 column, 1 aggregate; feeds the main query'
+        ]);
+        expect($$('[id="flow-arrow"]')).toHaveLength(1);
+    });
+
+    test('a part opens its section, and the closed sections around it', async () => {
+        $('#example-list [data-action="example-load"][data-id="cte"]').click();
+        await settle();
+        const ctes = $('details[data-section="select:ctes"]');
+        ctes.open = false;
+        await openFlow();
+        $$('#flow-links .diagram-jump')[1].click();
+        expect(ctes.open).toBe(true);
+        const section = $('details[data-section="select.ctes.0.query:from"]');
+        expect(section.open).toBe(true);
+        expect(document.activeElement).toBe(section.querySelector('summary'));
+    });
+
+    test('follows edits', async () => {
+        $('#example-list [data-action="example-load"][data-id="cte"]').click();
+        await settle();
+        await openFlow();
+        type('select.ctes.0.name', 'pay');
+        type('select.from.table', 'pay');
+        await settle();
+        expect(parts()[1]).toBe('pay (CTE): reads employees, GROUP BY: 1 column, 1 aggregate; feeds the main query');
+        type('select.from.table', 'employees');
+        await settle();
+        expect(parts()[1]).toBe('pay (CTE): reads employees, GROUP BY: 1 column, 1 aggregate; not used by any other part');
+    });
+});
+
 describe('tables and joins diagram', () => {
     const openDiagram = async () => {
         $('#structure').open = true;

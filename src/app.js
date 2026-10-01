@@ -40,7 +40,8 @@ import { createSuggester } from './ui/suggest.js';
 import { fieldContext, suggest } from './suggest.js';
 import { analyzeJoin, applyJoinCandidate, isEmptyGroup, checkSchema } from './joins.js';
 import { describeRelations } from './diagram.js';
-import { renderDiagram } from './ui/diagram.js';
+import { renderDiagram, renderFlow } from './ui/diagram.js';
+import { describeFlow, hasFlow } from './flow.js';
 import { previewSqlImport, guessDialect } from './sql-import.js';
 import { renderSqlImportPreview } from './ui/sql-import.js';
 import { createWebPlatform } from './platform/web.js';
@@ -122,6 +123,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         structureSentence: $('structure-sentence'),
         explainButtons: $$('[data-explain-level]'),
         structureNotes: $('structure-notes'),
+        flow: $('flow'),
+        flowScroll: $('flow-scroll'),
+        flowLinks: $('flow-links'),
         diagram: $('diagram'),
         diagramScroll: $('diagram-scroll'),
         diagramLinks: $('diagram-links'),
@@ -462,7 +466,20 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                 h('p', { class: 'structure-explain' }, step.explanation),
                 ...(more[step.key] || []).map(text => h('p', { class: 'structure-more' }, text)))));
         el.structureNotes.textContent = notes.join(' ');
+        renderFlowPanel();
         renderDiagramPanel();
+    }
+
+    /** The query flow: shown when the SELECT has more than one part, drawn while open. */
+    function renderFlowPanel() {
+        const select = state.workspace.type === 'select' ? state.workspace.select : null;
+        el.flow.hidden = !hasFlow(select);
+        if (el.flow.hidden || !el.flow.open) return;
+        const { svg, links } = renderFlow(describeFlow(select));
+        const first = el.flowScroll.childElementCount === 0;
+        el.flowScroll.replaceChildren(svg);
+        el.flowLinks.replaceChildren(links);
+        if (first) el.flowScroll.scrollLeft = Math.max(0, (el.flowScroll.scrollWidth - el.flowScroll.clientWidth) / 2);
     }
 
     /** The tables and joins diagram: shown when the main SELECT has a join, drawn while open. */
@@ -505,8 +522,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             if (path) goToField(path);
             return;
         }
-        details.open = true;
-        state.openSections.set(section, true);
+        // A part inside a closed CTE or subquery opens the sections around it too
+        for (let node = details; node && el.builder.contains(node); node = node.parentElement?.closest('details')) {
+            node.open = true;
+            if (node.dataset.section) state.openSections.set(node.dataset.section, true);
+        }
         const summary = details.querySelector('summary');
         summary.focus();
         if (typeof summary.scrollIntoView === 'function') summary.scrollIntoView({ block: 'start', behavior: 'smooth' });
@@ -1856,6 +1876,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         if (btn) goToField(btn.dataset.path);
     });
     el.diagram.addEventListener('toggle', () => renderDiagramPanel());
+    el.flowLinks.addEventListener('click', (event) => {
+        const btn = event.target.closest('button[data-action="structure-jump"]');
+        if (btn) jumpTo({ section: btn.dataset.section, path: btn.dataset.path });
+    });
+    el.flow.addEventListener('toggle', () => renderFlowPanel());
 
     doc.addEventListener('click', (event) => {
         const cmd = /** @type {any} */ (event.target).closest('[data-command]');

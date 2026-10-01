@@ -833,6 +833,8 @@ kbd {
 .diagram-subtitle { fill: var(--text-muted); font-size: 11px; }
 .diagram-column { fill: var(--text-2); font-size: 11px; }
 .diagram-rule { stroke: var(--border); }
+.flow-main rect { stroke: var(--accent); stroke-width: 2; }
+.flow-cte rect { stroke-dasharray: 5 3; }
 .diagram-edge path { fill: none; stroke: var(--text-muted); stroke-width: 1.5; }
 .diagram-edge-fk path { stroke: var(--accent); }
 .diagram-edge-many path { stroke: var(--warning); }
