@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=bada1c4ed2db">
+    <link rel="stylesheet" href="style.css?v=4900bef99280">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -53,6 +53,9 @@
                         <label class="type-tab"><input type="radio" name="query-type" value="delete"><span>DELETE</span></label>
                     </div>
                 </div>
+
+                <section class="practice" id="practice" aria-labelledby="practice-title" hidden></section>
+                <p class="visually-hidden" id="practice-status" role="status" aria-live="polite"></p>
 
                 <form id="builder" class="builder" novalidate aria-label="Query builder" tabindex="-1"></form>
 
@@ -140,6 +143,7 @@
                         <button type="button" role="tab" id="tab-templates" aria-controls="panel-templates" aria-selected="false" tabindex="-1">Templates</button>
                         <button type="button" role="tab" id="tab-examples" aria-controls="panel-examples" aria-selected="false" tabindex="-1">Examples</button>
                         <button type="button" role="tab" id="tab-schema" aria-controls="panel-schema" aria-selected="false" tabindex="-1">Schema</button>
+                        <button type="button" role="tab" id="tab-practice" aria-controls="panel-practice" aria-selected="false" tabindex="-1">Practice</button>
                     </div>
 
                     <div role="tabpanel" id="panel-history" aria-labelledby="tab-history" class="tab-panel">
@@ -202,6 +206,19 @@
                         </div>
                         <p class="library-detail" id="schema-summary"></p>
                         <ul class="library-list" id="schema-list"></ul>
+                    </div>
+
+                    <div role="tabpanel" id="panel-practice" aria-labelledby="tab-practice" class="tab-panel" hidden>
+                        <p class="library-detail">Exercises with a goal, hints and a model answer. Checks look at how your query is built; nothing is run.</p>
+                        <div class="library-toolbar library-toolbar-filters">
+                            <label class="library-filter">
+                                <span>Level</span>
+                                <select id="practice-level" class="select select-sm"></select>
+                            </label>
+                            <button type="button" class="btn btn-ghost btn-sm" id="practice-reset-btn">Clear progress</button>
+                        </div>
+                        <p class="library-detail" id="practice-progress"></p>
+                        <ul class="library-list" id="practice-list"></ul>
                     </div>
                 </section>
             </div>
@@ -455,6 +472,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=8c9191c486c3" defer></script>
+    <script src="dist/sqlbuilder.js?v=575ba97558f4" defer></script>
 </body>
 </html>

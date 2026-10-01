@@ -26,7 +26,7 @@ import {
     normalizeWorkspace, parseQueryFile, parseTemplatesFile, createQueryExport, createTemplatesExport, MAX_IMPORT_BYTES,
     createBackup, parseBackupFile, MAX_BACKUP_BYTES, createSchemaExport, readSchemaInput, MAX_SCHEMA_IMPORT_BYTES
 } from './serialization.js';
-import { EXAMPLES, EXAMPLE_TOPICS, examplesFor, formatSample } from './examples.js';
+import { EXAMPLES, EXAMPLE_TOPICS, EXAMPLE_LEVELS, examplesFor, formatSample } from './examples.js';
 import { h, byPath, debounce, cssEscape, formatTime } from './ui/dom.js';
 import { renderEditor } from './ui/builder.js';
 import { renderSqlCode, selectContents } from './ui/output.js';
@@ -42,6 +42,9 @@ import { analyzeJoin, applyJoinCandidate, isEmptyGroup, checkSchema } from './jo
 import { describeRelations } from './diagram.js';
 import { renderDiagram, renderFlow } from './ui/diagram.js';
 import { describeFlow, hasFlow } from './flow.js';
+import { EXERCISES, findExercise, answerWorkspace, startWorkspace, practiceTables } from './exercises.js';
+import { checkExercise, createPracticeStore } from './practice.js';
+import { renderExerciseList, renderPracticePanel } from './ui/practice.js';
 import { previewSqlImport, guessDialect } from './sql-import.js';
 import { renderSqlImportPreview } from './ui/sql-import.js';
 import { createWebPlatform } from './platform/web.js';
@@ -141,6 +144,12 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         templateImport: $('template-import-btn'),
         templateExport: $('template-export-btn'),
         exampleList: $('example-list'),
+        practice: $('practice'),
+        practiceStatus: $('practice-status'),
+        practiceLevel: $('practice-level'),
+        practiceReset: $('practice-reset-btn'),
+        practiceProgress: $('practice-progress'),
+        practiceList: $('practice-list'),
         schemaList: $('schema-list'),
         schemaSearch: $('schema-search'),
         schemaSummary: $('schema-summary'),
@@ -176,6 +185,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     const history = createHistory(storage);
     const templates = createTemplateStore(storage);
     const schema = createSchemaStore(storage);
+    const practice = createPracticeStore(storage, EXERCISES.map(e => e.id));
     const undoStack = new UndoStack();
 
     const state = {
@@ -195,7 +205,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         exampleFilter: /** @type {string | null} */ (null), // null: follow the selected dialect
         compareWith: /** @type {string | null} */ (null), // the dialect last compared with
         exampleTopic: 'all',
-        schemaSearch: ''
+        schemaSearch: '',
+        practiceLevel: 'all',
+        // The open exercise: hints shown, the last check (kept up to date once
+        // checked), whether the model answer is shown or was loaded
+        practiceView: newPracticeView()
     };
     // Set while the schema import dialog is open: fills it with a chosen file's text
     /** @type {null | ((text: string) => void)} */
@@ -317,6 +331,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         renderJoinHints();
         renderStructure();
         renderQueryName();
+        if (practice.active) {
+            if (state.practiceView.result) state.practiceView.result = practiceResult();
+            renderPractice();
+        }
         el.undo.disabled = !undoStack.canUndo;
         el.redo.disabled = !undoStack.canRedo;
         saveDraft();
@@ -1192,6 +1210,152 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         });
     }
 
+    // ---------------------------------------------------------------- practice
+
+    function newPracticeView() {
+        return { hints: 0, result: /** @type {null | ReturnType<typeof checkExercise>} */ (null), answer: false, answerLoaded: false };
+    }
+
+    function renderPracticeList() {
+        const shown = EXERCISES.filter(e => state.practiceLevel === 'all' || e.level === state.practiceLevel);
+        renderExerciseList(el.practiceList, shown, { isDone: practice.isDone, active: practice.active });
+        const done = practice.doneCount;
+        el.practiceProgress.textContent = `${done} of ${EXERCISES.length} exercises done.`;
+        el.practiceReset.disabled = done === 0;
+    }
+
+    /** The open exercise checked against the current query. */
+    function practiceResult() {
+        const ex = findExercise(/** @type {string} */ (practice.active));
+        return checkExercise(ex, state.workspace, { errors: state.issues.filter(i => i.level === 'error').length });
+    }
+
+    function renderPractice() {
+        const ex = practice.active ? findExercise(practice.active) : null;
+        el.practice.hidden = !ex;
+        if (!ex) {
+            el.practice.replaceChildren();
+            return;
+        }
+        // Re-rendering replaces the buttons: keep focus on the same one
+        const active = /** @type {any} */ (doc.activeElement);
+        const focused = el.practice.contains(active) ? active?.dataset?.action : null;
+        const all = practiceTables();
+        const view = state.practiceView;
+        let answerSql = null;
+        if (view.answer) {
+            try {
+                answerSql = generateSQL(answerWorkspace(ex), generationOptions());
+            } catch {
+                answerSql = ex.answer;
+            }
+        }
+        const index = EXERCISES.indexOf(ex);
+        renderPracticePanel(el.practice, ex, {
+            tables: ex.tables.map(name => all.find(t => t.name === name)).filter(Boolean),
+            missing: all.filter(t => !schema.get(t.name)).length,
+            hints: view.hints,
+            result: view.result,
+            answerSql,
+            answerLoaded: view.answerLoaded,
+            next: EXERCISES.slice(index + 1).find(e => !practice.isDone(e.id)) || null
+        });
+        if (focused) {
+            const again = el.practice.querySelector(`[data-action="${cssEscape(focused)}"]`);
+            (again || el.practice.querySelector('[data-action="practice-check"]'))?.focus();
+        }
+    }
+
+    function startExercise(id) {
+        const ex = findExercise(id);
+        if (!ex) return;
+        const hadWork = !pristine();
+        practice.setActive(ex.id);
+        state.practiceView = newPracticeView();
+        replaceWorkspace(startWorkspace(ex), `Started “${ex.title}”.${hadWork ? ' Undo brings back your previous query.' : ''}`);
+        renderPracticeList();
+        showPractice();
+    }
+
+    function showPractice() {
+        renderPractice();
+        el.practice.scrollIntoView?.({ block: 'start' });
+        doc.getElementById('practice-title')?.focus({ preventScroll: true });
+    }
+
+    function stopPractice() {
+        practice.setActive(null);
+        state.practiceView = newPracticeView();
+        renderPractice();
+        renderPracticeList();
+        el.builder.focus();
+    }
+
+    async function onPracticeClick(event) {
+        const button = event.target.closest('button[data-action]');
+        if (!button || !el.practice.contains(button)) return;
+        const ex = practice.active ? findExercise(practice.active) : null;
+        const view = state.practiceView;
+        switch (button.dataset.action) {
+            case 'practice-check': {
+                if (!ex) return;
+                commitSoon.flush();
+                scheduleRefresh.flush();
+                view.result = practiceResult();
+                // A pass after loading the model answer doesn't count as done
+                if (view.result.passed && !view.answerLoaded) {
+                    practice.markDone(ex.id);
+                    renderPracticeList();
+                }
+                renderPractice();
+                // Safari doesn't focus a clicked button, so say where focus goes
+                el.practice.querySelector('[data-action="practice-check"]')?.focus();
+                const { results, passed } = view.result;
+                el.practiceStatus.textContent = passed
+                    ? `All checks pass.${view.answerLoaded ? '' : ' Exercise done.'}`
+                    : `${results.filter(r => r.ok).length} of ${results.length} checks pass.`;
+                break;
+            }
+            case 'practice-hint':
+                if (!ex || view.hints >= ex.hints.length) return;
+                view.hints++;
+                renderPractice();
+                el.practiceStatus.textContent = `Hint ${view.hints}: ${ex.hints[view.hints - 1]}`;
+                (el.practice.querySelector('[data-action="practice-hint"]') || el.practice.querySelector('[data-action="practice-check"]'))?.focus();
+                break;
+            case 'practice-answer':
+                view.answer = true;
+                renderPractice();
+                el.practice.querySelector('.practice-answer-sql')?.focus();
+                break;
+            case 'practice-load-answer':
+                if (!ex) return;
+                view.answerLoaded = true;
+                replaceWorkspace(answerWorkspace(ex), 'Loaded the model answer. Undo brings back your query.');
+                el.practice.querySelector('[data-action="practice-check"]')?.focus();
+                break;
+            case 'practice-schema': {
+                try {
+                    const { added, kept } = schema.apply(practiceTables(), { onConflict: 'keep' });
+                    renderSchema();
+                    renderPractice();
+                    toast(`Added ${added} practice table${added === 1 ? '' : 's'} to your schema${kept ? `; ${kept} with the same name ${kept === 1 ? 'was' : 'were'} left as ${kept === 1 ? 'it was' : 'they were'}` : ''}.`, 'success');
+                    el.practice.querySelector('[data-action="practice-check"]')?.focus();
+                } catch (error) {
+                    toast(error instanceof SchemaError ? error.message : 'Something went wrong.', 'error');
+                }
+                break;
+            }
+            case 'practice-start':
+                startExercise(button.dataset.id);
+                break;
+            case 'practice-stop':
+                stopPractice();
+                break;
+            default:
+        }
+    }
+
     function dialectOptions(withAll) {
         return [...(withAll ? [h('option', { value: 'all' }, 'All dialects')] : []), ...listDialects().map(d => h('option', { value: d.id }, d.label))];
     }
@@ -1333,6 +1497,12 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     toast(`Removed ${table.name} from the schema.`);
                     break;
                 }
+                case 'practice-start':
+                    startExercise(id);
+                    break;
+                case 'practice-show':
+                    showPractice();
+                    break;
                 case 'example-load': {
                     const example = EXAMPLES.find(e => e.id === id);
                     if (!example) return;
@@ -1697,7 +1867,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     async function clearAllData() {
         const ok = await confirmDialog(el.confirmDialog, {
             title: 'Delete all saved data?',
-            message: 'This removes your history, templates, schema and settings from this browser and clears the builder. It cannot be undone.',
+            message: 'This removes your history, templates, schema, practice progress and settings from this browser and clears the builder. It cannot be undone.',
             confirmText: 'Delete everything'
         });
         if (!ok) return;
@@ -1708,6 +1878,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         } catch {
             // removing never fails; storage.remove ignores errors
         }
+        practice.clear();
+        state.practiceView = newPracticeView();
         updateSettings({ ...DEFAULT_SETTINGS });
         storage.remove('settings');
         replaceWorkspace(createWorkspace());
@@ -1719,6 +1891,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         renderHistory();
         renderTemplates();
         renderSchema();
+        renderPracticeList();
+        renderPractice();
         toast('All saved data was deleted from this browser.', 'success');
     }
 
@@ -1778,6 +1952,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             { id: 'open-history', group: 'Library', label: 'Open history', run: () => openLibraryTab('history') },
             { id: 'open-templates', group: 'Library', label: 'Open templates', run: () => openLibraryTab('templates') },
             { id: 'open-examples', group: 'Library', label: 'Open examples', run: () => openLibraryTab('examples') },
+            { id: 'open-practice', group: 'Library', label: 'Open practice exercises', keywords: 'learn exercises lessons training quiz', run: () => openLibraryTab('practice') },
             { id: 'open-schema', group: 'Schema', label: 'Open schema', keywords: 'tables columns', run: () => openLibraryTab('schema') },
             { id: 'schema-add', group: 'Schema', label: 'Add a table to the schema…', keywords: 'create table columns', run: () => editSchemaTable() },
             { id: 'schema-import', group: 'Schema', label: 'Import schema…', keywords: 'create table ddl sql json tables', run: importSchema },
@@ -1923,6 +2098,21 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         toast('History cleared.');
     });
     el.libraryPanel.addEventListener('click', onLibraryClick);
+    el.practice.addEventListener('click', onPracticeClick);
+    el.practiceLevel.addEventListener('change', () => {
+        state.practiceLevel = el.practiceLevel.value;
+        renderPracticeList();
+    });
+    el.practiceReset.addEventListener('click', async () => {
+        const ok = await confirmDialog(el.confirmDialog, { title: 'Clear practice progress?', message: `The ${practice.doneCount} exercises marked done will be marked not done. Your queries don't change.`, confirmText: 'Clear progress' });
+        if (!ok) return;
+        const open = practice.active;
+        practice.clear();
+        practice.setActive(open);
+        renderPracticeList();
+        el.practiceLevel.focus();
+        toast('Practice progress cleared.');
+    });
     el.dialectSelect.addEventListener('change', () => {
         updateSettings({ dialect: el.dialectSelect.value });
         announceDialect();
@@ -2001,12 +2191,14 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.templateFilter.replaceChildren(...dialectOptions(true));
     el.exampleFilter.replaceChildren(...dialectOptions(true));
     el.exampleTopic.replaceChildren(h('option', { value: 'all' }, 'All topics'), ...EXAMPLE_TOPICS.map(t => h('option', { value: t }, t)));
+    el.practiceLevel.replaceChildren(h('option', { value: 'all' }, 'All levels'), ...Object.entries(EXAMPLE_LEVELS).map(([value, label]) => h('option', { value }, label)));
     syncTypeTabs();
     renderBuilder();
     renderHistory();
     renderTemplates();
     renderExamples();
     renderSchema();
+    renderPracticeList();
     selectTab('history');
     refresh();
     platform.onBack(handleBack);

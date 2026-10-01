@@ -1078,11 +1078,11 @@ describe('keyboard and accessibility', () => {
         expect($('#panel-templates').hidden).toBe(false);
         expect($('#panel-history').hidden).toBe(true);
         press('End', {}, $('#tab-templates'));
+        expect($('#tab-practice').getAttribute('aria-selected')).toBe('true');
+        press('ArrowLeft', {}, $('#tab-practice'));
         expect($('#tab-schema').getAttribute('aria-selected')).toBe('true');
-        press('ArrowLeft', {}, $('#tab-schema'));
-        expect($('#tab-examples').getAttribute('aria-selected')).toBe('true');
-        press('End', {}, $('#tab-examples'));
-        press('ArrowRight', {}, $('#tab-schema'));
+        press('End', {}, $('#tab-schema'));
+        press('ArrowRight', {}, $('#tab-practice'));
         expect($('#tab-history').getAttribute('aria-selected')).toBe('true');
     });
 
@@ -2623,5 +2623,129 @@ describe('Compare dialects', () => {
         expect(result()).toBe('Resolve the errors under Checks first. The comparison uses the SQL the builder writes for Microsoft SQL Server.');
         dialog().querySelector('button[value="cancel"]').click();
         await settle();
+    });
+});
+
+describe('practice', () => {
+    const start = async (id) => {
+        $(`#practice-list [data-action="practice-start"][data-id="${id}"]`).click();
+        await settle();
+    };
+    const panelAction = (name) => $(`#practice [data-action="${name}"]`);
+    const checks = () => $$('#practice .practice-checks li').map(li => `${li.classList.contains('is-ok') ? '✓' : '✗'} ${li.children[2].textContent}`);
+
+    test('lists the exercises, filtered by level, with progress', async () => {
+        expect($$('#practice-list .library-item')).toHaveLength(15);
+        expect($('#practice-progress').textContent).toBe('0 of 15 exercises done.');
+        expect($('#practice-reset-btn').disabled).toBe(true);
+        const level = $('#practice-level');
+        level.value = 'advanced';
+        level.dispatchEvent(new Event('change'));
+        expect($$('#practice-list .library-name').map(n => n.textContent)).toEqual([
+            'Priced above average', 'Salary rank within each department', 'Big spenders, with a CTE', 'Everyone under one manager'
+        ]);
+        expect($('#practice').hidden).toBe(true);
+    });
+
+    test('an exercise starts an empty query, checks it, gives hints and is done when it passes', async () => {
+        await fillSimpleSelect();
+        await start('missing-email');
+        expect($('#practice').hidden).toBe(false);
+        expect(document.activeElement.id).toBe('practice-title');
+        expect($('#practice-title').textContent).toBe('Customers with no email');
+        expect(toast()).toBe('Started “Customers with no email”. Undo brings back your previous query.');
+        expect(field('select.from.table').value).toBe('');
+        expect($('#practice .practice-tables li').textContent).toBe('customers (id, name, email, city, created_at)');
+
+        panelAction('practice-check').click();
+        await settle();
+        expect($('#practice-status').textContent).toBe('0 of 5 checks pass.');
+        expect(document.activeElement.dataset.action).toBe('practice-check');
+
+        panelAction('practice-hint').click();
+        expect($$('#practice .practice-hints li').map(li => li.textContent)).toEqual(['FROM customers, with id and name as the columns.']);
+        expect(panelAction('practice-hint').textContent).toBe('Next hint (2 of 3)');
+
+        type('select.from.table', 'customers');
+        type('select.columns.0.expr', 'id');
+        add('select.columns', 'column');
+        type('select.columns.1.expr', 'name');
+        add('select.where.items', 'condition');
+        type('select.where.items.0.left', 'email');
+        choose('select.where.items.0.op', '=');
+        type('select.where.items.0.value', 'NULL');
+        await settle();
+        // Results follow edits once checked
+        expect(checks()).toEqual([
+            '✓ Reads the customers table', '✓ Shows the id', '✓ Shows the name', '✗ Keeps customers whose email is missing', '✓ The query has no errors'
+        ]);
+        expect($('#practice .is-missing .practice-check-hint').textContent).toMatch(/^Missing values are NULL/);
+        choose('select.where.items.0.op', 'IS NULL');
+        await settle();
+        panelAction('practice-check').click();
+        await settle();
+        expect($('#practice .practice-summary').textContent).toBe('All checks pass. Well done!');
+        expect($('#practice .practice-explain').textContent).toMatch(/^NULL means "no value"/);
+        expect($('#practice-status').textContent).toBe('All checks pass. Exercise done.');
+        expect($('#practice-progress').textContent).toBe('1 of 15 exercises done.');
+        expect($('#practice-list [data-action="practice-show"]').textContent).toBe('Go to exercise');
+        // The next exercise not done yet
+        expect(panelAction('practice-start').textContent).toBe('Next: Shipped or delivered in 2026');
+        // Progress survives a reload, and the open exercise comes back
+        boot(backend);
+        expect($('#practice-title').textContent).toBe('Customers with no email');
+        expect($('#practice-progress').textContent).toBe('1 of 15 exercises done.');
+        expect($('#practice-list .practice-done').textContent).toBe('✓ Done');
+    });
+
+    test('the model answer shows in the chosen dialect, and loading it doesn\'t count as done', async () => {
+        pickDialect('sqlserver');
+        await start('most-expensive');
+        panelAction('practice-answer').click();
+        expect(document.activeElement.classList.contains('practice-answer-sql')).toBe(true);
+        expect($('#practice .practice-answer-sql').textContent).toBe('SELECT TOP 5\n    name,\n    price\nFROM products\nORDER BY price DESC;');
+        expect(panelAction('practice-answer')).toBe(null);
+        panelAction('practice-load-answer').click();
+        await settle();
+        expect(sql()).toBe('SELECT TOP 5\n    name,\n    price\nFROM products\nORDER BY price DESC;');
+        panelAction('practice-check').click();
+        await settle();
+        expect($('#practice .practice-summary').textContent).toBe('All checks pass with the model answer. Build it yourself next time to mark the exercise done.');
+        expect($('#practice-progress').textContent).toBe('0 of 15 exercises done.');
+        app.undo();
+        await settle();
+        expect(field('select.from.table').value).toBe('');
+    });
+
+    test('adds the practice tables to the schema without replacing a table of the same name', async () => {
+        await start('orders-per-customer');
+        app.schema.save({ name: 'customers', columns: [{ name: 'customer_no' }] });
+        $('#tab-practice').click();
+        panelAction('practice-hint').click();
+        panelAction('practice-schema').click();
+        await settle();
+        expect(toast()).toBe('Added 5 practice tables to your schema; 1 with the same name was left as it was.');
+        expect(app.schema.get('customers').columns.map(c => c.name)).toEqual(['customer_no']);
+        expect(app.schema.get('orders').foreignKeys[0].refTable).toBe('customers');
+        expect(panelAction('practice-schema')).toBe(null);
+    });
+
+    test('closing the exercise and clearing progress', async () => {
+        await start('missing-email');
+        panelAction('practice-stop').click();
+        expect($('#practice').hidden).toBe(true);
+        expect(document.activeElement).toBe($('#builder'));
+        boot(backend);
+        expect($('#practice').hidden).toBe(true);
+        // Clear progress keeps the open exercise
+        const store = JSON.stringify({ done: { 'missing-email': 1, 'most-expensive': 2 }, active: 'most-expensive' });
+        backend.setItem(`${STORAGE_PREFIX}practice`, store);
+        boot(backend);
+        expect($('#practice-progress').textContent).toBe('2 of 15 exercises done.');
+        $('#practice-reset-btn').click();
+        await answerConfirm();
+        expect($('#practice-progress').textContent).toBe('0 of 15 exercises done.');
+        expect($('#practice-title').textContent).toBe('The 5 most expensive products');
+        expect(toast()).toBe('Practice progress cleared.');
     });
 });

@@ -96,6 +96,7 @@ Messages are listed errors first, then warnings, then tips. On narrower screens 
 - **History** of generated queries: search, restore, copy, delete, clear. It keeps the last 50, and can be turned off.
 - **Save** (button above the SQL, or Ctrl/⌘+S): the first save names the query as a template; after that, and after loading a template, Save updates that template in place. The template's name is shown above the SQL, with "unsaved changes" when the query or dialect differs from what was saved. Loading an example, restoring history, importing or Reset all start a new unsaved query.
 - **Templates**: save, load, rename, duplicate, delete, and import/export as JSON. Each template can have a description and a category, and the list can be searched (name, description, category, dialect), filtered by dialect and sorted by name or most recently updated. Pin a template to keep it at the top; the template you are editing is marked "Editing". Pins are kept in exports. A template remembers its dialect and switches to it when loaded (restoring history does the same).
+- **Practice** (a library tab): 15 exercises from Beginner to Advanced over a small shop and staff schema, covering filtering, joins, aggregation, subqueries and CTEs (one recursive), window functions, UPDATE and DELETE. Starting one opens it above the builder with its goal and tables, and starts an empty query (Undo brings back the previous one). **Check my query** lists which parts of the goal the query has, each with a hint when it doesn't, and keeps the list up to date while you edit. Hints come one at a time, and the model answer is shown in the selected dialect and can be loaded into the builder. The checks look at how the query is built (tables read, joins and which side keeps its rows, conditions every row must meet, grouping, sorting, limits, window functions, CTEs, subqueries), never at results: the app doesn't run SQL. They accept the usual variations (aliases, quoted names, `COUNT(*)` or `COUNT(id)`, `ORDER BY` an alias or a column number, `NOT EXISTS` or `LEFT JOIN … IS NULL`); a correct query written another way can still miss a check, so the panel says so. "Add the practice tables to my schema" adds the six tables for suggestions and the JOIN assistant, leaving any table with the same name as it is. Which exercises are done is kept in this browser (not in backups); a pass after loading the model answer doesn't count.
 - **Examples**: twenty-seven starter queries, each tagged Beginner, Intermediate or Advanced and with a topic (filtering, joins, aggregation, window functions and more). They are filtered to the selected dialect and can be filtered by topic (the upsert example only exists for PostgreSQL and MySQL). Each one shows a one-line preview of the SQL it produces in that dialect.
 - Import/export of the current query as JSON (validated, never executed), and download of the SQL. An exported query remembers its dialect, and importing it switches back to that dialect.
 - **Schema** (Schema tab): describe your tables once and keep them in this browser. Add or edit a table as a `CREATE TABLE` statement (types are optional), or import many at once by pasting or choosing a `.sql` file (pg_dump, mysqldump and SQL Server "Script Table as" output work) or a schema `.json` file. The import shows what it found, which statements it skipped (indexes, functions, `SET`, …) and any lines it couldn't read, before anything is saved. Primary keys, unique keys and foreign keys (inline `REFERENCES` or `ALTER TABLE … ADD CONSTRAINT`) are kept. Tables and columns can be searched, and the schema can be exported as JSON or as `CREATE TABLE` statements. The SQL you paste is only read, never run, and the schema doesn't change the SQL the builder generates. Limits: 500 tables, 500 columns per table.
@@ -245,6 +246,8 @@ src/
 ├── roundtrip.js      Compares imported SQL with the builder's SQL, token by token
 ├── diagram.js        Tables and joins diagram, and the shared box-and-link layout (no DOM)
 ├── flow.js           Query flow: which part of a SELECT feeds which (no DOM)
+├── exercises.js      Practice exercises, their checks, hints, model answers and tables
+├── practice.js       Checks a query against an exercise by its structure; practice progress
 ├── suggest.js        Which tables/columns a builder field can use (scope, aliases, CTEs)
 ├── joins.js          JOIN assistant (ON from foreign keys) and schema checks (tips/warnings)
 ├── storage.js        Guarded localStorage wrapper
@@ -263,6 +266,7 @@ src/
     ├── sql-import.js Import SQL dialog preview (check result and differences)
     ├── compare.js    Compare dialects dialog (differences, checks, both SQLs)
     ├── diagram.js    Draws the tables and joins diagram and the query flow as SVG, with their lists
+    ├── practice.js   The Practice tab's list and the open exercise above the builder
     ├── theme.js, shortcuts.js, dom.js (safe element builder)
 ```
 
