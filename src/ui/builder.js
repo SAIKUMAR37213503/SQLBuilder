@@ -236,6 +236,13 @@ class Renderer {
                         field(joinPath(cPath, 'name'), cte.name, { label: `CTE ${i + 1} name`, placeholder: 'e.g. recent_orders', required: true }),
                         rowTools(cPath, i, q.ctes.length, 'CTE')
                     ),
+                    h('div', { class: 'row' },
+                        checkbox(joinPath(cPath, 'recursive'), cte.recursive,
+                            this.dialect.recursive.keyword === 'WITH' ? 'Recursive (plain WITH in SQL Server)' : 'Recursive (WITH RECURSIVE)', { rerender: true }),
+                        field(joinPath(cPath, 'columns'), cte.columns ?? '', { label: 'Column names (optional)', placeholder: 'e.g. id, name, depth' })
+                    ),
+                    cte.recursive ? h('p', { class: 'field-hint' },
+                        'The first SELECT gives the starting rows. Add a UNION ALL part that joins to this CTE by its name; it runs again on each new set of rows until it returns none.') : null,
                     this.select(cte.query, joinPath(cPath, 'query'), { depth: ctx.depth + 1, top: false, branch: false })
                 );
             })),
@@ -326,7 +333,7 @@ class Renderer {
             ),
             h('div', { class: 'window-over' },
                 h('p', { class: 'subquery-label' }, 'OVER'),
-                h('h4', { class: 'sub-heading' }, 'PARTITION BY'),
+                h('h3', { class: 'sub-heading' }, 'PARTITION BY'),
                 h('ol', { class: 'item-list' }, col.partitionBy.map((p, j) => {
                     const pPath = joinPath(cPath, 'partitionBy', j);
                     return h('li', { class: 'row', dataset: { path: pPath } },
@@ -334,7 +341,7 @@ class Renderer {
                         button('', 'remove-item', pPath, { icon: '✕', label: `Remove partition column ${j + 1}`, variant: 'danger-ghost' }));
                 })),
                 addBar(button('+ Partition column', 'add-item', joinPath(cPath, 'partitionBy'), { arg: 'groupBy' })),
-                h('h4', { class: 'sub-heading' }, 'ORDER BY'),
+                h('h3', { class: 'sub-heading' }, 'ORDER BY'),
                 h('ol', { class: 'item-list' }, col.orderBy.map((o, j) => {
                     const oPath = joinPath(cPath, 'orderBy', j);
                     return h('li', { class: 'row', dataset: { path: oPath } },
@@ -395,6 +402,8 @@ class Renderer {
                         ? h('p', { class: 'field-hint' }, 'CROSS JOIN pairs every row with every row of the other table; it has no ON condition.')
                         : h('div', { class: 'join-on' },
                             h('p', { class: 'subquery-label' }, 'ON'),
+                            // Filled by the app from the schema: suggested ON conditions
+                            join.source.kind === 'table' ? h('div', { class: 'join-hint', hidden: true, dataset: { joinHint: jPath } }) : null,
                             this.group(join.on, joinPath(jPath, 'on'), ctx, { clause: 'ON', root: true, defaultValueType: 'column' }))
                 );
             })),
@@ -404,7 +413,7 @@ class Renderer {
 
     grouping(q, path, ctx) {
         return [
-            h('h4', { class: 'sub-heading' }, 'GROUP BY'),
+            h('h3', { class: 'sub-heading' }, 'GROUP BY'),
             h('ol', { class: 'item-list' }, q.groupBy.map((g, i) => {
                 const gPath = joinPath(path, 'groupBy', i);
                 return h('li', { class: 'row', dataset: { path: gPath } },
@@ -412,7 +421,7 @@ class Renderer {
                     rowTools(gPath, i, q.groupBy.length, 'GROUP BY column'));
             })),
             addBar(button('+ GROUP BY column', 'add-item', joinPath(path, 'groupBy'), { arg: 'groupBy' })),
-            h('h4', { class: 'sub-heading' }, 'HAVING (filter groups)'),
+            h('h3', { class: 'sub-heading' }, 'HAVING (filter groups)'),
             this.group(q.having, joinPath(path, 'having'), ctx, { clause: 'HAVING', root: true })
         ];
     }
@@ -594,7 +603,8 @@ class Renderer {
                     : 'The unique key that detects an existing row, e.g. email.'
             }) : null,
             u.mode === 'update' ? [
-                h('h4', { class: 'sub-heading' }, 'Update'),
+                // h3: the INSERT editor has no section heading above it
+                h('h3', { class: 'sub-heading' }, 'Update'),
                 h('ol', { class: 'item-list' }, u.set.map((a, i) => {
                     const aPath = joinPath(path, 'set', i);
                     return h('li', { class: 'row', dataset: { path: aPath } },

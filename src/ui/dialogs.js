@@ -94,6 +94,29 @@ export async function confirmDialog(dialog, { title, message, confirmText = 'Con
     return result === 'confirm';
 }
 
+/**
+ * Opens a dialog whose submit button (type="submit", no value) is checked
+ * first: while `validate` returns false the dialog stays open, so the person
+ * can correct what they typed.
+ * @param {any} dialog
+ * @param {{ onOpen?: (dialog: any) => void, validate: () => boolean }} options
+ * @returns {Promise<boolean>} true when submitted and valid
+ */
+export async function formDialog(dialog, { onOpen, validate }) {
+    const form = dialog.querySelector('form');
+    const onSubmit = (/** @type {Event} */ event) => {
+        event.preventDefault();
+        event.stopPropagation(); // enhanceDialog's handler would close the dialog
+        if (validate()) closeDialog(dialog, 'confirm');
+    };
+    form.addEventListener('submit', onSubmit);
+    try {
+        return (await showDialog(dialog, onOpen)) === 'confirm';
+    } finally {
+        form.removeEventListener('submit', onSubmit);
+    }
+}
+
 // Wires <form method="dialog"> buttons so they also work without native <dialog>.
 export function enhanceDialog(dialog) {
     dialog.addEventListener('click', (event) => {

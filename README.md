@@ -43,7 +43,8 @@ It comes in four forms, all built from the same code:
   - `EXISTS` / `NOT EXISTS`
   - custom SQL conditions
 - `GROUP BY`, `ORDER BY` (multiple columns, ASC/DESC), `LIMIT`, `OFFSET`
-- `WITH` (common table expressions) on the main query
+- `WITH` (common table expressions) on the main query, with optional column names (`reports (id, name, depth) AS (…)`)
+- **Recursive CTEs** for hierarchies such as org charts and category trees: tick **Recursive** on a CTE, give it a starting SELECT and a `UNION ALL` part that joins back to the CTE. It is written as `WITH RECURSIVE`, or plain `WITH` on SQL Server. The checks catch a missing `UNION ALL` part, a starting SELECT that uses the CTE, what each dialect refuses in the recursive part (aggregates everywhere; also `GROUP BY` and `DISTINCT` on SQL Server and MySQL, window functions on MySQL, outer joins and `UNION` without `ALL` on SQL Server, a second recursive part on PostgreSQL), `ORDER BY` / `LIMIT` on the CTE, and a recursive part with no condition to stop it, with the dialect's depth limit (100 levels on SQL Server, 1,000 on MySQL, none on PostgreSQL). A query with a recursive CTE is saved and exported as model version 2; every other query stays version 1, so those files still open in older copies of the app, which refuse a version 2 file instead of misreading it.
 - `UNION`, `UNION ALL`, `INTERSECT`, `INTERSECT ALL`, `EXCEPT` and `EXCEPT ALL` with any number of queries. `ORDER BY` / `LIMIT` apply to the combined result. As in SQL, `INTERSECT` binds tighter than `UNION`/`EXCEPT`; a tip points this out when they are mixed.
 - Subqueries nest up to 4 levels deep.
 
@@ -59,12 +60,16 @@ A custom SQL condition that contains a top-level `AND`/`OR` is wrapped in parent
 
 **Output**
 - Formatted SQL (one clause per line, 4-space indentation) or a single line, with an optional Wrap toggle for long lines
+- **SQL format** (Settings, or the command palette): keywords in UPPERCASE or lowercase; an indent of 4 spaces, 2 spaces or a tab; commas at the end or the start of a line; and an option to put each GROUP BY and ORDER BY item, INSERT column and nested AND / OR group on its own line. A preview in Settings shows the result. The options change only what the builder writes: text typed into a field is never changed. The defaults write exactly the same SQL as before, and every combination writes the same tokens, which the tests check for every example in every dialect.
 - Syntax highlighting (including parameter placeholders) and line numbers; the line numbers are never copied
 - Live preview while you type (can be switched off)
-- **Query structure**: a panel under the SQL that lists the parts of the query in the order a database works through them (for a SELECT: WITH, FROM, JOIN, WHERE, GROUP BY, HAVING, SELECT, UNION, ORDER BY, LIMIT/TOP), each with a one-line explanation. Selecting a step opens that part of the builder. It describes structure only; it says nothing about speed.
+- **Query structure**: a panel under the SQL that lists the parts of the query in the order a database works through them (for a SELECT: WITH, FROM, JOIN, WHERE, GROUP BY, HAVING, SELECT, UNION, ORDER BY, LIMIT/TOP), each with a one-line explanation. Selecting a step opens that part of the builder. Above the steps, an insights row counts the CTEs, joins, subqueries, combined queries, aggregates, window functions and filters, shows the nesting depth, and gives an overall band: simple, moderate or involved. A one-sentence summary above it says what the query does in plain words (“Returns department and the average salary from employees, where salary is greater than 50000, one row per department, sorted by AVG(salary) descending.”). An **Explain for** switch picks how much each step explains, and is remembered: **Beginner** (what each step does), **Developer** (how LEFT and other joins treat unmatched rows, repeated matches, NULLs in comparisons, NOT IN with a subquery, WHERE vs HAVING, what DISTINCT has to do, a WHERE condition that undoes a LEFT JOIN) and **Advanced** (window frames, including the RANGE default with ORDER BY, set-operation precedence, and the selected dialect's NULL ordering and pagination rules). The insights row describes structure only; it says nothing about speed.
+- **Query flow** (inside Query structure, for a SELECT with CTEs, subqueries or UNION parts): one box per part of the query, drawn above the part it feeds, with the main query at the bottom. Each box lists the tables it reads and what it does in order (JOIN, WHERE, GROUP BY, aggregates, HAVING, window functions, DISTINCT, ORDER BY, a row limit); links say how a part is used (CTE, a join, `IN`, `NOT EXISTS`, `UNION ALL` …). A recursive CTE's repeating part says so instead of linking to itself, and a CTE nothing uses says that too. The parts are listed as text under the drawing; selecting one opens that part in the builder, including sections it sits inside.
+- **Tables and joins diagram** (inside Query structure, for a SELECT with joins): the main query's tables, CTEs and derived tables as boxes, with a link for each join drawn from its ON condition and labeled with the join type. With a schema, boxes mark key columns (PK, FK), links that follow a foreign key are highlighted, and each link says whether a row can match one row or many (“many : many” is highlighted, since rows can repeat). A join whose ON names no earlier table, and a CROSS JOIN, are drawn dashed. The same links are listed as text under the drawing; selecting one opens that join. Both drawings are made on the device as SVG with no layout library; a link that skips a row passes between boxes, and a wide drawing scrolls sideways.
+- **Compare dialects** (Compare… next to the dialect picker, or the command palette): the current query as the selected dialect writes it next to another dialect's SQL, with each difference listed by line (“LIMIT 20 OFFSET 40” becomes “OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY”, TRUE becomes 1, `$1` becomes `?`) and the checks the other dialect would add, such as an upsert SQL Server can't express or `GETDATE()` in PostgreSQL. Nothing changes unless you choose Switch.
 - Copy, Select all, Download `.sql`. On Android, Download and Export open the share sheet so you can save to Files or Drive, or send to another app. A Share button shares the SQL text.
 
-**Checks:** the checks panel shows three kinds of message:
+**Checks:** the checks panel shows four kinds of message:
 - **Errors** (block generation): missing fields, ORDER BY in a subquery without TOP/LIMIT on SQL Server, LIMIT inside an `IN` subquery on MySQL, INSERT … SELECT column-count mismatches, upserts the dialect doesn't support, invalid names or aliases, unbalanced quotes or parentheses, a join without a condition, column-count mismatches between combined queries, INSERT value/column mismatches, wrong window-function arguments, a window result used in WHERE/HAVING, operators or functions the dialect lacks, …
 - **Warnings** (never block):
   - UPDATE or DELETE without WHERE
@@ -77,7 +82,11 @@ A custom SQL condition that contains a top-level `AND`/`OR` is wrapped in parent
   - a SELECT alias used in HAVING (except MySQL, which accepts it)
   - leading-zero numbers in INSERT values
   - an upsert that updates from an inserted value for a column the INSERT doesn't list
-- **Tips**, e.g. LIMIT without ORDER BY, LIKE without a wildcard, INTERSECT precedence, ORDER BY in a subquery (the database may ignore it), or parameter names the dialect ignores.
+  - conditions that can never both be true (`price > 50 AND price < 10`, `status = 'paid' AND status = 'void'`), and `BETWEEN 50 AND 10`
+  - a join whose ON condition mentions only the joined table, or only the tables before it
+  - functions, operators and name quoting typed in an expression, custom condition or value that the selected dialect doesn't have, with the usual replacement: `GETDATE()` in PostgreSQL (use `CURRENT_TIMESTAMP`), `NOW()` on SQL Server, `ISNULL(a, b)` or `IFNULL` outside their dialect (use `COALESCE`), `ILIKE`, `::` casts, `LEN`/`LENGTH`, `CHARINDEX`, `DATEADD`/`DATE_ADD`, `DATEDIFF` with the other dialect's arguments, `GROUP_CONCAT`/`STRING_AGG`, `IIF`/`IF`, `NEWID`/`UUID`, `` `name` `` and `[name]` quoting, and more. Typed text is flagged, never rewritten. With Generic SQL these are tips instead, saying which database the syntax comes from.
+- **Suggestions** (never block): valid SQL that could be clearer: a plain `SELECT *` on the main query, DISTINCT that GROUP BY already makes redundant, a condition repeated in the same group, a table alias that is never used, and subqueries nested three or more levels deep. The analysis rules are deliberately conservative: when a condition can't be read with certainty (custom SQL, parameters, unqualified column names, text that some databases compare case-insensitively or as dates), they stay silent rather than guess.
+- **Tips**, e.g. LIMIT without ORDER BY, LIKE without a wildcard, INTERSECT precedence, ORDER BY in a subquery (the database may ignore it), parameter names the dialect ignores, or syntax that needs a later version (`STRING_AGG` needs SQL Server 2017).
 
 Messages are listed errors first, then warnings, then tips. On narrower screens the bottom bar's View SQL button shows the number of errors and warnings.
 
@@ -87,9 +96,19 @@ Messages are listed errors first, then warnings, then tips. On narrower screens 
 - **History** of generated queries: search, restore, copy, delete, clear. It keeps the last 50, and can be turned off.
 - **Save** (button above the SQL, or Ctrl/⌘+S): the first save names the query as a template; after that, and after loading a template, Save updates that template in place. The template's name is shown above the SQL, with "unsaved changes" when the query or dialect differs from what was saved. Loading an example, restoring history, importing or Reset all start a new unsaved query.
 - **Templates**: save, load, rename, duplicate, delete, and import/export as JSON. Each template can have a description and a category, and the list can be searched (name, description, category, dialect), filtered by dialect and sorted by name or most recently updated. Pin a template to keep it at the top; the template you are editing is marked "Editing". Pins are kept in exports. A template remembers its dialect and switches to it when loaded (restoring history does the same).
-- **Examples**: twenty-two starter queries, each tagged Beginner, Intermediate or Advanced and with a topic (filtering, joins, aggregation, window functions and more). They are filtered to the selected dialect and can be filtered by topic (the upsert example only exists for PostgreSQL and MySQL). Each one shows a one-line preview of the SQL it produces in that dialect.
+- **Template versions**: each Save that changes a template keeps the query it replaces, up to 10 per template (300 across all templates; the oldest go first). **Versions** on a template lists them with how much each differs from the current query; **Compare** shows the SQL changes line by line (both written with your current dialect and format settings), **Restore** makes a version current again and loads it (the query it replaces becomes a version, so a restore can be undone the same way), and **Delete** removes one. If browser storage is full, Save still saves and says the previous version couldn't be kept. Full backups include versions; template exports, made for sharing, and Duplicate don't. Stored and restored versions are validated, and a damaged one is left out without losing its template.
+- **Projects**: separate sets of templates, history, schema, the query being built and its dialect, for working on more than one database. The project bar above the library tabs shows the open project; **Projects…** lists them with what each holds, and creates (named, up to 20), opens, renames and deletes them. Opening another project leaves the current query where it was built; Undo doesn't reach across projects. A template's **Move…** sends it, with its versions, to another project. Settings and practice progress are shared. The first project, Main, keeps its data under the same storage keys as before projects existed, so nothing is migrated and an older copy of the app still sees Main's data. Deleting a project asks first and deletes only its data; Main can't be deleted. Stored project data is validated on load.
+- **Practice** (a library tab): 15 exercises from Beginner to Advanced over a small shop and staff schema, covering filtering, joins, aggregation, subqueries and CTEs (one recursive), window functions, UPDATE and DELETE. Starting one opens it above the builder with its goal and tables, and starts an empty query (Undo brings back the previous one). **Check my query** lists which parts of the goal the query has, each with a hint when it doesn't, and keeps the list up to date while you edit. Hints come one at a time, and the model answer is shown in the selected dialect and can be loaded into the builder. The checks look at how the query is built (tables read, joins and which side keeps its rows, conditions every row must meet, grouping, sorting, limits, window functions, CTEs, subqueries), never at results: the app doesn't run SQL. They accept the usual variations (aliases, quoted names, `COUNT(*)` or `COUNT(id)`, `ORDER BY` an alias or a column number, `NOT EXISTS` or `LEFT JOIN … IS NULL`); a correct query written another way can still miss a check, so the panel says so. "Add the practice tables to my schema" adds the six tables for suggestions and the JOIN assistant, leaving any table with the same name as it is. Which exercises are done is kept in this browser (not in backups); a pass after loading the model answer doesn't count.
+- **Examples**: twenty-seven starter queries, each tagged Beginner, Intermediate or Advanced and with a topic (filtering, joins, aggregation, window functions and more). They are filtered to the selected dialect and can be filtered by topic (the upsert example only exists for PostgreSQL and MySQL). Each one shows a one-line preview of the SQL it produces in that dialect.
 - Import/export of the current query as JSON (validated, never executed), and download of the SQL. An exported query remembers its dialect, and importing it switches back to that dialect.
-- **Full backup** (File → Back up everything / Restore from backup…): one JSON file (`sql-builder-backup`, version 1) with all templates (including pins and dates), history and settings. Restoring validates every field first and asks how to restore: **Merge** (default) adds the templates and history that aren't here yet and skips exact copies, keeping your settings; **Replace** asks for confirmation, then swaps templates, history and settings for the backup's. History isn't restored while saving history is turned off. A backup never contains anything that leaves your device unless you move the file yourself.
+- **Schema** (Schema tab): describe your tables once and keep them in this browser. Add or edit a table as a `CREATE TABLE` statement (types are optional), or import many at once by pasting or choosing a `.sql` file (pg_dump, mysqldump and SQL Server "Script Table as" output work) or a schema `.json` file. The import shows what it found, which statements it skipped (indexes, functions, `SET`, …) and any lines it couldn't read, before anything is saved. Primary keys, unique keys and foreign keys (inline `REFERENCES` or `ALTER TABLE … ADD CONSTRAINT`) are kept. Tables and columns can be searched, and the schema can be exported as JSON or as `CREATE TABLE` statements. The SQL you paste is only read, never run, and the schema doesn't change the SQL the builder generates. Limits: 500 tables, 500 columns per table.
+- **Suggestions** (once the schema has tables): table fields list your tables and the query's CTEs; column and expression fields (columns, conditions, JOIN ON, GROUP BY, ORDER BY, CASE, window functions, SET) list the columns of the tables in that query, qualified with the alias when there are several, plus a few common functions for the selected dialect. Typing `e.` lists the columns of alias `e`. A subquery in WHERE also sees the outer query's tables; a derived table or CTE shows the columns it selects. ↓ (or Alt+↓) opens the list, ↑/↓ move, Enter or a tap puts the suggestion in the field, Esc or Tab closes it. Nothing is picked unless you choose it, and names that need quotes are quoted for the dialect. Without a schema, fields work exactly as before.
+- **JOIN assistant** (with a schema): when a joined table and the tables before it are in the schema, the ON section offers the conditions their foreign keys imply, in either direction ("Use e.department_id = d.id"); one tap fills ON, and Undo takes it back. Checks then adds, without ever blocking generation:
+  - a tip when ON doesn't use the schema's link, or when no foreign key links the tables (only if the schema has foreign keys at all);
+  - a warning when the joined columns aren't a primary or unique key on either side, so rows can repeat;
+  - tips for table and column names that aren't in the schema (qualified names always; unqualified ones only when every table in scope is known).
+- **Import SQL** (File → Import SQL, or the command palette): paste a SELECT, INSERT, UPDATE or DELETE statement, choose a `.sql` file, or drop one on the dialog, and edit it in the builder. The dialect is guessed from syntax only one dialect uses (backquotes, `[brackets]`, `TOP`, `$1`, `::`…) and can be picked by hand. Before anything changes, the dialog shows either where the SQL can't be imported (“Line 7, column 3: JOIN … USING isn't supported yet”) or a round-trip check: the SQL the builder will write is compared with yours, ignoring layout, comments, keyword case and optional words (AS, INNER, OUTER, ASC), and every remaining difference is listed by line (for example MySQL's `LIMIT 10, 20` becomes `LIMIT 20 OFFSET 10`, and `a AND b OR c` gains parentheses that keep its meaning). Import replaces only the query of the same type (your drafts of the other types stay), switches to the SQL's dialect, and Undo brings the previous query back. For SELECT it reads CTEs (with column names, and `WITH RECURSIVE`; on SQL Server a CTE that uses its own name is read as recursive), DISTINCT, TOP, aggregates, CASE and window columns (when the builder can write them the same way), all five join types with ON, WHERE / HAVING with AND / OR groups and every builder operator, GROUP BY, UNION / INTERSECT / EXCEPT, ORDER BY, LIMIT / OFFSET / FETCH, parameters in each dialect's style, and subqueries in FROM, JOIN and conditions. INSERT reads a column list with VALUES rows or a SELECT, plus PostgreSQL `ON CONFLICT … DO NOTHING / DO UPDATE` and MySQL `ON DUPLICATE KEY UPDATE` (`EXCLUDED.col` / `VALUES(col)` become “the value this row tried to insert”); UPDATE reads SET and WHERE; DELETE reads FROM and WHERE. Expressions are kept word for word; conditions the builder has no operator for (ILIKE, `= ANY (…)`, …) become custom SQL conditions. Values become plain values only when the builder writes them back identically (`'John'` → John, `'042'` → 042).
+- **Full backup** (File → Back up everything / Restore from backup…): one JSON file (`sql-builder-backup`) with all templates (including pins and dates), history, the schema and settings. With only the Main project it is version 2, as before projects. With other projects it is version 3: Main stays at the top level and the others are listed under `projects`, so an older copy of the app refuses the file instead of silently dropping them. Version 1 and 2 backups still restore. Merge adds a backup's other projects to projects with the same name, or creates them; Replace deletes your other projects first. Restoring validates every field first and asks how to restore: **Merge** (default) adds the templates, history and schema tables that aren't here yet and skips exact copies (a table already here keeps your version), keeping your settings; **Replace** asks for confirmation, then swaps templates, history, schema and settings for the backup's (a version 1 backup leaves the schema as it is). History isn't restored while saving history is turned off. A backup never contains anything that leaves your device unless you move the file yourself.
 - Undo / redo of every change.
 - **Command palette** (Ctrl/⌘+K, or File → Commands… on touch screens): search and run commands such as Generate, Copy, Save, switching the query type, dialect, output format or theme, opening the library tabs, import/export and settings. It only lists commands that apply right now and runs the same actions as the buttons.
 - Unsaved work is restored when you come back; this can be turned off.
@@ -129,12 +148,15 @@ What changes per dialect:
 | Parameter placeholders | `:name`, or `?` if unnamed | `@name`, or `@p1`, `@p2`, … | `$1`, `$2`, … (names ignored, tip shown) | `?` (names ignored, tip shown) |
 | Upsert | not available | not available (`MERGE` isn't generated) | `ON CONFLICT (…) DO NOTHING` / `DO UPDATE SET …`, inserted value `EXCLUDED.col` | `ON DUPLICATE KEY UPDATE …`, inserted value `VALUES(col)` (tip: deprecated from 8.0.20) |
 | ORDER BY in a subquery or CTE | tip | error unless TOP or OFFSET is set | tip | tip |
+| Recursive CTE keyword | `WITH RECURSIVE` | `WITH` | `WITH RECURSIVE` | `WITH RECURSIVE` |
+| Recursive CTE: refused in the recursive part | aggregates, window functions | aggregates, `GROUP BY`, `DISTINCT`, outer joins; `UNION` must be `UNION ALL` | aggregates; only one recursive part | aggregates, window functions, `GROUP BY`, `DISTINCT` |
+| Recursive CTE: ORDER BY / row limit on it | warning | error | error | ORDER BY error, LIMIT ✓ |
 | LIMIT in an `IN (subquery)` | ✓ | ✓ (`TOP`) | ✓ | error |
 | SELECT alias in HAVING | warning | warning | warning | accepted |
 
 Everything else (joins, WHERE, GROUP BY, CTEs, CASE, INSERT … SELECT, UPDATE, DELETE, the other window functions and frames) is written the same way in every dialect.
 
-Not built for any dialect yet: `RETURNING` / `OUTPUT`, `MERGE` and recursive CTEs. Functions and data types you type (date/time functions, casts, …) are not translated between dialects: expressions are passed through unchanged, and the only check on them is the `TRUE` / `FALSE` warning on SQL Server. The app never connects to a database, so it can't check a specific server version or schema.
+Not built for any dialect yet: `RETURNING` / `OUTPUT` and `MERGE`. The builder doesn't add SQL Server's `OPTION (MAXRECURSION n)` or change MySQL's `cte_max_recursion_depth`. Functions and data types you type (date/time functions, casts, …) are not translated between dialects: expressions are passed through unchanged, and the only check on them is the `TRUE` / `FALSE` warning on SQL Server. The app never connects to a database, so it can't check a specific server version or schema.
 
 ## Example
 
@@ -161,7 +183,8 @@ A single column stays on the `SELECT` line (`SELECT * FROM …`); two or more ar
 | `Ctrl`/`⌘` + `Z` | Undo, when focus is not in a text field (text fields keep the browser's own undo) |
 | `Ctrl`/`⌘` + `Shift` + `Z` (or `Ctrl` + `Y`) | Redo, outside text fields |
 | `?` | Show shortcuts |
-| `Esc` | Close dialogs and menus |
+| `↓` | In a table or column field, show suggestions from your schema |
+| `Esc` | Close suggestions, dialogs and menus |
 
 ## Using it
 
@@ -207,13 +230,30 @@ Source is plain ES modules in `src/`. The committed `dist/sqlbuilder.js` is what
 ```
 src/
 ├── model.js          Query model: plain JSON objects + factories + path helpers
-├── generator.js      model → SQL (formatted or one line), no string post-processing
+├── generator.js      model → SQL (formatted or one line, with format options), no string post-processing
 ├── dialects.js       Every dialect difference: writing rules plus supports/restrictions flags
 ├── validation.js     model → issues { level, category, message, path }
+├── analysis.js       Analysis rules (contradictions, unlinked joins, unused aliases, …) and query insights
+├── dialect-functions.js  Dialect-specific functions, operators and quoting found in typed SQL
+├── dialect-compare.js    The current query written for two dialects, and what differs
+├── explain.js        Developer / Advanced explanation notes and the one-sentence summary
 ├── structure.js      model → the query's steps in processing order, with explanations
 ├── sql-utils.js      Quote/paren-aware splitting and balance checks (not a SQL parser)
 ├── tokenizer.js      Highlighting tokens (no HTML)
 ├── serialization.js  JSON import/export; rebuilds untrusted input field by field
+├── schema.js         Schema model (tables, columns, keys), validation, storage, CREATE TABLE output
+├── ddl.js            Reads CREATE TABLE / ALTER TABLE … ADD text into schema tables (never runs it)
+├── sql-lexer.js      SQL tokens with positions, for reading pasted DDL and imported SQL
+├── sql-import.js     Reads a SELECT into the model (recursive descent; refuses with line and column)
+├── roundtrip.js      Compares imported SQL with the builder's SQL, token by token
+├── diagram.js        Tables and joins diagram, and the shared box-and-link layout (no DOM)
+├── flow.js           Query flow: which part of a SELECT feeds which (no DOM)
+├── exercises.js      Practice exercises, their checks, hints, model answers and tables
+├── practice.js       Checks a query against an exercise by its structure; practice progress
+├── versions.js       Line-by-line SQL changes between template versions
+├── projects.js       Projects: the list, which is open, and each one's storage keys
+├── suggest.js        Which tables/columns a builder field can use (scope, aliases, CTEs)
+├── joins.js          JOIN assistant (ON from foreign keys) and schema checks (tips/warnings)
 ├── storage.js        Guarded localStorage wrapper
 ├── settings.js / history.js / templates.js / undo.js / examples.js
 ├── app.js            Controller: state, events, rendering pipeline
@@ -223,14 +263,21 @@ src/
 └── ui/
     ├── builder.js    Renders the editor from the model (recursive for subqueries)
     ├── output.js     SQL view with tokens and line numbers
-    ├── library.js    History / Templates / Examples lists
+    ├── library.js    History / Templates / Examples / Schema lists
     ├── dialogs.js    Native <dialog> helpers
     ├── palette.js    Command palette (filtering + combobox dialog)
+    ├── suggest.js    Suggestion list under builder fields (ARIA combobox)
+    ├── sql-import.js Import SQL dialog preview (check result and differences)
+    ├── compare.js    Compare dialects dialog (differences, checks, both SQLs)
+    ├── diagram.js    Draws the tables and joins diagram and the query flow as SVG, with their lists
+    ├── practice.js   The Practice tab's list and the open exercise above the builder
+    ├── versions.js   The template Versions dialog
+    ├── projects.js   The Projects dialog's list
     ├── theme.js, shortcuts.js, dom.js (safe element builder)
 ```
 
 Design decisions:
-- **One structured model.** The builder, generator, validator, history, templates, import/export and undo all operate on the same JSON model, so SQL is never parsed back from text. New constructs are added as a model field, a generator branch, a validation rule and an editor control. Window functions and `INTERSECT`/`EXCEPT` were added exactly this way.
+- **One structured model.** The builder, generator, validator, history, templates, import/export and undo all operate on the same JSON model. The only place SQL text is read back is Import SQL, which turns it into that model once and proves the result with a round-trip check. New constructs are added as a model field, a generator branch, a validation rule and an editor control. Window functions and `INTERSECT`/`EXCEPT` were added exactly this way.
 - **Formatting happens during generation.** The generator emits `[indent, text]` lines and pretty-prints or joins them, so user values are never reformatted.
 - **No framework.** Rendering uses a ~30-line `h()` helper with `textContent`/`setAttribute`; there is no `innerHTML`. Events are delegated: inputs carry `data-path` (their location in the model) and buttons carry `data-action`.
 - **Bundled classic script.** ES modules can't load from `file://`, so esbuild bundles them into one IIFE. The only runtime dependency is the browser.
@@ -250,7 +297,7 @@ Design decisions:
 See [SECURITY.md](SECURITY.md). In short:
 - No network requests are made with your data.
 - User input is rendered as text only.
-- Imported JSON is validated and never executed.
+- Imported JSON and pasted SQL are validated and never executed.
 - Storage is limited to this browser, and you can delete it from Settings.
 - The deployment sends a strict Content-Security-Policy. The Android app embeds an equivalent CSP.
 - The Android app requests no permissions, has no analytics or ads, and never loads remote content. See [PRIVACY.md](PRIVACY.md).
@@ -294,8 +341,10 @@ Fabric_Sync/                                      ← unrelated Power BI content
 ## Limitations
 
 - **Not a SQL parser.** Expressions you type (columns, custom conditions, CASE parts, INSERT values) are inserted as written. Validation only checks balanced quotes and parentheses and rejects `;` and `--`. It cannot tell whether a column exists or a function is valid.
-- You can't paste SQL in to edit it; queries are built with the builder or imported as JSON.
-- CTEs are only allowed on the main query, and recursive CTEs aren't supported.
+- Import SQL reads one statement. INSERT with `DEFAULT VALUES`, `SET`, `IGNORE` or `RETURNING`; UPDATE with an alias, `FROM`, several tables, `ORDER BY`/`LIMIT` or `OUTPUT`; DELETE with `USING`, a join or an alias; any statement after `WITH`; and SELECTs using `DISTINCT ON`, `USING`, `NATURAL` or `LATERAL` joins, `APPLY`, comma-separated FROM tables, table functions or hints, `MATERIALIZED` CTEs, `NULLS FIRST/LAST`, `WITH ROLLUP`, named windows, parenthesized UNION parts, `FOR UPDATE`, `RETURNING` or a SELECT without FROM, are refused with their location. Comments aren't kept, PostgreSQL parameter names can't be recovered from `$1`, and a CASE or window column the builder can't write the same way stays a plain expression.
+- Schema checks look at plain column references only (`e.name`, `name`); names inside expressions such as `UPPER(e.nmae)` aren't checked. Columns of CTEs and derived tables are known only when they are plain columns or have an alias.
+- Suggestions come from the saved schema and what the query selects; a column produced by an expression without an alias has no name to suggest.
+- CTEs are only allowed on the main query (Import SQL refuses a WITH inside a subquery). A recursive CTE's column types aren't checked; the Advanced explanation says what each dialect expects.
 - INSERT values are SQL expressions: write text in quotes. A warning flags likely unquoted text.
 - GROUP BY checking is a heuristic: it compares expressions textually and can't know about functional dependencies.
 - Dialect support covers only the differences listed in [SQL dialects](#sql-dialects).
@@ -309,9 +358,7 @@ Fabric_Sync/                                      ← unrelated Power BI content
 
 Candidates, in rough priority order:
 - SQL Server `MERGE`, and `RETURNING` / `OUTPUT`
-- Recursive CTEs
 - More window options: named `WINDOW` clauses, `RANGE`/`GROUPS` frames and custom frame bounds
-- Optional schema hints (known tables/columns) for autocomplete and validation
 
 ## License
 

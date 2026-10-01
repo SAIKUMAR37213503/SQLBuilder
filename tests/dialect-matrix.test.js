@@ -71,8 +71,24 @@ describe('dialect definitions', () => {
 
     test('features that are not built yet are off everywhere', () => {
         for (const id of ALL) {
-            expect(DIALECTS[id].supports).toMatchObject({ recursiveCte: false, returning: false, output: false });
+            expect(DIALECTS[id].supports).toMatchObject({ returning: false, output: false });
         }
+    });
+
+    test('every dialect describes recursive CTEs', () => {
+        const parts = ['aggregate', 'window', 'groupBy', 'distinct', 'outerJoin'];
+        for (const id of ALL) {
+            const r = DIALECTS[id].recursive;
+            expect(DIALECTS[id].supports.recursiveCte).toBe(true);
+            expect(['WITH RECURSIVE', 'WITH']).toContain(r.keyword);
+            expect(['error', 'warning', 'allowed']).toContain(r.orderBy);
+            expect(['error', 'warning', 'allowed']).toContain(r.limit);
+            expect(r.depthLimit.length).toBeGreaterThan(20);
+            for (const part of r.notInRecursivePart) expect(parts).toContain(part);
+            expect(Object.isFrozen(r) && Object.isFrozen(r.notInRecursivePart)).toBe(true);
+        }
+        expect(DIALECTS.sqlserver.recursive).toMatchObject({ keyword: 'WITH', unionAllOnly: true });
+        expect(DIALECTS.postgresql.recursive).toMatchObject({ keyword: 'WITH RECURSIVE', singleRecursivePart: true });
     });
 
     test('pagination capability flags match what paginate() writes', () => {
@@ -105,7 +121,11 @@ describe('golden SQL: SELECT features', () => {
             orderBy: [desc('COUNT(*)')]
         });
         expectSql(q, 'SELECT DISTINCT dept AS department, COUNT(*) AS staff, AVG(salary) FROM employees GROUP BY dept HAVING COUNT(*) > 5 ORDER BY COUNT(*) DESC;');
-        for (const d of ALL) expect(validateQuery(q, { dialect: d }), d).toEqual([]);
+        // Every grouped column is selected, so DISTINCT is redundant: only that suggestion
+        for (const d of ALL) {
+            expect(validateQuery(q, { dialect: d }).map(i => `${i.level}: ${i.message}`), d)
+                .toEqual([expect.stringMatching(/^suggestion: Every grouped column is selected/)]);
+        }
     });
 
     test('CASE column', () => {

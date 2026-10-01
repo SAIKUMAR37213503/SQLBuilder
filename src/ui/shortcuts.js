@@ -11,7 +11,8 @@ export const SHORTCUTS = [
     { keys: ['Mod', 'Z'], description: 'Undo (outside text fields)' },
     { keys: ['Mod', 'Shift', 'Z'], description: 'Redo (outside text fields)' },
     { keys: ['?'], description: 'Show keyboard shortcuts' },
-    { keys: ['Esc'], description: 'Close dialogs and menus' }
+    { keys: ['↓'], description: 'In a table or column field, show suggestions from your schema' },
+    { keys: ['Esc'], description: 'Close suggestions, dialogs and menus' }
 ];
 
 export function isMac() {

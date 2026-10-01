@@ -26,7 +26,7 @@
 //   booleanKeywords          TRUE / FALSE are valid in hand-written SQL
 //   fullJoin                 FULL [OUTER] JOIN
 //   setOperators             the UNION / INTERSECT / EXCEPT variants allowed
-//   cte, recursiveCte        WITH, WITH RECURSIVE (recursive: not built yet)
+//   cte, recursiveCte        WITH, recursive CTEs (see `recursive` below)
 //   windowFunctions, nthValue
 //   top, limitOffset, offsetFetch
 //                            the pagination syntax paginate() writes
@@ -49,10 +49,29 @@
 //   'ignored'  placeholders are anonymous (?); names are dropped
 // parameters.ignoredNote     the tip shown once when names are dropped
 //
+// recursive                  how recursive CTEs are written and what they allow
+//   keyword                  'WITH RECURSIVE', or 'WITH' (SQL Server)
+//   unionAllOnly             only UNION ALL may join the recursive part
+//   singleRecursivePart      the CTE may be referenced by one part only
+//   notInRecursivePart       constructs refused in the recursive part:
+//                            aggregate, window, groupBy, distinct, outerJoin
+//   orderBy, limit           ORDER BY / LIMIT and OFFSET on a recursive CTE:
+//                            'error', 'warning' or 'allowed'
+//   depthLimit               what happens when it goes too deep (a sentence)
+//   growingText              a tip for text built up level by level, or ''
+//
 // minVersions                features that need a later release, shown as tips
+//
+// syntax                     how SQL text in this dialect is read (SQL import)
+//   backslashEscapes         \' and \\ escape characters inside strings
+//   hashComments             # starts a line comment
 //
 // ui                         wording for dialect-specific builder fields
 //   limitLabel, limitHint    the row-limit field (LIMIT, or TOP on SQL Server)
+//
+// explain                    sentences for the Advanced explanation level
+//   nullsOrder               where NULLs go in ORDER BY
+//   pagination               how the row limit and offset work
 
 const escapeSingleQuotes = (text) => text.replace(/'/g, "''");
 
@@ -65,7 +84,7 @@ const DEFAULT_SUPPORTS = {
     fullJoin: true,
     setOperators: ALL_SET_OPERATORS,
     cte: true,
-    recursiveCte: false,
+    recursiveCte: true,
     windowFunctions: true,
     nthValue: true,
     top: false,
@@ -101,7 +120,14 @@ function defineDialect(spec) {
         restrictions: Object.freeze({ ...DEFAULT_RESTRICTIONS, ...spec.restrictions }),
         parameters: Object.freeze({ names: 'kept', ignoredNote: '', ...spec.parameters }),
         minVersions: Object.freeze({ ...spec.minVersions }),
+        syntax: Object.freeze({ backslashEscapes: false, hashComments: false, ...spec.syntax }),
         ui: Object.freeze({ limitLabel: 'LIMIT', limitHint: '', ...spec.ui }),
+        explain: Object.freeze({ nullsOrder: '', pagination: '', ...spec.explain }),
+        recursive: Object.freeze({
+            keyword: 'WITH RECURSIVE', unionAllOnly: false, singleRecursivePart: false,
+            orderBy: 'allowed', limit: 'allowed', depthLimit: '', growingText: '', ...spec.recursive,
+            notInRecursivePart: Object.freeze([...(spec.recursive?.notInRecursivePart || ['aggregate', 'window'])])
+        }),
         notes: Object.freeze([...(spec.notes || [])])
     });
 }
@@ -116,6 +142,15 @@ export const DIALECTS = {
         paginate: limitOffsetPagination,
         parameter: (name) => (NAMED_RE.test(name) ? `:${name}` : '?'),
         insertedValue: null,
+        explain: {
+            nullsOrder: 'Where NULLs sort depends on the database. Some accept NULLS FIRST or NULLS LAST; sorting on a CASE works everywhere.',
+            pagination: 'LIMIT … OFFSET is widely supported; the SQL standard spelling is OFFSET n ROWS FETCH FIRST n ROWS ONLY.'
+        },
+        recursive: {
+            orderBy: 'warning',
+            limit: 'warning',
+            depthLimit: 'Some databases stop after a set number of levels; others keep going until the query is cancelled.'
+        },
         notes: ['Parameters are written as ? (or :name when named).', 'Upserts need a specific dialect (PostgreSQL or MySQL).']
     }),
     sqlserver: defineDialect({
@@ -153,6 +188,19 @@ export const DIALECTS = {
             valueFunctionsNeedOrderBy: true,
             frameNeedsOrderBy: true
         },
+        explain: {
+            nullsOrder: 'SQL Server sorts NULLs first in ascending order and last in descending order.',
+            pagination: 'SQL Server writes a plain row limit as TOP n. With an offset or a UNION it uses OFFSET … ROWS FETCH NEXT n ROWS ONLY, which needs ORDER BY, so the builder adds ORDER BY (SELECT NULL) when there is none.'
+        },
+        recursive: {
+            keyword: 'WITH',
+            unionAllOnly: true,
+            notInRecursivePart: ['aggregate', 'groupBy', 'distinct', 'outerJoin'],
+            orderBy: 'error',
+            limit: 'error',
+            depthLimit: 'SQL Server stops with an error after 100 levels; OPTION (MAXRECURSION n) at the end of the statement changes the limit.',
+            growingText: 'SQL Server needs each column to have exactly the same type in both parts, so text built up level by level needs the same CAST in both, for example CAST(name AS NVARCHAR(1000)).'
+        },
         notes: ['Booleans are written as 1/0.', 'LIMIT becomes TOP, or OFFSET … FETCH when an offset or set operation is used.', 'No INTERSECT ALL / EXCEPT ALL or NTH_VALUE.', 'Parameters are written as @name (or @p1, @p2, … when unnamed).', 'Upserts (MERGE) are not supported yet.']
     }),
     postgresql: defineDialect({
@@ -169,6 +217,17 @@ export const DIALECTS = {
         parameters: {
             names: 'numbered',
             ignoredNote: 'PostgreSQL parameters are numbered ($1, $2, … in order), so parameter names aren\'t part of the SQL. Enter a number instead of a name to choose the position.'
+        },
+        explain: {
+            nullsOrder: 'PostgreSQL sorts NULLs last in ascending order and first in descending order; NULLS FIRST or NULLS LAST changes that.',
+            pagination: 'PostgreSQL applies LIMIT and OFFSET after sorting. OFFSET still reads the rows it skips, so later pages read more rows.'
+        },
+        recursive: {
+            singleRecursivePart: true,
+            notInRecursivePart: ['aggregate'],
+            orderBy: 'error',
+            limit: 'error',
+            depthLimit: 'PostgreSQL has no depth limit, so a cycle in the data repeats until the query is cancelled.'
         },
         notes: ['Parameters are numbered: $1, $2, … in order.', 'Upsert: ON CONFLICT … DO NOTHING / DO UPDATE.']
     }),
@@ -195,6 +254,18 @@ export const DIALECTS = {
         },
         // INTERSECT / EXCEPT exist since MySQL 8.0.31
         minVersions: { INTERSECT: '8.0.31', EXCEPT: '8.0.31' },
+        syntax: { backslashEscapes: true, hashComments: true },
+        explain: {
+            nullsOrder: 'MySQL sorts NULLs first in ascending order and last in descending order.',
+            pagination: 'MySQL applies LIMIT and OFFSET after sorting. OFFSET needs a LIMIT, so “all remaining rows” is written as LIMIT 18446744073709551615.'
+        },
+        recursive: {
+            notInRecursivePart: ['aggregate', 'window', 'groupBy', 'distinct'],
+            // LIMIT on a recursive CTE works from MySQL 8.0.19
+            orderBy: 'error',
+            depthLimit: 'MySQL stops with an error after 1,000 levels (the cte_max_recursion_depth setting).',
+            growingText: 'MySQL takes each column\'s type from the first part, so text that grows level by level can be cut off or rejected. Cast it wider in the first part, for example CAST(name AS CHAR(1000)).'
+        },
         notes: ['FULL JOIN is not supported by MySQL.', 'Window functions need MySQL 8.0+; INTERSECT / EXCEPT need 8.0.31+.', 'Parameters are written as ?.', 'Upsert: ON DUPLICATE KEY UPDATE.']
     })
 };

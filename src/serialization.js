@@ -8,18 +8,30 @@
 import {
     MODEL_VERSION, QUERY_TYPES, JOIN_TYPES, SET_OPERATORS, AGGREGATES, SORT_DIRECTIONS,
     LOGIC_OPERATORS, OPERATORS, VALUE_TYPES, WINDOW_FUNCTIONS, WINDOW_FRAMES, ASSIGNMENT_VALUE_TYPES,
-    UPSERT_VALUE_TYPES, INSERT_SOURCES, UPSERT_MODES, createWorkspace, createSelect, createUpsert
+    UPSERT_VALUE_TYPES, INSERT_SOURCES, UPSERT_MODES, createWorkspace, createSelect, createUpsert,
+    workspaceVersion, withModelVersion
 } from './model.js';
 import { MAX_NESTING_DEPTH } from './validation.js';
 import { sanitizeSettings } from './settings.js';
 import { DIALECTS } from './dialects.js';
+import { readTables, SchemaError } from './schema.js';
+import { readDdl } from './ddl.js';
 
 export const APP_ID = 'sql-query-builder-pro-lite';
 export const MAX_IMPORT_BYTES = 1024 * 1024;
-// A backup holds up to 200 templates and 50 history entries
-export const MAX_BACKUP_BYTES = 8 * 1024 * 1024;
+// A backup holds up to 200 templates and 50 history entries per project
+export const MAX_BACKUP_BYTES = 16 * 1024 * 1024;
 export const BACKUP_FORMAT = 'sql-builder-backup';
-export const BACKUP_VERSION = 1;
+// Version 2 added the schema; version 1 files are still read. A backup with
+// projects besides Main is version 3, so an app from before projects refuses
+// it rather than quietly leaving them out; one without stays version 2.
+export const BACKUP_VERSION = 2;
+export const BACKUP_VERSION_PROJECTS = 3;
+const MAX_PROJECTS = 20;
+export const SCHEMA_FORMAT = 'sql-builder-schema';
+export const SCHEMA_VERSION = 1;
+// CREATE TABLE scripts (pg_dump, mysqldump, SSMS) can be long
+export const MAX_SCHEMA_IMPORT_BYTES = 4 * 1024 * 1024;
 const MAX_HISTORY_SQL = 100 * 1024;
 const MAX_STRING = 10000;
 const MAX_LIST = 200;
@@ -165,8 +177,11 @@ function readSelect(data, where, depth = 0) {
     const emptyGroup = { kind: 'group', logic: 'AND', negate: false, items: [] };
     return {
         kind: 'select',
+        // recursive and columns were added in model version 2
         ctes: list(data, 'ctes', where, (c, w) => ({
             name: str(c, 'name', w),
+            recursive: bool(c, 'recursive', w),
+            columns: str(c, 'columns', w),
             query: readSelect(obj(c, 'query', w), `${w}.query`, depth + 1)
         })),
         distinct: bool(data, 'distinct', where),
@@ -280,7 +295,7 @@ function parseJson(text, maxBytes = MAX_IMPORT_BYTES) {
 }
 
 export function createQueryExport(workspace, meta = {}) {
-    return { app: APP_ID, kind: 'query', version: MODEL_VERSION, exportedAt: new Date().toISOString(), ...meta, query: workspace };
+    return { app: APP_ID, kind: 'query', version: workspaceVersion(workspace), exportedAt: new Date().toISOString(), ...meta, query: withModelVersion(workspace) };
 }
 
 /** @returns {{ ok: true, workspace: any, dialect?: string } | { ok: false, error: string }} */
@@ -292,6 +307,9 @@ export function parseQueryFile(text) {
         }
         if (isObject(data) && data.kind === 'backup') {
             throw new ImportError('This is a full backup. Use File, Restore from backup.');
+        }
+        if (isObject(data) && data.kind === 'schema') {
+            throw new ImportError('This is a schema file. Import it from the Schema panel.');
         }
         const payload = isObject(data) && data.app === APP_ID && data.kind === 'query' ? data.query : data;
         const dialect = isObject(data) && typeof data.dialect === 'string' ? data.dialect : undefined;
@@ -307,14 +325,52 @@ const exportTemplate = ({ name, dialect, description, category, pinned, workspac
     ...(description ? { description } : {}),
     ...(category ? { category } : {}),
     ...(pinned ? { pinned: true } : {}),
-    workspace, createdAt, updatedAt
+    workspace: withModelVersion(workspace), createdAt, updatedAt
 });
+
+// A backup also keeps each template's earlier versions; a templates file,
+// made for sharing, doesn't
+const backupTemplate = (/** @type {any} */ t) => ({
+    ...exportTemplate(t),
+    ...(t.versions?.length
+        ? { versions: t.versions.map((/** @type {any} */ v) => ({ savedAt: v.savedAt, ...(v.dialect ? { dialect: v.dialect } : {}), workspace: withModelVersion(v.workspace) })) }
+        : {})
+});
+
+/** Earlier versions kept per template. */
+export const TEMPLATE_VERSION_LIMIT = 10;
+
+/**
+ * A template's earlier versions from storage or a backup, newest first.
+ * Read as untrusted: a damaged version (or one from a newer app) is left
+ * out rather than failing the whole template, and at most
+ * TEMPLATE_VERSION_LIMIT are kept.
+ * @param {any} list
+ * @returns {{ savedAt: number, dialect?: string, workspace: any }[]}
+ */
+export function readVersions(list) {
+    if (!Array.isArray(list)) return [];
+    const out = [];
+    for (const v of list.slice(0, MAX_LIST)) {
+        if (!isObject(v) || !time(v.savedAt)) continue;
+        try {
+            const dialect = typeof v.dialect === 'string' && Object.hasOwn(DIALECTS, v.dialect) ? { dialect: v.dialect } : {};
+            out.push({ savedAt: v.savedAt, ...dialect, workspace: normalizeWorkspace(v.workspace) });
+        } catch {
+            // skip a damaged version
+        }
+    }
+    return out.sort((a, b) => b.savedAt - a.savedAt).slice(0, TEMPLATE_VERSION_LIMIT);
+}
+
+// Files say the newest model version any query in them uses
+const newestVersion = (workspaces) => Math.max(workspaceVersion(null), ...workspaces.map(workspaceVersion));
 
 export function createTemplatesExport(templates) {
     return {
         app: APP_ID,
         kind: 'templates',
-        version: MODEL_VERSION,
+        version: newestVersion(templates.map(t => t.workspace)),
         exportedAt: new Date().toISOString(),
         templates: templates.map(exportTemplate)
     };
@@ -331,12 +387,14 @@ function readTemplate(t, i, { withDates = false } = {}) {
     const dates = withDates
         ? { ...(time(t.createdAt) ? { createdAt: t.createdAt } : {}), ...(time(t.updatedAt) ? { updatedAt: t.updatedAt } : {}) }
         : {};
+    const versions = withDates ? readVersions(t.versions) : [];
     try {
         return {
             name, ...optional('dialect'), ...optional('description'), ...optional('category'),
             ...(t.pinned === true ? { pinned: true } : {}),
             ...dates,
-            workspace: normalizeWorkspace(t.workspace)
+            workspace: normalizeWorkspace(t.workspace),
+            ...(versions.length ? { versions } : {})
         };
     } catch (error) {
         throw new ImportError(`Template “${name}”: ${describeError(error)}`);
@@ -349,6 +407,9 @@ export function parseTemplatesFile(text) {
         const data = parseJson(text);
         if (isObject(data) && data.kind === 'backup') {
             throw new ImportError('This is a full backup. Use File, Restore from backup.');
+        }
+        if (isObject(data) && data.kind === 'schema') {
+            throw new ImportError('This is a schema file. Import it from the Schema panel.');
         }
         if (!isObject(data) || data.kind !== 'templates' || !Array.isArray(data.templates)) {
             throw new ImportError("This isn't a templates file exported from SQL Query Builder.");
@@ -364,21 +425,72 @@ export function parseTemplatesFile(text) {
 // Full backup: templates, history and settings in one file
 // ---------------------------------------------------------------------------
 
+const backupHistory = (/** @type {any[]} */ history) => history.map(({ timestamp, type, dialect, sql, workspace }) => ({ timestamp, type, dialect, sql, workspace: withModelVersion(workspace) }));
+
 /**
- * @param {{ templates: any[], history: any[], settings: any }} data
+ * The Main project's data is at the top level, as before projects existed;
+ * any other projects are listed under `projects`.
+ * @param {{ templates: any[], history: any[], settings: any, schema?: any[],
+ *   projects?: { name: string, dialect?: string, templates: any[], history: any[], schema: any[] }[] }} data
  */
-export function createBackup({ templates, history, settings }) {
+export function createBackup({ templates, history, settings, schema = [], projects = [] }) {
+    const everything = [...templates, ...history, ...projects.flatMap(p => [...p.templates, ...p.history])];
     return {
         app: APP_ID,
         kind: 'backup',
         format: BACKUP_FORMAT,
-        version: BACKUP_VERSION,
-        modelVersion: MODEL_VERSION,
+        version: projects.length ? BACKUP_VERSION_PROJECTS : BACKUP_VERSION,
+        modelVersion: newestVersion(everything.map(item => item.workspace)),
         exportedAt: new Date().toISOString(),
         settings: sanitizeSettings(settings),
-        templates: templates.map(exportTemplate),
-        history: history.map(({ timestamp, type, dialect, sql, workspace }) => ({ timestamp, type, dialect, sql, workspace }))
+        templates: templates.map(backupTemplate),
+        history: backupHistory(history),
+        schema: { tables: schema.map(exportTable) },
+        ...(projects.length ? {
+            projects: projects.map(p => ({
+                name: p.name,
+                ...(p.dialect ? { dialect: p.dialect } : {}),
+                templates: p.templates.map(backupTemplate),
+                history: backupHistory(p.history),
+                schema: { tables: p.schema.map(exportTable) }
+            }))
+        } : {})
     };
+}
+
+function readBackupProjects(list) {
+    if (list === undefined) return [];
+    if (!Array.isArray(list)) throw new ImportError('The backup is damaged: projects must be a list.');
+    if (list.length > MAX_PROJECTS) throw new ImportError('The backup contains too many projects.');
+    const projects = list.map(readBackupProject);
+    const names = new Set();
+    for (const p of projects) {
+        if (names.has(p.name.toLowerCase())) throw new ImportError(`The backup has more than one project named “${p.name}”.`);
+        names.add(p.name.toLowerCase());
+    }
+    return projects;
+}
+
+/** One project of a version 3 backup. */
+function readBackupProject(p, i) {
+    if (!isObject(p)) throw new ImportError(`Project ${i + 1} is not an object.`);
+    const name = typeof p.name === 'string' ? p.name.trim().replace(/\s+/g, ' ').slice(0, 60) : '';
+    if (!name) throw new ImportError(`Project ${i + 1} has no name.`);
+    const templates = p.templates === undefined ? [] : p.templates;
+    const history = p.history === undefined ? [] : p.history;
+    if (!Array.isArray(templates) || !Array.isArray(history)) throw new ImportError(`Project “${name}” is damaged: templates and history must be lists.`);
+    if (templates.length > MAX_LIST || history.length > MAX_LIST) throw new ImportError(`Project “${name}” has too many templates or history entries.`);
+    try {
+        return {
+            name,
+            ...(typeof p.dialect === 'string' && Object.hasOwn(DIALECTS, p.dialect) ? { dialect: p.dialect } : {}),
+            templates: templates.map((t, j) => readTemplate(t, j, { withDates: true })),
+            history: history.map(readHistoryEntry),
+            schema: p.schema === undefined ? [] : readSchemaTables(isObject(p.schema) ? p.schema.tables : undefined, 'Its schema')
+        };
+    } catch (error) {
+        throw new ImportError(`Project “${name}”: ${describeError(error)}`);
+    }
 }
 
 function readHistoryEntry(e, i) {
@@ -402,16 +514,19 @@ function readHistoryEntry(e, i) {
 
 /**
  * Validates a backup file field by field. Nothing is stored here.
- * @returns {{ ok: true, exportedAt: string, settings: any, templates: any[], history: any[] } | { ok: false, error: string }}
+ * `schema` is null for a version 1 backup, which has none.
+ * @returns {{ ok: true, exportedAt: string, settings: any, templates: any[], history: any[], schema: any[] | null,
+ *   projects: { name: string, dialect?: string, templates: any[], history: any[], schema: any[] }[] } | { ok: false, error: string }}
  */
 export function parseBackupFile(text) {
     try {
         const data = parseJson(text, MAX_BACKUP_BYTES);
         if (isObject(data) && data.kind === 'templates') throw new ImportError('This is a templates file. Import it from the Templates panel.');
+        if (isObject(data) && data.kind === 'schema') throw new ImportError('This is a schema file. Import it from the Schema panel.');
         if (!isObject(data) || data.kind !== 'backup' || data.format !== BACKUP_FORMAT) {
             throw new ImportError("This isn't a backup file from SQL Query Builder.");
         }
-        if (typeof data.version !== 'number' || data.version > BACKUP_VERSION) {
+        if (typeof data.version !== 'number' || data.version > BACKUP_VERSION_PROJECTS) {
             throw new ImportError('This backup was made by a newer version of the app. Update the app, then try again.');
         }
         const templates = data.templates === undefined ? [] : data.templates;
@@ -424,8 +539,74 @@ export function parseBackupFile(text) {
             exportedAt: typeof data.exportedAt === 'string' ? data.exportedAt.slice(0, 40) : '',
             settings: sanitizeSettings(data.settings),
             templates: templates.map((t, i) => readTemplate(t, i, { withDates: true })),
-            history: history.map(readHistoryEntry)
+            history: history.map(readHistoryEntry),
+            schema: data.schema === undefined ? null : readSchemaTables(isObject(data.schema) ? data.schema.tables : undefined, 'The backup\'s schema'),
+            projects: readBackupProjects(data.projects)
         };
+    } catch (error) {
+        return { ok: false, error: describeError(error) };
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Schema: a JSON file of tables, or CREATE TABLE statements
+// ---------------------------------------------------------------------------
+
+const exportTable = ({ name, columns, primaryKey, unique, foreignKeys }) => ({
+    name,
+    columns: columns.map(({ name: column, type, nullable }) => ({ name: column, ...(type ? { type } : {}), ...(nullable ? {} : { nullable: false }) })),
+    ...(primaryKey.length ? { primaryKey } : {}),
+    ...(unique.length ? { unique } : {}),
+    ...(foreignKeys.length ? { foreignKeys } : {})
+});
+
+export function createSchemaExport(tables) {
+    return {
+        app: APP_ID,
+        kind: 'schema',
+        format: SCHEMA_FORMAT,
+        version: SCHEMA_VERSION,
+        exportedAt: new Date().toISOString(),
+        tables: tables.map(exportTable)
+    };
+}
+
+function readSchemaTables(tables, where) {
+    try {
+        return readTables(tables);
+    } catch (error) {
+        if (error instanceof SchemaError) throw new ImportError(`${where}: ${error.message}`);
+        throw error;
+    }
+}
+
+/**
+ * Reads a schema from pasted text or a file: a schema JSON file, or SQL with
+ * CREATE TABLE statements. Nothing is stored here.
+ * @param {string} text
+ * @returns {{ ok: true, source: 'json' | 'sql', tables: any[], skipped: { label: string, count: number }[], problems: { message: string, line: number, col: number }[] }
+ *   | { ok: false, error: string }}
+ */
+export function readSchemaInput(text) {
+    try {
+        if (text.length > MAX_SCHEMA_IMPORT_BYTES) throw new ImportError(`The text is too long (limit ${MAX_SCHEMA_IMPORT_BYTES / 1024 / 1024} MB).`);
+        const trimmed = text.trim();
+        if (!trimmed) throw new ImportError('Paste CREATE TABLE statements or a schema file first.');
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            const data = parseJson(trimmed, MAX_SCHEMA_IMPORT_BYTES);
+            if (isObject(data) && data.kind === 'backup') throw new ImportError('This is a full backup. Use File, Restore from backup.');
+            if (isObject(data) && (data.kind === 'templates' || data.kind === 'query')) throw new ImportError(`This is a ${data.kind === 'query' ? 'query' : 'templates'} file, not a schema.`);
+            const tables = Array.isArray(data) ? data : isObject(data) ? data.tables : undefined;
+            if (!Array.isArray(tables)) throw new ImportError("This JSON isn't a schema: it needs a list of tables.");
+            return { ok: true, source: 'json', tables: readSchemaTables(tables, 'Schema'), skipped: [], problems: [] };
+        }
+        const result = readDdl(text);
+        if (!result.tables.length && !result.problems.length) {
+            throw new ImportError(result.skipped.length
+                ? 'No CREATE TABLE statements were found; only other statements.'
+                : 'No CREATE TABLE statements were found.');
+        }
+        return { ok: true, source: 'sql', ...result };
     } catch (error) {
         return { ok: false, error: describeError(error) };
     }

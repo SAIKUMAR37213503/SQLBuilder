@@ -1,13 +1,16 @@
 // Validation of the query model.
 //
 // Issues are { level, category, message, path }:
-//   level:    'error'   – the SQL would be broken; generation is blocked
-//             'warning' – valid SQL that is probably not what you want
-//             'info'    – a hint
+//   level:    'error'      – the SQL would be broken; generation is blocked
+//             'warning'    – valid SQL that is probably not what you want
+//             'suggestion' – valid SQL that could be clearer or simpler
+//             'info'       – a hint
 //   category: 'builder' – missing / inconsistent builder input
 //             'syntax'  – lightweight checks on typed SQL fragments
 //                         (quotes, parentheses, ";") — not a full parser
 //             'safety'  – destructive statements (UPDATE / DELETE)
+//             'analysis' – rules from analysis.js: repeated or contradictory
+//                         conditions, unlinked joins, unused aliases, …
 //   path:     model path of the field the issue refers to
 //
 // Only errors block generation; warnings never stop the user.
@@ -16,11 +19,18 @@ import {
     OPERATORS, JOIN_TYPES, SET_OPERATORS, AGGREGATES, LOGIC_OPERATORS, WINDOW_FUNCTIONS, WINDOW_FRAMES, UPSERT_MODES, joinPath
 } from './model.js';
 import { getDialect } from './dialects.js';
+import { dialectSyntaxIssues } from './dialect-functions.js';
+import { lex, significant } from './sql-lexer.js';
 import {
     findSyntaxProblem, isQualifiedName, isIdentifier, isColumnReference, splitTopLevel,
     containsAggregateCall, normalizeExpr, isNumberLiteral, isQuotedString, isBareIdentifier, stripStrings, hasLeadingZero,
     findBareWord
 } from './sql-utils.js';
+import {
+    DEEP_NESTING, duplicateConditions, contradictions, isReversedBetween, joinLink, sourceNames,
+    statementTexts, isUnusedAlias, isReferenced, wildcardColumn, isRedundantDistinct, nestingDepth
+} from './analysis.js';
+import { cteReferences } from './recursion.js';
 
 export const MAX_NESTING_DEPTH = 4;
 
@@ -58,6 +68,7 @@ export function validateWorkspace(workspace, options = {}) {
  */
 export function validateQuery(query, options = {}, basePath = '') {
     const v = new Validator(getDialect(options.dialect), Boolean(options.quoteIdentifiers));
+    v.texts = statementTexts(query);
     switch (query.kind) {
         case 'select': v.select(query, basePath, { scope: '', depth: 0, branch: false, top: true }); break;
         case 'insert': v.insert(query, basePath); break;
@@ -75,7 +86,7 @@ export function hasErrors(issues) {
 
 export function summarize(issues) {
     const count = (level) => issues.filter(i => i.level === level).length;
-    return { errors: count('error'), warnings: count('warning'), infos: count('info') };
+    return { errors: count('error'), warnings: count('warning'), suggestions: count('suggestion'), infos: count('info') };
 }
 
 const blank = (value) => String(value ?? '').trim() === '';
@@ -88,6 +99,8 @@ class Validator {
         this.issues = [];
         /** @type {null | { path: string, scope: string }} first parameter whose name the dialect can't use */
         this.ignoredParam = null;
+        /** @type {string[]} the statement's text fields, for finding alias references */
+        this.texts = [];
     }
 
     // Statement-wide notes, added once after everything else was checked
@@ -149,6 +162,9 @@ class Validator {
     // Hand-written SQL is passed through unchanged, so point out words the
     // selected dialect doesn't understand instead of rewriting them
     dialectWords(text, path, scope) {
+        for (const issue of dialectSyntaxIssues(significant(lex(text, this.dialect.syntax)), this.dialect)) {
+            this.add(issue.level, 'dialect', issue.message, path, scope);
+        }
         if (!this.dialect.supports.booleanKeywords) {
             const word = findBareWord(text, ['TRUE', 'FALSE']);
             if (word) {
@@ -217,10 +233,39 @@ class Validator {
                 }
             });
             this.pagination(q, path, scope);
-            if (!ctx.top && !ctx.insertSource) this.nestedOrderBy(q, path, scope);
+            // A recursive CTE's sorting has its own check (recursiveCte)
+            if (!ctx.top && !ctx.insertSource && !(ctx.recursive && this.dialect.recursive.orderBy !== 'allowed')) this.nestedOrderBy(q, path, scope);
         }
 
         this.setOps(q, path, ctx);
+        this.selectAnalysis(q, path, ctx);
+    }
+
+    // Valid SELECTs that could be clearer: see analysis.js
+    selectAnalysis(q, path, ctx) {
+        const { scope } = ctx;
+        if (ctx.top) {
+            // SELECT * from a CTE or FROM subquery only returns columns the query itself lists
+            const cteNames = new Set(q.ctes.map(c => String(c.name).trim().toLowerCase()));
+            const fromQuery = q.from.kind === 'subquery' || cteNames.has(String(q.from.table).trim().toLowerCase());
+            const star = wildcardColumn(q);
+            if (star >= 0 && q.groupBy.length === 0 && !(fromQuery && q.joins.length === 0)) {
+                this.add('suggestion', 'analysis',
+                    'SELECT * returns every column, including any added to the table later. Listing just the columns you need keeps the result predictable and may reduce the amount of data returned.',
+                    joinPath(path, 'columns', star, 'expr'), scope);
+            }
+            const depth = nestingDepth(q);
+            if (depth >= DEEP_NESTING) {
+                this.add('suggestion', 'analysis',
+                    `Subqueries are nested ${depth} levels deep. Moving inner ones into named queries (WITH) can make the query easier to read and check.`,
+                    path, scope);
+            }
+        }
+        if (isRedundantDistinct(q)) {
+            this.add('suggestion', 'analysis',
+                'Every grouped column is selected, so GROUP BY already returns distinct rows and DISTINCT doesn\'t change the result. You can turn DISTINCT off.',
+                joinPath(path, 'distinct'), scope);
+        }
     }
 
     // ORDER BY inside a subquery or CTE only matters together with LIMIT/OFFSET
@@ -257,10 +302,138 @@ class Validator {
                 this.reserved(name, joinPath(cPath, 'name'), '');
             }
             seen.add(name.toLowerCase());
+            const scope = `CTE ${name ? quote(name) : i + 1}`;
             this.select(cte.query, joinPath(cPath, 'query'), {
-                scope: `CTE ${name ? quote(name) : i + 1}`, depth: ctx.depth + 1, branch: false, top: false
+                scope, depth: ctx.depth + 1, branch: false, top: false, recursive: cte.recursive === true
             });
+            this.cteColumns(cte, cPath, scope);
+            if (name && isIdentifier(name)) {
+                if (cte.recursive) this.recursiveCte(cte, name, cPath, scope);
+                else this.selfReference(cte, name, cPath, scope);
+            }
         });
+    }
+
+    // name (a, b) AS (…): one name per column the query returns
+    cteColumns(cte, cPath, scope) {
+        const names = splitTopLevel(String(cte.columns ?? '')).filter(Boolean);
+        if (names.length === 0) return;
+        const path = joinPath(cPath, 'columns');
+        const bad = names.find(n => !isIdentifier(n));
+        if (bad) {
+            this.add('error', 'builder', `Column name ${quote(bad)} can only contain letters, numbers and _.`, path, scope);
+            return;
+        }
+        names.forEach(n => this.reserved(n, path, scope));
+        const count = outputColumnCount(cte.query);
+        if (count >= 0 && count !== names.length) {
+            this.add('error', 'builder',
+                `The column list names ${names.length} ${names.length === 1 ? 'column' : 'columns'}, but the query returns ${count}. Give one name per column.`,
+                path, scope);
+        }
+    }
+
+    // A CTE that isn't marked recursive but uses its own name
+    selfReference(cte, name, cPath, scope) {
+        const { direct, nested } = cteReferences(cte.query, name);
+        if (direct + nested === 0) return;
+        if (this.dialect.recursive.keyword === 'WITH') {
+            this.add('error', 'dialect',
+                `${quote(name)} refers to itself, which ${this.dialect.shortLabel} always treats as a recursive CTE. Turn on Recursive for it, or rename it if you meant the table of the same name.`,
+                joinPath(cPath, 'recursive'), scope);
+        } else {
+            this.add('info', 'builder',
+                `Inside ${quote(name)}, the name ${quote(name)} means the table of that name, not this CTE. To make the CTE refer to itself, turn on Recursive.`,
+                joinPath(cPath, 'recursive'), scope);
+        }
+    }
+
+    // WITH RECURSIVE: a first part that gives the starting rows, then parts
+    // joined by UNION [ALL] that refer to the CTE once, directly
+    recursiveCte(cte, name, cPath, scope) {
+        const rules = this.dialect.recursive;
+        const d = this.dialect.shortLabel;
+        const q = cte.query;
+        const qPath = joinPath(cPath, 'query');
+        if (q.setOps.length === 0) {
+            this.add('error', 'builder',
+                `A recursive CTE needs a second part, joined with UNION ALL, that refers to ${quote(name)}. Add it under UNION / INTERSECT / EXCEPT, or turn off Recursive.`,
+                joinPath(cPath, 'recursive'), scope);
+            return;
+        }
+        const anchor = cteReferences(q, name, { setOps: false });
+        if (anchor.direct + anchor.nested > 0) {
+            this.add('error', 'builder',
+                `The first part of ${quote(name)} gives the starting rows, so it can't refer to ${quote(name)} itself. Refer to it in a part after UNION ALL.`,
+                qPath, scope);
+        }
+        const recursiveParts = [];
+        q.setOps.forEach((setOp, i) => {
+            const sPath = joinPath(qPath, 'setOps', i);
+            const refs = cteReferences(setOp.query, name);
+            if (refs.direct + refs.nested === 0) return;
+            recursiveParts.push(setOp);
+            if (setOp.op !== 'UNION' && setOp.op !== 'UNION ALL') {
+                this.add('error', 'builder', `Only UNION or UNION ALL can join the part that refers to ${quote(name)}; ${setOp.op} can't.`, joinPath(sPath, 'op'), scope);
+            } else if (rules.unionAllOnly && setOp.op !== 'UNION ALL') {
+                this.add('error', 'dialect', `${d} joins the recursive part of a CTE with UNION ALL only.`, joinPath(sPath, 'op'), scope);
+            }
+            if (refs.nested > 0 || refs.direct > 1) {
+                this.add('error', 'builder',
+                    `The recursive part can refer to ${quote(name)} only once, as a table in FROM or a join, not in a subquery or an expression.`,
+                    joinPath(sPath, 'query'), scope);
+            }
+            this.recursivePartContents(setOp.query, joinPath(sPath, 'query'), name, scope);
+        });
+        if (recursiveParts.length === 0) {
+            this.add('warning', 'builder',
+                `No part after UNION refers to ${quote(name)}, so it isn't recursive. Refer to ${quote(name)} in the part after UNION ALL, or turn off Recursive.`,
+                joinPath(cPath, 'recursive'), scope);
+            return;
+        }
+        if (rules.singleRecursivePart && recursiveParts.length > 1) {
+            this.add('error', 'dialect', `${d} allows only one part of a recursive CTE to refer to ${quote(name)}.`, joinPath(qPath, 'setOps'), scope);
+        }
+        /** @type {[string, string, boolean][]} */
+        const sorting = [
+            ['orderBy', 'ORDER BY', q.orderBy.length > 0],
+            ['limit', `${this.dialect.ui.limitLabel} or OFFSET`, !blank(q.limit) || !blank(q.offset)]
+        ];
+        for (const [key, label, present] of sorting) {
+            if (!present || rules[key] === 'allowed') continue;
+            const refused = rules[key] === 'error';
+            this.add(refused ? 'error' : 'warning', refused ? 'dialect' : 'builder',
+                `${refused ? `${d} doesn't` : 'Most databases don\'t'} allow ${label} on a recursive CTE. Sort and limit the main query instead.`,
+                joinPath(qPath, key), scope);
+        }
+        if (recursiveParts.every(part => part.query.where.items.length === 0)) {
+            this.add('warning', 'builder',
+                `Nothing in the recursive part of ${quote(name)} limits how deep it goes, so data that loops (a row that leads back to itself) would keep it repeating. ${rules.depthLimit} Add a depth column and a condition such as depth < 20.`,
+                recursiveParts.length === 1 ? joinPath(qPath, 'setOps', q.setOps.indexOf(recursiveParts[0]), 'query', 'where') : qPath,
+                scope);
+        }
+    }
+
+    // What the dialect refuses inside the part that refers to the CTE
+    recursivePartContents(q, path, name, scope) {
+        const d = this.dialect.shortLabel;
+        const refused = new Set(this.dialect.recursive.notInRecursivePart);
+        const found = [
+            ['aggregate', 'aggregates such as COUNT or SUM', q.columns.some(c => c.kind === 'column' && c.aggregate !== '') || q.having.items.length > 0, joinPath(path, 'columns')],
+            ['window', 'window functions', q.columns.some(c => c.kind === 'window'), joinPath(path, 'columns')],
+            ['groupBy', 'GROUP BY', q.groupBy.length > 0, joinPath(path, 'groupBy')],
+            ['distinct', 'DISTINCT', q.distinct, joinPath(path, 'distinct')],
+            ['outerJoin', 'LEFT, RIGHT or FULL joins', q.joins.some(j => /^(LEFT|RIGHT|FULL) /.test(j.type)), joinPath(path, 'joins')]
+        ];
+        for (const [key, label, present, where] of found) {
+            if (present && refused.has(key)) {
+                this.add('error', 'dialect', `${d} doesn't allow ${label} in the recursive part of a CTE (the part that refers to ${quote(name)}).`, where, scope);
+            }
+        }
+        const growing = this.dialect.recursive.growingText;
+        if (growing && q.columns.some(c => c.kind === 'column' && /\bCONCAT\s*\(|\|\||\+\s*N?'|'\s*\+/i.test(String(c.expr)))) {
+            this.add('info', 'dialect', growing, joinPath(path, 'columns'), scope);
+        }
     }
 
     columns(q, path, scope) {
@@ -448,6 +621,8 @@ class Validator {
             names.set(name, true);
         };
         register(q.from, joinPath(path, 'from'));
+        this.unusedAlias(q.from, joinPath(path, 'from'), scope);
+        const earlier = [...sourceNames(q.from)];
 
         q.joins.forEach((join, i) => {
             const jPath = joinPath(path, 'joins', i);
@@ -466,14 +641,40 @@ class Validator {
                 this.add('error', 'builder', `Add a condition saying how ${quote(join.source.table || join.source.alias || 'the joined table')} matches the other tables.`, joinPath(jPath, 'on'), scope);
             } else {
                 this.group(join.on, joinPath(jPath, 'on'), scope, ctx, 'ON');
+                this.joinLink(join, earlier, jPath, scope);
             }
+            this.unusedAlias(join.source, joinPath(jPath, 'source'), scope);
+            earlier.push(...sourceNames(join.source));
         });
+    }
+
+    // An ON condition that never mentions one side pairs rows with every row of the other
+    joinLink(join, earlier, jPath, scope) {
+        const unlinked = joinLink(join, earlier);
+        if (!unlinked) return;
+        const name = quote(join.source.alias || join.source.table);
+        this.add('warning', 'analysis', unlinked === 'unlinked-earlier'
+            ? `The ON condition only mentions ${name}, not the tables before it, so each of its rows is paired with every earlier row. This may return far more rows than expected and increase the amount of data processed. Add a condition that links ${name} to an earlier table.`
+            : `The ON condition doesn't mention ${name}, the table being joined, so its rows are paired with every matching earlier row. This may return far more rows than expected and increase the amount of data processed. Add a condition that uses a column of ${name}.`,
+        joinPath(jPath, 'on'), scope);
+    }
+
+    unusedAlias(source, sPath, scope) {
+        if (!isUnusedAlias(source, this.texts)) return;
+        const alias = String(source.alias).trim();
+        const table = String(source.table).trim();
+        const tableUsed = isReferenced(table.split('.').pop(), this.texts);
+        this.add('suggestion', 'analysis', tableUsed
+            ? `The alias ${quote(alias)} isn't used, but ${quote(`${table}.`)} is. Once a table has an alias, most databases only accept ${alias}.column, so write that or remove the alias.`
+            : `The alias ${quote(alias)} for ${quote(table)} isn't used. Write ${alias}.column to show which table each column comes from, or remove the alias.`,
+        joinPath(sPath, 'alias'), scope);
     }
 
     group(group, path, scope, ctx, clause) {
         if (!LOGIC_OPERATORS.includes(group.logic)) {
             this.add('error', 'builder', `Unknown logic operator ${quote(group.logic)}.`, joinPath(path, 'logic'), scope);
         }
+        this.groupAnalysis(group, path, scope, clause);
         group.items.forEach((item, i) => {
             const iPath = joinPath(path, 'items', i);
             if (item.kind === 'group') {
@@ -486,6 +687,27 @@ class Validator {
                 this.fragment(item.sql, joinPath(iPath, 'sql'), scope, { label: 'the custom SQL condition' });
             } else {
                 this.condition(item, iPath, scope, ctx, clause);
+            }
+        });
+    }
+
+    // Repeated and contradictory conditions within one group
+    groupAnalysis(group, path, scope, clause) {
+        for (const { index, first } of duplicateConditions(group)) {
+            this.add('suggestion', 'analysis',
+                `This ${clause} condition repeats condition ${first + 1} of the same group, so one of them can be removed.`,
+                joinPath(path, 'items', index), scope);
+        }
+        for (const c of contradictions(group)) {
+            this.add('warning', 'analysis',
+                `${quote(c.column)} can't be ${c.firstText} and ${c.text} at the same time, so these ${clause} conditions never match a row. Check the values, or combine them with OR.`,
+                joinPath(path, 'items', c.index, 'value'), scope);
+        }
+        group.items.forEach((item, i) => {
+            if (isReversedBetween(item)) {
+                this.add('warning', 'analysis',
+                    `BETWEEN ${String(item.value).trim()} AND ${String(item.value2).trim()} never matches: the smaller value has to come first. Swap the two values.`,
+                    joinPath(path, 'items', i, 'value'), scope);
             }
         });
     }

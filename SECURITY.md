@@ -54,12 +54,32 @@ object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 
 Imported SQL fragments are still only text: they are inserted into generated SQL and never run.
 
+## Schema import (CREATE TABLE text and schema files)
+
+The Schema tab reads pasted text or a chosen `.sql` / `.json` file as untrusted input:
+- Text or files larger than 4 MB are rejected before they are read.
+- SQL is split into tokens by a small local reader (`src/sql-lexer.js`, `src/ddl.js`) that only looks for `CREATE TABLE` and `ALTER TABLE … ADD`. Nothing is run, nothing is sent anywhere, and other statements are skipped and listed.
+- The reader never throws on bad input and has no recursion that input can deepen; unclosed quotes, comments and parentheses are reported with their line.
+- Every table is rebuilt field by field: names at most 128 characters with no control characters, types at most 64, at most 500 tables and 500 columns per table, duplicate names rejected, and key columns checked against the table. The stored schema is capped at 1.5 MB.
+- Names are shown with `textContent` only.
+
+## SQL import (Import SQL)
+
+Import SQL reads pasted text, a chosen `.sql` file or a dropped file as untrusted input:
+- Files over 1 MB are rejected before they are read, and text over 1 MB is refused.
+- The SQL is tokenized and read locally (`src/sql-lexer.js`, `src/sql-import.js`). It is never run and never sent anywhere; the dialog works offline.
+- Parentheses are matched before reading, subqueries are limited to the builder's nesting depth and parenthesized conditions to 64 levels, so input can't exhaust the stack. Anything the reader doesn't understand is refused with its line and column; it never guesses.
+- The result is an ordinary query model: tests check that it passes the same `normalizeWorkspace` rebuild as imported JSON, including for thousands of random and mutated statements.
+- The preview, the differences and the SQL shown are set with `textContent`, so markup in the SQL stays text.
+- Nothing changes until you choose Import; Import replaces only the query of the imported type (SELECT, INSERT, UPDATE or DELETE) and can be undone. Importing an UPDATE or DELETE never runs it: it only fills the builder.
+
 ## Browser storage
 
 Stored in `localStorage` under the `sqlb:v1:` prefix, and only in the current browser:
 - **settings**
 - **history**: generated queries, at most 50, each at most 100 KB. It can be turned off.
 - **templates**: at most 200, saved only when you choose to.
+- **schema**: table and column names, types and keys you add or import (at most 500 tables). No data rows.
 - **draft**: the unsaved workspace, so a reload doesn't lose work. It can be turned off.
 
 Settings → "Delete all saved data" removes everything. Stored data is re-validated when read, so corrupted or tampered entries are skipped rather than trusted. If storage is blocked or full, the app keeps working and tells you what can't be saved.

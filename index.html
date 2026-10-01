@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=3f839b5d77f0">
+    <link rel="stylesheet" href="style.css?v=0547d30fcdac">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -30,6 +30,7 @@
                         <button type="button" class="menu-item" data-command="palette" aria-keyshortcuts="Control+K Meta+K">Commands…</button>
                         <button type="button" class="menu-item" data-command="export-query">Export query (.json)</button>
                         <button type="button" class="menu-item" data-command="import-query">Import query (.json)…</button>
+                        <button type="button" class="menu-item" data-command="import-sql">Import SQL (.sql)…</button>
                         <button type="button" class="menu-item" data-command="download-sql">Download SQL (.sql)</button>
                         <button type="button" class="menu-item" data-command="export-backup">Back up everything (.json)</button>
                         <button type="button" class="menu-item" data-command="import-backup">Restore from backup…</button>
@@ -53,6 +54,9 @@
                     </div>
                 </div>
 
+                <section class="practice" id="practice" aria-labelledby="practice-title" hidden></section>
+                <p class="visually-hidden" id="practice-status" role="status" aria-live="polite"></p>
+
                 <form id="builder" class="builder" novalidate aria-label="Query builder" tabindex="-1"></form>
 
                 <div class="builder-actions">
@@ -72,6 +76,7 @@
                                 <select id="dialect-select" class="dialect-select" aria-describedby="dialect-picker-note"></select>
                             </label>
                             <span class="visually-hidden" id="dialect-picker-note">Changes the SQL that is generated and the checks. Your query is kept.</span>
+                            <button type="button" class="btn btn-ghost btn-sm" id="compare-btn" aria-haspopup="dialog">Compare…</button>
                         </div>
                         <div class="output-actions">
                             <div class="segmented" role="group" aria-label="SQL layout">
@@ -94,9 +99,31 @@
                     <pre id="sql-output" class="sql-output" tabindex="0" aria-label="Generated SQL" aria-describedby="output-state"><code id="sql-code"></code></pre>
                     <details class="structure" id="structure" hidden>
                         <summary class="structure-summary"><span class="structure-title">Query structure</span> <span class="complexity" id="complexity"></span></summary>
+                        <p class="structure-sentence" id="structure-sentence"></p>
+                        <ul class="structure-insights" id="structure-insights" aria-label="Query insights: how many parts the query has"></ul>
+                        <div class="structure-levels">
+                            <span class="structure-levels-label" id="explain-level-label">Explain for</span>
+                            <div class="segmented" role="group" aria-labelledby="explain-level-label">
+                                <button type="button" class="segment" data-explain-level="beginner" aria-pressed="true">Beginner</button>
+                                <button type="button" class="segment" data-explain-level="developer" aria-pressed="false">Developer</button>
+                                <button type="button" class="segment" data-explain-level="advanced" aria-pressed="false">Advanced</button>
+                            </div>
+                        </div>
                         <p class="structure-intro">The order a database works through this query, which differs from the order it is written. Select a step to edit it.</p>
                         <ol class="structure-steps" id="structure-steps"></ol>
                         <p class="structure-notes" id="structure-notes"></p>
+                        <details class="diagram" id="flow" hidden>
+                            <summary class="diagram-summary">Query flow</summary>
+                            <p class="diagram-intro">How the parts of the query feed each other: CTEs, derived tables, subqueries and UNION parts above the part that uses them, each with where it filters, groups and sorts. Select a part to edit it.</p>
+                            <div class="diagram-scroll" id="flow-scroll" tabindex="0" role="region" aria-label="Diagram of the query's parts (also listed below)"></div>
+                            <div id="flow-links"></div>
+                        </details>
+                        <details class="diagram" id="diagram" hidden>
+                            <summary class="diagram-summary">Tables and joins diagram</summary>
+                            <p class="diagram-intro" id="diagram-intro">The main query's tables and how its ON conditions link them. Select a link to edit that join.</p>
+                            <div class="diagram-scroll" id="diagram-scroll" tabindex="0" role="region" aria-label="Diagram of the tables and joins (also listed below)"></div>
+                            <div id="diagram-links"></div>
+                        </details>
                     </details>
 
                     <div class="issues" aria-labelledby="issues-heading">
@@ -111,10 +138,17 @@
 
                 <section class="panel library-panel" aria-labelledby="library-heading">
                     <h2 id="library-heading" class="visually-hidden">Library</h2>
+                    <div class="project-bar">
+                        <span class="project-label">Project</span>
+                        <strong class="project-current" id="project-current">Main</strong>
+                        <button type="button" class="btn btn-ghost btn-sm" id="projects-btn">Projects…</button>
+                    </div>
                     <div class="tabs" role="tablist" aria-label="Library">
                         <button type="button" role="tab" id="tab-history" aria-controls="panel-history" aria-selected="true">History</button>
                         <button type="button" role="tab" id="tab-templates" aria-controls="panel-templates" aria-selected="false" tabindex="-1">Templates</button>
                         <button type="button" role="tab" id="tab-examples" aria-controls="panel-examples" aria-selected="false" tabindex="-1">Examples</button>
+                        <button type="button" role="tab" id="tab-schema" aria-controls="panel-schema" aria-selected="false" tabindex="-1">Schema</button>
+                        <button type="button" role="tab" id="tab-practice" aria-controls="panel-practice" aria-selected="false" tabindex="-1">Practice</button>
                     </div>
 
                     <div role="tabpanel" id="panel-history" aria-labelledby="tab-history" class="tab-panel">
@@ -163,6 +197,34 @@
                         </div>
                         <ul class="library-list" id="example-list"></ul>
                     </div>
+
+                    <div role="tabpanel" id="panel-schema" aria-labelledby="tab-schema" class="tab-panel" hidden>
+                        <div class="library-toolbar">
+                            <button type="button" class="btn btn-secondary btn-sm" id="schema-add-btn">Add table…</button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="schema-import-btn">Import…</button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="schema-export-btn">Export</button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="schema-clear-btn">Clear</button>
+                        </div>
+                        <div class="library-toolbar">
+                            <label class="visually-hidden" for="schema-search">Search tables and columns</label>
+                            <input type="search" id="schema-search" class="input" placeholder="Search tables and columns…" autocomplete="off">
+                        </div>
+                        <p class="library-detail" id="schema-summary"></p>
+                        <ul class="library-list" id="schema-list"></ul>
+                    </div>
+
+                    <div role="tabpanel" id="panel-practice" aria-labelledby="tab-practice" class="tab-panel" hidden>
+                        <p class="library-detail">Exercises with a goal, hints and a model answer. Checks look at how your query is built; nothing is run.</p>
+                        <div class="library-toolbar library-toolbar-filters">
+                            <label class="library-filter">
+                                <span>Level</span>
+                                <select id="practice-level" class="select select-sm"></select>
+                            </label>
+                            <button type="button" class="btn btn-ghost btn-sm" id="practice-reset-btn">Clear progress</button>
+                        </div>
+                        <p class="library-detail" id="practice-progress"></p>
+                        <ul class="library-list" id="practice-list"></ul>
+                    </div>
                 </section>
             </div>
         </main>
@@ -203,6 +265,37 @@
                 <legend>Output</legend>
                 <label class="check"><input type="checkbox" data-setting="livePreview"> <span>Live preview while typing</span></label>
                 <label class="check"><input type="checkbox" data-setting="quoteIdentifiers"> <span>Quote table and column names (e.g. "name", `name`, [name])</span></label>
+            </fieldset>
+
+            <fieldset class="fieldset">
+                <legend>SQL format</legend>
+                <div class="field-row">
+                    <div class="field">
+                        <label class="field-label" for="setting-keyword-case">Keywords</label>
+                        <select id="setting-keyword-case" class="select" data-setting="keywordCase">
+                            <option value="upper">UPPERCASE</option>
+                            <option value="lower">lowercase</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label class="field-label" for="setting-indent">Indent</label>
+                        <select id="setting-indent" class="select" data-setting="indentStyle">
+                            <option value="4">4 spaces</option>
+                            <option value="2">2 spaces</option>
+                            <option value="tab">Tab</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label class="field-label" for="setting-commas">Commas</label>
+                        <select id="setting-commas" class="select" data-setting="commaPosition">
+                            <option value="trailing">End of line</option>
+                            <option value="leading">Start of line</option>
+                        </select>
+                    </div>
+                </div>
+                <label class="check check-block"><input type="checkbox" data-setting="expandLists"> <span>One item per line in GROUP BY, ORDER BY, INSERT columns and nested AND / OR groups</span></label>
+                <p class="field-hint" id="format-hint">Keyword case applies to both formatted and one-line SQL; the layout options apply to formatted SQL. Text you type into a field is never changed.</p>
+                <pre class="format-preview" id="format-preview" aria-label="Preview of the SQL format"></pre>
             </fieldset>
 
             <fieldset class="fieldset">
@@ -257,14 +350,135 @@
         </form>
     </dialog>
 
+    <dialog id="schema-table-dialog" class="dialog" aria-labelledby="schema-table-title">
+        <form method="dialog" class="dialog-body">
+            <h2 id="schema-table-title" class="dialog-title">Add table</h2>
+            <div class="field">
+                <label class="field-label" for="schema-table-sql">Table definition</label>
+                <textarea id="schema-table-sql" class="input textarea code-input" rows="12" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="schema-table-hint schema-table-error"></textarea>
+                <p class="field-hint" id="schema-table-hint">A CREATE TABLE statement. Types are optional. Mark keys with PRIMARY KEY, and links to other tables with REFERENCES other_table (column).</p>
+                <p class="dialog-error field-error" id="schema-table-error" role="alert"></p>
+            </div>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary">Save table</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="schema-import-dialog" class="dialog" aria-labelledby="schema-import-title">
+        <form method="dialog" class="dialog-body">
+            <h2 id="schema-import-title" class="dialog-title">Import schema</h2>
+            <div class="field">
+                <label class="field-label" for="schema-import-text">CREATE TABLE statements, or a schema file (.sql or .json)</label>
+                <textarea id="schema-import-text" class="input textarea code-input" rows="10" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="schema-import-result"></textarea>
+                <div><button type="button" class="btn btn-ghost btn-sm" id="schema-import-file-btn">Choose a file…</button></div>
+            </div>
+            <div class="schema-import-result" id="schema-import-result" aria-live="polite"></div>
+            <fieldset class="fieldset">
+                <legend>Your current schema</legend>
+                <label class="check check-block"><input type="radio" name="schema-import-mode" value="merge" checked> <span><strong>Add</strong> (recommended): add these tables; a table with the same name is replaced.</span></label>
+                <label class="check check-block"><input type="radio" name="schema-import-mode" value="replace"> <span><strong>Replace</strong>: delete the current schema first.</span></label>
+            </fieldset>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary">Import</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="sql-import-dialog" class="dialog" aria-labelledby="sql-import-title">
+        <form method="dialog" class="dialog-body">
+            <h2 id="sql-import-title" class="dialog-title">Import SQL</h2>
+            <div class="field">
+                <label class="field-label" for="sql-import-text">A SELECT, INSERT, UPDATE or DELETE statement, or a .sql file</label>
+                <textarea id="sql-import-text" class="input textarea code-input" rows="10" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="sql-import-result"></textarea>
+                <div><button type="button" class="btn btn-ghost btn-sm" id="sql-import-file-btn">Choose a file…</button></div>
+            </div>
+            <div class="field">
+                <label class="field-label" for="sql-import-dialect">Written for</label>
+                <select id="sql-import-dialect" class="select" aria-describedby="sql-import-guess"></select>
+                <p class="field-hint" id="sql-import-guess"></p>
+            </div>
+            <div class="sql-import-result" id="sql-import-result" aria-live="polite"></div>
+            <p class="sql-import-note" id="sql-import-note">Import replaces the builder's query of the same type (SELECT, INSERT, UPDATE or DELETE). Undo brings your current query back.</p>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary">Import</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="compare-dialog" class="dialog dialog-wide" aria-labelledby="compare-title" aria-describedby="compare-intro">
+        <form method="dialog" class="dialog-body">
+            <h2 id="compare-title" class="dialog-title">Compare dialects</h2>
+            <p class="dialog-message" id="compare-intro"></p>
+            <div class="field">
+                <label class="field-label" for="compare-dialect">Compare with</label>
+                <select id="compare-dialect" class="select"></select>
+            </div>
+            <div class="compare-result" id="compare-result" aria-live="polite"></div>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary" id="compare-switch">Switch</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Close</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="projects-dialog" class="dialog" aria-labelledby="projects-title" aria-describedby="projects-intro">
+        <form method="dialog" class="dialog-body" id="projects-form">
+            <h2 id="projects-title" class="dialog-title">Projects</h2>
+            <p class="dialog-message" id="projects-intro">Each project keeps its own templates, history, schema, current query and dialect, so work on different databases stays apart. Settings are shared, and everything stays in this browser.</p>
+            <ul class="projects-list" id="projects-list" aria-label="Projects"></ul>
+            <div class="field">
+                <label class="field-label" for="project-new-name">New project</label>
+                <div class="projects-new-row">
+                    <input id="project-new-name" class="input" maxlength="60" autocomplete="off" spellcheck="false" aria-describedby="project-error">
+                    <button type="submit" class="btn btn-secondary" id="project-create-btn">Create and open</button>
+                </div>
+                <p class="field-error" id="project-error" role="alert"></p>
+            </div>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-secondary" value="cancel">Close</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="move-dialog" class="dialog dialog-sm" aria-labelledby="move-title" aria-describedby="move-message">
+        <form method="dialog" class="dialog-body">
+            <h2 id="move-title" class="dialog-title">Move template</h2>
+            <p class="dialog-message" id="move-message"></p>
+            <div class="field">
+                <label class="field-label" for="move-project">Move to</label>
+                <select id="move-project" class="select"></select>
+            </div>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary">Move</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="versions-dialog" class="dialog dialog-wide" aria-labelledby="versions-title" aria-describedby="versions-intro">
+        <form method="dialog" class="dialog-body">
+            <h2 id="versions-title" class="dialog-title">Versions</h2>
+            <p class="dialog-message" id="versions-intro">Each Save keeps the query it replaces, up to 10 per template. Restoring a version keeps the current query as a version too.</p>
+            <ul class="versions-list" id="versions-list" aria-label="Versions, newest first"></ul>
+            <div class="versions-compare" id="versions-compare" aria-live="polite"></div>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-secondary" value="cancel">Close</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="backup-dialog" class="dialog dialog-sm" aria-labelledby="backup-title" aria-describedby="backup-summary">
         <form method="dialog" class="dialog-body">
             <h2 id="backup-title" class="dialog-title">Restore from backup</h2>
             <p id="backup-summary" class="dialog-message"></p>
             <fieldset class="fieldset">
                 <legend>How to restore</legend>
-                <label class="check check-block"><input type="radio" name="backup-mode" value="merge" checked> <span><strong>Merge</strong> (recommended): add the templates and history that aren't here yet. Your settings stay as they are.</span></label>
-                <label class="check check-block"><input type="radio" name="backup-mode" value="replace"> <span><strong>Replace</strong>: delete your current templates and history, then use the backup's, including its settings.</span></label>
+                <label class="check check-block"><input type="radio" name="backup-mode" value="merge" checked> <span><strong>Merge</strong> (recommended): add the templates, history and schema tables that aren't here yet. Your settings stay as they are.</span></label>
+                <label class="check check-block"><input type="radio" name="backup-mode" value="replace"> <span><strong>Replace</strong>: delete your current templates, history and schema, then use the backup's, including its settings.</span></label>
             </fieldset>
             <div class="dialog-actions">
                 <button type="submit" class="btn btn-primary" value="confirm">Restore</button>
@@ -309,6 +523,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=8f9e8df709e8" defer></script>
+    <script src="dist/sqlbuilder.js?v=ffbe98d2c2f3" defer></script>
 </body>
 </html>

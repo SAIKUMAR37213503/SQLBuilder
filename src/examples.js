@@ -9,7 +9,7 @@
 
 import {
     createWorkspace, createColumn, createCaseColumn, createWindowColumn, createCondition, createGroup, createJoin,
-    createTableSource, createCte, createSetOp, createSelect, createGroupByItem
+    createTableSource, createSubquerySource, createCte, createSetOp, createSelect, createGroupByItem
 } from './model.js';
 
 const cond = (left, op, value = '', extra = {}) => createCondition({ left, op, value, ...extra });
@@ -257,6 +257,39 @@ export const EXAMPLES = [
         })
     },
     {
+        id: 'org-chart',
+        level: 'advanced',
+        topic: 'Subqueries and CTEs',
+        name: 'Org chart (recursive CTE)',
+        description: 'Starts from the people with no manager, then adds each level of reports until none are left. The depth condition stops it if the data ever loops.',
+        build: () => workspace('select', (q) => {
+            const cte = createCte();
+            cte.name = 'reports';
+            cte.recursive = true;
+            cte.columns = 'id, name, manager_id, depth';
+            const step = createSetOp('UNION ALL');
+            const join = createJoin('INNER JOIN');
+            join.source = createTableSource('reports', 'r');
+            join.on = createGroup('AND', [colCond('e.manager_id', 'r.id')]);
+            step.query = createSelect({
+                columns: [createColumn('e.id'), createColumn('e.name'), createColumn('e.manager_id'), createColumn('r.depth + 1')],
+                from: createTableSource('employees', 'e'),
+                joins: [join],
+                where: createGroup('AND', [cond('r.depth', '<', '10')])
+            });
+            cte.query = createSelect({
+                columns: [createColumn('id'), createColumn('name'), createColumn('manager_id'), createColumn('0')],
+                from: createTableSource('employees'),
+                where: createGroup('AND', [cond('manager_id', 'IS NULL')]),
+                setOps: [step]
+            });
+            q.ctes = [cte];
+            q.columns = ['id', 'name', 'depth'].map(c => createColumn(c));
+            q.from = createTableSource('reports');
+            q.orderBy = [{ expr: 'depth', direction: 'ASC' }, { expr: 'name', direction: 'ASC' }];
+        })
+    },
+    {
         id: 'top-n-per-group',
         level: 'advanced',
         topic: 'Window functions',
@@ -278,6 +311,82 @@ export const EXAMPLES = [
             q.from = createTableSource('ranked');
             q.where = createGroup('AND', [cond('rn', '<=', '3')]);
             q.orderBy = [{ expr: 'department', direction: 'ASC' }, { expr: 'salary', direction: 'DESC' }];
+        })
+    },
+    {
+        id: 'latest-per-group',
+        level: 'intermediate',
+        topic: 'Window functions',
+        name: 'Latest row per group',
+        description: 'Each customer\'s most recent order: ROW_NUMBER newest first in a CTE, then keep row 1. The id breaks ties between orders placed at the same time.',
+        build: () => workspace('select', (q) => {
+            const cte = createCte();
+            cte.name = 'numbered';
+            const rowNumber = {
+                ...createWindowColumn(), func: 'ROW_NUMBER', alias: 'rn',
+                partitionBy: [{ expr: 'customer_id' }],
+                orderBy: [{ expr: 'ordered_at', direction: 'DESC' }, { expr: 'id', direction: 'DESC' }]
+            };
+            cte.query = createSelect({
+                columns: [createColumn('id'), createColumn('customer_id'), createColumn('ordered_at'), createColumn('total'), rowNumber],
+                from: createTableSource('orders')
+            });
+            q.ctes = [cte];
+            q.columns = ['id', 'customer_id', 'ordered_at', 'total'].map(c => createColumn(c));
+            q.from = createTableSource('numbered');
+            q.where = createGroup('AND', [cond('rn', '=', '1')]);
+        })
+    },
+    {
+        id: 'moving-average',
+        level: 'advanced',
+        topic: 'Window functions',
+        name: '7-day moving average',
+        description: 'Daily totals in a CTE, then AVG over the current row and the 6 before it. That is 7 days only when every day has a row.',
+        build: () => workspace('select', (q) => {
+            const cte = createCte();
+            cte.name = 'daily';
+            cte.query = createSelect({
+                columns: [createColumn('sale_date'), createColumn('amount', { aggregate: 'SUM', alias: 'total' })],
+                from: createTableSource('sales'),
+                groupBy: [createGroupByItem('sale_date')]
+            });
+            const moving = {
+                ...createWindowColumn(), func: 'AVG', args: 'total', alias: 'avg_7_days',
+                orderBy: [{ expr: 'sale_date', direction: 'ASC' }], frame: 'moving', frameSize: '6'
+            };
+            q.ctes = [cte];
+            q.columns = [createColumn('sale_date'), createColumn('total'), moving];
+            q.from = createTableSource('daily');
+            q.orderBy = [{ expr: 'sale_date', direction: 'ASC' }];
+        })
+    },
+    {
+        id: 'gaps-and-islands',
+        level: 'advanced',
+        topic: 'Window functions',
+        name: 'Runs of consecutive numbers (gaps and islands)',
+        description: 'Number minus ROW_NUMBER is the same for every number in an unbroken run, so grouping by it gives each run. Gaps are what lies between runs. Assumes each number appears once.',
+        build: () => workspace('select', (q) => {
+            const cte = createCte();
+            cte.name = 'numbered';
+            const rowNumber = {
+                ...createWindowColumn(), func: 'ROW_NUMBER', alias: 'rn',
+                orderBy: [{ expr: 'invoice_no', direction: 'ASC' }]
+            };
+            cte.query = createSelect({
+                columns: [createColumn('invoice_no'), rowNumber],
+                from: createTableSource('invoices')
+            });
+            q.ctes = [cte];
+            q.columns = [
+                createColumn('invoice_no', { aggregate: 'MIN', alias: 'run_start' }),
+                createColumn('invoice_no', { aggregate: 'MAX', alias: 'run_end' }),
+                createColumn('*', { aggregate: 'COUNT', alias: 'invoices' })
+            ];
+            q.from = createTableSource('numbered');
+            q.groupBy = [createGroupByItem('invoice_no - rn')];
+            q.orderBy = [{ expr: 'run_start', direction: 'ASC' }];
         })
     },
     {
@@ -375,6 +484,31 @@ export const EXAMPLES = [
         })
     },
     {
+        id: 'delete-duplicates',
+        level: 'advanced',
+        topic: 'Changing data',
+        name: 'Delete duplicates, keep one',
+        description: 'Keeps the lowest id for each email and deletes the other copies; rows with no email are left alone. The inner query sits in a derived table because MySQL can\'t read the table it deletes from directly. Run the SELECT part first to check what is kept.',
+        build: () => workspace('delete', (q) => {
+            q.table = 'contacts';
+            const keepers = createSubquerySource();
+            keepers.alias = 'keepers';
+            keepers.query = createSelect({
+                columns: [createColumn('id', { aggregate: 'MIN', alias: 'keep_id' })],
+                from: createTableSource('contacts'),
+                where: createGroup('AND', [cond('email', 'IS NOT NULL')]),
+                groupBy: [createGroupByItem('email')]
+            });
+            q.where = createGroup('AND', [
+                cond('email', 'IS NOT NULL'),
+                cond('id', 'NOT IN', '', {
+                    valueType: 'subquery',
+                    subquery: createSelect({ columns: [createColumn('keep_id')], from: keepers })
+                })
+            ]);
+        })
+    },
+    {
         id: 'delete-old',
         level: 'beginner',
         topic: 'Changing data',
@@ -396,4 +530,23 @@ export const EXAMPLES = [
 export function examplesFor(dialect, topic = 'all') {
     return EXAMPLES.filter(e => (dialect === 'all' || !e.dialects || e.dialects.includes(dialect))
         && (topic === 'all' || e.topic === topic));
+}
+
+// The short query the Settings dialog writes to preview the SQL format
+// options. Not listed with the examples.
+export function formatSample() {
+    return workspace('select', (q) => {
+        q.columns = [
+            createColumn('department'),
+            createColumn('region'),
+            createColumn('*', { aggregate: 'COUNT', alias: 'staff' })
+        ];
+        q.from = createTableSource('employees');
+        q.where = createGroup('AND', [
+            cond('status', '=', 'active'),
+            createGroup('OR', [cond('salary', '>', '50000'), cond('role', '=', 'lead')])
+        ]);
+        q.groupBy = [createGroupByItem('department'), createGroupByItem('region')];
+        q.orderBy = [{ expr: 'staff', direction: 'DESC' }, { expr: 'department', direction: 'ASC' }];
+    });
 }
