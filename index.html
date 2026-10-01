@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#1d5fd6">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=e079fb33e8b9">
+    <link rel="stylesheet" href="style.css?v=0547d30fcdac">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -138,6 +138,11 @@
 
                 <section class="panel library-panel" aria-labelledby="library-heading">
                     <h2 id="library-heading" class="visually-hidden">Library</h2>
+                    <div class="project-bar">
+                        <span class="project-label">Project</span>
+                        <strong class="project-current" id="project-current">Main</strong>
+                        <button type="button" class="btn btn-ghost btn-sm" id="projects-btn">Projects…</button>
+                    </div>
                     <div class="tabs" role="tablist" aria-label="Library">
                         <button type="button" role="tab" id="tab-history" aria-controls="panel-history" aria-selected="true">History</button>
                         <button type="button" role="tab" id="tab-templates" aria-controls="panel-templates" aria-selected="false" tabindex="-1">Templates</button>
@@ -420,6 +425,40 @@
         </form>
     </dialog>
 
+    <dialog id="projects-dialog" class="dialog" aria-labelledby="projects-title" aria-describedby="projects-intro">
+        <form method="dialog" class="dialog-body" id="projects-form">
+            <h2 id="projects-title" class="dialog-title">Projects</h2>
+            <p class="dialog-message" id="projects-intro">Each project keeps its own templates, history, schema, current query and dialect, so work on different databases stays apart. Settings are shared, and everything stays in this browser.</p>
+            <ul class="projects-list" id="projects-list" aria-label="Projects"></ul>
+            <div class="field">
+                <label class="field-label" for="project-new-name">New project</label>
+                <div class="projects-new-row">
+                    <input id="project-new-name" class="input" maxlength="60" autocomplete="off" spellcheck="false" aria-describedby="project-error">
+                    <button type="submit" class="btn btn-secondary" id="project-create-btn">Create and open</button>
+                </div>
+                <p class="field-error" id="project-error" role="alert"></p>
+            </div>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-secondary" value="cancel">Close</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="move-dialog" class="dialog dialog-sm" aria-labelledby="move-title" aria-describedby="move-message">
+        <form method="dialog" class="dialog-body">
+            <h2 id="move-title" class="dialog-title">Move template</h2>
+            <p class="dialog-message" id="move-message"></p>
+            <div class="field">
+                <label class="field-label" for="move-project">Move to</label>
+                <select id="move-project" class="select"></select>
+            </div>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary">Move</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="versions-dialog" class="dialog dialog-wide" aria-labelledby="versions-title" aria-describedby="versions-intro">
         <form method="dialog" class="dialog-body">
             <h2 id="versions-title" class="dialog-title">Versions</h2>
@@ -484,6 +523,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=932e5c690cb1" defer></script>
+    <script src="dist/sqlbuilder.js?v=ffbe98d2c2f3" defer></script>
 </body>
 </html>

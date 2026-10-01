@@ -50,11 +50,11 @@ export function renderHistoryList(list, entries, { enabled, filtered }) {
 /**
  * @param {any} list
  * @param {any[]} templates the templates to show (already filtered and sorted)
- * @param {{ total?: number, filterLabel?: string, query?: string, currentId?: string | null }} [options]
- *   total saved, the dialect filter's label ('' = all), the search text, and
- *   the template being edited
+ * @param {{ total?: number, filterLabel?: string, query?: string, currentId?: string | null, canMove?: boolean }} [options]
+ *   total saved, the dialect filter's label ('' = all), the search text, the
+ *   template being edited, and whether there is another project to move to
  */
-export function renderTemplateList(list, templates, { total = templates.length, filterLabel = '', query = '', currentId = null } = {}) {
+export function renderTemplateList(list, templates, { total = templates.length, filterLabel = '', query = '', currentId = null, canMove = false } = {}) {
     if (templates.length === 0) {
         let message = 'No saved templates yet. Build a query, then choose “Save current query”.';
         if (total > 0 && query) message = `No templates match “${query}”${filterLabel ? ` for ${filterLabel}` : ''}.`;
@@ -80,6 +80,7 @@ export function renderTemplateList(list, templates, { total = templates.length, 
                 : action('Pin', 'template-pin', t.id, { label: `Pin template ${t.name} to the top` }),
             action('Rename', 'template-rename', t.id, { label: `Rename template ${t.name}` }),
             action('Duplicate', 'template-duplicate', t.id, { label: `Duplicate template ${t.name}` }),
+            canMove ? action('Move…', 'template-move', t.id, { label: `Move template ${t.name} to another project` }) : null,
             t.versions?.length ? action(`Versions (${t.versions.length})`, 'template-versions', t.id, { label: `Earlier versions of template ${t.name} (${t.versions.length})` }) : null,
             action('Delete', 'template-delete', t.id, { label: `Delete template ${t.name}`, variant: 'danger-ghost' })
         )

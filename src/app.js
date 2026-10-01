@@ -47,6 +47,8 @@ import { checkExercise, createPracticeStore } from './practice.js';
 import { renderExerciseList, renderPracticePanel } from './ui/practice.js';
 import { diffLines } from './versions.js';
 import { renderVersionList, renderVersionCompare } from './ui/versions.js';
+import { createProjectStore, projectCounts, ProjectError, MAIN_PROJECT } from './projects.js';
+import { renderProjectList } from './ui/projects.js';
 import { previewSqlImport, guessDialect } from './sql-import.js';
 import { renderSqlImportPreview } from './ui/sql-import.js';
 import { createWebPlatform } from './platform/web.js';
@@ -164,6 +166,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         sqlImportDialog: $('sql-import-dialog'),
         compareDialog: $('compare-dialog'),
         versionsDialog: $('versions-dialog'),
+        projectsDialog: $('projects-dialog'),
+        moveDialog: $('move-dialog'),
+        projectsBtn: $('projects-btn'),
+        projectCurrent: $('project-current'),
         compare: $('compare-btn'),
         libraryPanel: /** @type {any} */ (doc.querySelector('.library-panel')),
         fileInput: $('file-input'),
@@ -185,14 +191,18 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     const lifetime = new AbortController();
     const { signal } = lifetime;
 
-    const history = createHistory(storage);
-    const templates = createTemplateStore(storage);
-    const schema = createSchemaStore(storage);
+    // Templates, history, the schema and the draft belong to the open
+    // project; settings and practice progress are shared
+    const projects = createProjectStore(storage);
+    let projectData = projects.storageFor(projects.active);
+    let history = createHistory(projectData);
+    let templates = createTemplateStore(projectData);
+    let schema = createSchemaStore(projectData);
     const practice = createPracticeStore(storage, EXERCISES.map(e => e.id));
     const undoStack = new UndoStack();
 
     const state = {
-        settings: loadSettings(storage),
+        settings: withProjectDialect(loadSettings(storage)),
         workspace: restoreDraft(),
         issues: /** @type {any[]} */ ([]),
         sql: '',                         // SQL currently shown (preview or generated)
@@ -223,15 +233,21 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     /** @type {null | ReturnType<typeof createSuggester>} */
     let suggester = null;
     if (state.settings.restoreSession) {
-        const sourceId = storage.get(SOURCE_KEY);
+        const sourceId = projectData.get(SOURCE_KEY);
         if (typeof sourceId === 'string' && templates.get(sourceId)) state.sourceId = sourceId;
     }
     undoStack.reset(state.workspace);
 
+    /** Settings with the open project's dialect, when it has one. */
+    function withProjectDialect(settings) {
+        const dialect = projects.get(projects.active)?.dialect;
+        return dialect && dialect !== settings.dialect ? { ...settings, dialect } : settings;
+    }
+
     function restoreDraft() {
         const settings = loadSettings(storage);
         if (!settings.restoreSession) return createWorkspace();
-        const draft = storage.get(DRAFT_KEY);
+        const draft = projectData.get(DRAFT_KEY);
         if (!draft) return createWorkspace();
         try {
             return normalizeWorkspace(draft);
@@ -555,12 +571,12 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
     const saveDraft = debounce(() => {
         if (state.settings.restoreSession) {
-            storage.set(DRAFT_KEY, withModelVersion(state.workspace));
-            if (state.sourceId) storage.set(SOURCE_KEY, state.sourceId);
-            else storage.remove(SOURCE_KEY);
+            projectData.set(DRAFT_KEY, withModelVersion(state.workspace));
+            if (state.sourceId) projectData.set(SOURCE_KEY, state.sourceId);
+            else projectData.remove(SOURCE_KEY);
         } else {
-            storage.remove(DRAFT_KEY);
-            storage.remove(SOURCE_KEY);
+            projectData.remove(DRAFT_KEY);
+            projectData.remove(SOURCE_KEY);
         }
     }, 400);
 
@@ -1031,17 +1047,31 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     const count = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
     async function exportBackup() {
-        const backup = createBackup({ templates: templates.list(), history: history.list(), settings: state.settings, schema: schema.list() });
+        commitSoon.flush();
+        saveDraft.flush();
+        // Main at the top level, as before projects; the others listed after it
+        const main = storesFor(MAIN_PROJECT);
+        const others = projects.list().filter(p => p.id !== MAIN_PROJECT).map(p => {
+            const stores = storesFor(p.id);
+            return { name: p.name, dialect: p.dialect, templates: stores.templates.list(), history: stores.history.list(), schema: stores.schema.list() };
+        });
+        const backup = createBackup({ templates: main.templates.list(), history: main.history.list(), settings: state.settings, schema: main.schema.list(), projects: others });
+        const all = [backup, ...(backup.projects || [])];
+        const total = (/** @type {(b: any) => number} */ of) => all.reduce((n, b) => n + of(b), 0);
+        const tables = total(b => b.schema.tables.length);
         const date = new Date().toISOString().slice(0, 10);
         await downloadFile(`sql-builder-backup-${date}.json`, JSON.stringify(backup, null, 2), 'application/json',
-            `Backed up ${count(backup.templates.length, 'template')}, ${count(backup.history.length, 'history entry', 'history entries')}${backup.schema.tables.length ? `, ${count(backup.schema.tables.length, 'schema table')}` : ''} and your settings.`);
+            `Backed up ${count(total(b => b.templates.length), 'template')}, ${count(total(b => b.history.length), 'history entry', 'history entries')}${tables ? `, ${count(tables, 'schema table')}` : ''}${others.length ? ` in ${count(others.length + 1, 'project')}` : ''} and your settings.`);
     }
 
     /** Asks how to restore. Resolves 'merge', 'replace' or null. */
     async function askRestoreMode(backup) {
         const dialog = el.backupDialog;
         const when = Date.parse(backup.exportedAt);
-        dialog.querySelector('#backup-summary').textContent = `This backup${Number.isNaN(when) ? '' : ` from ${formatTime(when)}`} has ${count(backup.templates.length, 'template')}, ${count(backup.history.length, 'history entry', 'history entries')}${backup.schema && backup.schema.length ? `, ${count(backup.schema.length, 'schema table')}` : ''} and settings. Nothing changes until you choose Restore.`;
+        const extra = backup.projects.length
+            ? ` for the Main project, and ${count(backup.projects.length, 'other project')} (${backup.projects.map((/** @type {any} */ p) => p.name).join(', ')})`
+            : '';
+        dialog.querySelector('#backup-summary').textContent = `This backup${Number.isNaN(when) ? '' : ` from ${formatTime(when)}`} has ${count(backup.templates.length, 'template')}, ${count(backup.history.length, 'history entry', 'history entries')}${backup.schema && backup.schema.length ? `, ${count(backup.schema.length, 'schema table')}` : ''}${extra} and settings. Nothing changes until you choose Restore.`;
         const merge = dialog.querySelector('input[value="merge"]');
         merge.checked = true;
         const result = await showDialog(dialog, () => merge.focus());
@@ -1058,10 +1088,17 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         const mode = await askRestoreMode(backup);
         if (!mode) return;
         const replace = mode === 'replace';
+        commitSoon.flush();
+        saveDraft.flush();
+        // The backup's top level is the Main project (as in backups from before projects)
+        const activeBefore = projects.active;
+        const main = storesFor(MAIN_PROJECT);
+        const otherProjects = projects.list().filter(p => p.id !== MAIN_PROJECT);
         if (replace) {
+            const mainName = projects.get(MAIN_PROJECT)?.name ?? 'Main';
             const ok = await confirmDialog(el.confirmDialog, {
                 title: 'Replace your saved data?',
-                message: `Your ${count(templates.list().length, 'template')}${backup.schema && schema.size ? `, ${count(history.list().length, 'history entry', 'history entries')} and ${count(schema.size, 'schema table')}` : ` and ${count(history.list().length, 'history entry', 'history entries')}`} will be deleted and replaced by the backup's, and your settings will change to the backup's. This cannot be undone.`,
+                message: `${otherProjects.length ? `In ${mainName}, your` : 'Your'} ${count(main.templates.list().length, 'template')}${backup.schema && main.schema.size ? `, ${count(main.history.list().length, 'history entry', 'history entries')} and ${count(main.schema.size, 'schema table')}` : ` and ${count(main.history.list().length, 'history entry', 'history entries')}`} will be deleted and replaced by the backup's${otherProjects.length ? `, your ${count(otherProjects.length, 'other project')} (${otherProjects.map(p => p.name).join(', ')}) will be deleted` : ''}, and your settings will change to the backup's. This cannot be undone.`,
                 confirmText: 'Replace'
             });
             if (!ok) return;
@@ -1070,8 +1107,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         let tables = null;
         try {
             // The schema first: if it doesn't fit, nothing has changed yet
-            if (backup.schema) tables = schema.apply(backup.schema, { replace, onConflict: 'keep' });
-            added = templates.restore(backup.templates, { replace });
+            if (backup.schema) tables = main.schema.apply(backup.schema, { replace, onConflict: 'keep' });
+            added = main.templates.restore(backup.templates, { replace });
         } catch (error) {
             toast(error instanceof TemplateError || error instanceof SchemaError ? `Restore failed: ${error.message}` : 'The backup could not be restored.', 'error');
             renderSchema();
@@ -1081,15 +1118,18 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         const parts = [`${count(added.added, 'template')} added${added.skipped ? ` (${added.skipped} already here)` : ''}`];
         // History stays off when the person turned it off
         if (state.settings.saveHistory) {
-            const restored = history.restore(backup.history, { replace });
-            parts.push(`${count(restored.added, 'history entry', 'history entries')} added${restored.skipped ? ` (${restored.skipped} already here)` : ''}${restored.dropped ? `, keeping the newest ${history.list().length}` : ''}`);
+            const restored = main.history.restore(backup.history, { replace });
+            parts.push(`${count(restored.added, 'history entry', 'history entries')} added${restored.skipped ? ` (${restored.skipped} already here)` : ''}${restored.dropped ? `, keeping the newest ${main.history.list().length}` : ''}`);
         } else {
             // Replace promised to remove the current history, even when the backup's is not restored
-            if (replace) history.clear();
+            if (replace) main.history.clear();
             if (backup.history.length) parts.push('history not restored because saving history is turned off');
         }
         if (tables && backup.schema.length) parts.push(`${count(tables.added, 'schema table')} added${tables.kept ? ` (${tables.kept} already here)` : ''}`);
-        else if (replace && !tables && schema.size) parts.push('your schema was kept because this backup was made before schemas existed');
+        else if (replace && !tables && main.schema.size) parts.push('your schema was kept because this backup was made before schemas existed');
+        parts.push(...restoreProjects(backup.projects, { replace, otherProjects }));
+        // Replace deleted the open project: Main is open now
+        if (projects.active !== activeBefore) loadProject();
         if (state.sourceId && !templates.get(state.sourceId)) {
             state.sourceId = null;
             saveDraft();
@@ -1098,6 +1138,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         renderHistory();
         renderSchema();
         renderQueryName();
+        renderProjectBar();
         toast(`Backup restored: ${parts.join(', ')}. ${replace ? 'Settings restored from the backup.' : 'Your settings were kept.'}`, 'success');
     }
 
@@ -1193,7 +1234,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             total: all.length,
             filterLabel: filter === 'all' ? '' : getDialect(filter).label,
             query,
-            currentId: state.sourceId
+            currentId: state.sourceId,
+            canMove: projects.size > 1
         });
         el.templateExport.disabled = all.length === 0;
     }
@@ -1409,6 +1451,219 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         announceDialect();
     }
 
+    // ---------------------------------------------------------------- projects
+
+    /** The stores of a project: the open ones, or new ones on its storage. */
+    function storesFor(id) {
+        if (id === projects.active) return { history, templates, schema };
+        const data = projects.storageFor(id);
+        return { history: createHistory(data), templates: createTemplateStore(data), schema: createSchemaStore(data) };
+    }
+
+    function renderProjectBar() {
+        el.projectCurrent.textContent = projects.get(projects.active)?.name ?? 'Main';
+    }
+
+    /** Loads the open project's stores and query into the app. */
+    function loadProject() {
+        projectData = projects.storageFor(projects.active);
+        history = createHistory(projectData);
+        templates = createTemplateStore(projectData);
+        schema = createSchemaStore(projectData);
+        state.workspace = restoreDraft();
+        state.sourceId = null;
+        if (state.settings.restoreSession) {
+            const sourceId = projectData.get(SOURCE_KEY);
+            if (typeof sourceId === 'string' && templates.get(sourceId)) state.sourceId = sourceId;
+        }
+        state.attempted = false;
+        state.touched.clear();
+        state.generated = null;
+        // Undo doesn't reach into another project
+        undoStack.reset(state.workspace);
+        const dialect = projects.get(projects.active)?.dialect;
+        if (dialect && dialect !== state.settings.dialect) updateSettings({ dialect });
+        syncTypeTabs();
+        renderBuilder();
+        renderHistory();
+        renderTemplates();
+        renderSchema();
+        renderProjectBar();
+        scheduleRefresh.flush();
+    }
+
+    /** Opens another project; the current query stays in the one it was built in. */
+    function openProject(id, message) {
+        commitSoon.flush();
+        saveDraft.flush();
+        projects.setActive(id);
+        loadProject();
+        toast(message, 'success');
+    }
+
+    /**
+     * Restores a backup's other projects. Merge adds to a project with the
+     * same name, or creates it; replace deletes the other projects first.
+     * Each project is restored on its own, so one that doesn't fit doesn't
+     * stop the rest. Returns lines for the summary.
+     */
+    function restoreProjects(list, { replace, otherProjects }) {
+        const parts = [];
+        if (replace) {
+            for (const p of otherProjects) {
+                if (p.id === projects.active) projects.setActive(MAIN_PROJECT);
+                projects.remove(p.id);
+            }
+        }
+        let done = 0;
+        const failed = [];
+        for (const item of list) {
+            try {
+                const same = projects.list().find(p => p.id !== MAIN_PROJECT && p.name.toLowerCase() === item.name.toLowerCase());
+                const target = same || projects.create(freeProjectName(item.name), { dialect: item.dialect });
+                const stores = storesFor(target.id);
+                if (item.schema.length) stores.schema.apply(item.schema, { onConflict: 'keep' });
+                stores.templates.restore(item.templates);
+                if (state.settings.saveHistory) stores.history.restore(item.history);
+                done++;
+            } catch (error) {
+                failed.push(`${item.name} (${error instanceof Error && (error instanceof TemplateError || error instanceof SchemaError || error instanceof ProjectError) ? error.message : 'could not be restored'})`);
+            }
+        }
+        if (done) parts.push(`${count(done, 'other project')} restored`);
+        if (failed.length) parts.push(`not restored: ${failed.join('; ')}`);
+        return parts;
+    }
+
+    /** "Report", or "Report (2)" when a project already has that name. */
+    function freeProjectName(name) {
+        if (!projects.named(name)) return name;
+        for (let n = 2; ; n++) {
+            const candidate = `${name.slice(0, 54)} (${n})`;
+            if (!projects.named(candidate)) return candidate;
+        }
+    }
+
+    async function openProjects() {
+        const dialog = el.projectsDialog;
+        const list = dialog.querySelector('#projects-list');
+        const form = dialog.querySelector('#projects-form');
+        const input = dialog.querySelector('#project-new-name');
+        const error = dialog.querySelector('#project-error');
+        const render = (focusAction = null, focusId = null) => {
+            renderProjectList(list, projects.list(), {
+                active: projects.active,
+                counts: (id) => (id === projects.active
+                    ? { templates: templates.list().length, history: history.list().length, tables: schema.size }
+                    : projectCounts(projects.storageFor(id))),
+                dialectLabel: (d) => getDialect(d).label
+            });
+            if (focusAction) {
+                (list.querySelector(`[data-action="${focusAction}"][data-id="${cssEscape(focusId)}"]`)
+                    || list.querySelector(`[data-id="${cssEscape(focusId)}"]`) || list.querySelector('button'))?.focus();
+            }
+        };
+        const onClick = async (event) => {
+            const btn = event.target.closest('button[data-action]');
+            if (!btn || !list.contains(btn)) return;
+            const project = projects.get(btn.dataset.id);
+            if (!project) return;
+            try {
+                switch (btn.dataset.action) {
+                    case 'project-open':
+                        closeDialog(dialog, 'confirm');
+                        openProject(project.id, `Opened project “${project.name}”.`);
+                        break;
+                    case 'project-rename': {
+                        const name = await promptDialog(el.promptDialog, { title: 'Rename project', label: 'Project name', value: project.name, confirmText: 'Rename' });
+                        if (name === null) return;
+                        const renamed = projects.rename(project.id, name);
+                        renderProjectBar();
+                        render('project-rename', project.id);
+                        toast(`Renamed to “${renamed.name}”.`);
+                        break;
+                    }
+                    case 'project-delete': {
+                        const c = projectCounts(projects.storageFor(project.id));
+                        const ok = await confirmDialog(el.confirmDialog, {
+                            title: 'Delete project?',
+                            message: `“${project.name}” and its ${count(c.templates, 'template')}, ${count(c.history, 'history entry', 'history entries')} and ${count(c.tables, 'schema table')} will be deleted from this browser. Other projects don't change. This cannot be undone.`,
+                            confirmText: 'Delete project'
+                        });
+                        if (!ok) return;
+                        projects.remove(project.id);
+                        renderTemplates();
+                        render();
+                        list.querySelector('button')?.focus();
+                        toast(`Deleted project “${project.name}”.`);
+                        break;
+                    }
+                    default:
+                }
+            } catch (e) {
+                toast(e instanceof ProjectError ? e.message : 'Something went wrong.', 'error');
+            }
+        };
+        const onSubmit = (event) => {
+            // Create and open; enhanceDialog's handler would just close the dialog
+            event.preventDefault();
+            event.stopPropagation();
+            try {
+                const project = projects.create(input.value, { dialect: state.settings.dialect });
+                closeDialog(dialog, 'confirm');
+                openProject(project.id, `Created project “${project.name}”. Its templates, history and schema start empty.`);
+                renderTemplates();
+            } catch (e) {
+                if (!(e instanceof ProjectError)) throw e;
+                error.textContent = e.message;
+                input.setAttribute('aria-invalid', 'true');
+                input.focus();
+            }
+        };
+        input.value = '';
+        error.textContent = '';
+        input.removeAttribute('aria-invalid');
+        render();
+        list.addEventListener('click', onClick);
+        form.addEventListener('submit', onSubmit);
+        try {
+            await showDialog(dialog, () => list.querySelector('button')?.focus());
+        } finally {
+            list.removeEventListener('click', onClick);
+            form.removeEventListener('submit', onSubmit);
+        }
+    }
+
+    /** Moves a template, with its earlier versions, to another project. */
+    async function moveTemplate(id) {
+        const template = templates.get(id);
+        const others = projects.list().filter(p => p.id !== projects.active);
+        if (!template || !others.length) return;
+        const dialog = el.moveDialog;
+        const select = dialog.querySelector('#move-project');
+        select.replaceChildren(...others.map(p => h('option', { value: p.id }, p.name)));
+        dialog.querySelector('#move-message').textContent = `“${template.name}” moves with its earlier versions. Its history entries stay in this project.`;
+        const ok = await formDialog(dialog, { onOpen: () => select.focus(), validate: () => true });
+        if (!ok) return;
+        const target = projects.get(select.value);
+        if (!target) return;
+        try {
+            // Dates, pins and versions are kept; an identical template there counts as moved
+            const result = storesFor(target.id).templates.restore([template]);
+            templates.remove(id);
+            if (state.sourceId === id) {
+                state.sourceId = null;
+                saveDraft();
+                renderQueryName();
+            }
+            renderTemplates();
+            el.templateSearch.focus();
+            toast(`Moved “${template.name}” to ${target.name}.${result.skipped ? ' An identical template was already there.' : ''}`, 'success');
+        } catch (e) {
+            toast(e instanceof TemplateError ? e.message : 'The template could not be moved.', 'error');
+        }
+    }
+
     /** A template's earlier versions: compare each with the current query, restore or delete it. */
     async function openVersions(id) {
         const dialog = el.versionsDialog;
@@ -1540,6 +1795,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                     renderTemplates();
                     break;
                 }
+                case 'template-move':
+                    await moveTemplate(id);
+                    break;
                 case 'template-versions':
                     await openVersions(id);
                     break;
@@ -1862,9 +2120,14 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             renderThemeButton();
         }
         if (patch.saveHistory !== undefined) renderHistory();
-        if (patch.restoreSession === false) storage.remove(DRAFT_KEY);
+        if (patch.restoreSession === false) projectData.remove(DRAFT_KEY);
         if (patch.outputMode !== undefined || patch.wrapOutput !== undefined) renderModeButtons();
         if (patch.dialect !== undefined && patch.dialect !== before.dialect) {
+            try {
+                projects.setDialect(projects.active, state.settings.dialect);
+            } catch {
+                // the project just doesn't remember it
+            }
             renderDialectNotes();
             el.dialectSelect.value = state.settings.dialect;
             state.exampleFilter = null;
@@ -1898,7 +2161,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             suggester.close();
             return true;
         }
-        const dialogs = [el.confirmDialog, el.versionsDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
+        const dialogs = [el.confirmDialog, el.versionsDialog, el.projectsDialog, el.moveDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
         const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
         if (open) {
             closeDialog(open, 'cancel');
@@ -1969,10 +2232,20 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     async function clearAllData() {
         const ok = await confirmDialog(el.confirmDialog, {
             title: 'Delete all saved data?',
-            message: 'This removes your history, templates, schema, practice progress and settings from this browser and clears the builder. It cannot be undone.',
+            message: 'This removes your projects, history, templates, schema, practice progress and settings from this browser and clears the builder. It cannot be undone.',
             confirmText: 'Delete everything'
         });
         if (!ok) return;
+        // Settings first: a dialect change is remembered by the open project,
+        // and clearing the projects afterwards forgets that too
+        updateSettings({ ...DEFAULT_SETTINGS });
+        storage.remove('settings');
+        // Every project but Main goes, with its data; then Main is emptied
+        projects.clear();
+        projectData = projects.storageFor(MAIN_PROJECT);
+        history = createHistory(projectData);
+        templates = createTemplateStore(projectData);
+        schema = createSchemaStore(projectData);
         history.clear();
         for (const t of templates.list()) templates.remove(t.id);
         try {
@@ -1982,19 +2255,19 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         }
         practice.clear();
         state.practiceView = newPracticeView();
-        updateSettings({ ...DEFAULT_SETTINGS });
-        storage.remove('settings');
         replaceWorkspace(createWorkspace());
+        undoStack.reset(state.workspace);
         commitSoon.cancel();
         saveDraft.cancel();
-        storage.remove(DRAFT_KEY);
-        storage.remove(SOURCE_KEY);
+        projectData.remove(DRAFT_KEY);
+        projectData.remove(SOURCE_KEY);
         syncSettingsForm();
         renderHistory();
         renderTemplates();
         renderSchema();
         renderPracticeList();
         renderPractice();
+        renderProjectBar();
         toast('All saved data was deleted from this browser.', 'success');
     }
 
@@ -2054,6 +2327,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             { id: 'open-history', group: 'Library', label: 'Open history', run: () => openLibraryTab('history') },
             { id: 'open-templates', group: 'Library', label: 'Open templates', run: () => openLibraryTab('templates') },
             { id: 'open-examples', group: 'Library', label: 'Open examples', run: () => openLibraryTab('examples') },
+            { id: 'projects', group: 'Projects', label: 'Projects…', keywords: 'workspace switch new create rename delete database folder', run: openProjects },
+            ...projects.list().filter(p => p.id !== projects.active).map(p => ({
+                id: `project-${p.id}`, group: 'Projects', label: `Open project: ${p.name}`, keywords: 'workspace switch',
+                run: () => openProject(p.id, `Opened project “${p.name}”.`)
+            })),
             { id: 'open-practice', group: 'Library', label: 'Open practice exercises', keywords: 'learn exercises lessons training quiz', run: () => openLibraryTab('practice') },
             { id: 'open-schema', group: 'Schema', label: 'Open schema', keywords: 'tables columns', run: () => openLibraryTab('schema') },
             { id: 'schema-add', group: 'Schema', label: 'Add a table to the schema…', keywords: 'create table columns', run: () => editSchemaTable() },
@@ -2201,6 +2479,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     });
     el.libraryPanel.addEventListener('click', onLibraryClick);
     el.practice.addEventListener('click', onPracticeClick);
+    el.projectsBtn.addEventListener('click', openProjects);
     el.practiceLevel.addEventListener('change', () => {
         state.practiceLevel = el.practiceLevel.value;
         renderPracticeList();
@@ -2253,7 +2532,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     }, 150));
 
     [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog, el.paletteDialog, el.backupDialog,
-        el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.versionsDialog].forEach(enhanceDialog);
+        el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.versionsDialog, el.projectsDialog, el.moveDialog].forEach(enhanceDialog);
 
     bindShortcuts(doc, signal, {
         generate,
@@ -2301,6 +2580,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     renderExamples();
     renderSchema();
     renderPracticeList();
+    renderProjectBar();
     selectTab('history');
     refresh();
     platform.onBack(handleBack);
@@ -2308,9 +2588,10 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     return {
         destroy: () => lifetime.abort(),
         get state() { return state; },
-        history,
-        templates,
-        schema,
+        get history() { return history; },
+        get templates() { return templates; },
+        get schema() { return schema; },
+        projects,
         generate,
         undo,
         redo,

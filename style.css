@@ -1269,3 +1269,17 @@ kbd {
 .diff-added { background: color-mix(in srgb, var(--success) 16%, transparent); }
 .diff-removed { background: color-mix(in srgb, var(--danger) 14%, transparent); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--danger) 60%, transparent); }
 .diff-mark { color: var(--text-2); user-select: none; }
+
+/* ------------------------------------------------------------ projects */
+
+.project-bar { display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; align-items: center; margin-bottom: 0.5rem; min-width: 0; }
+.project-label { color: var(--text-2); font-size: 0.8rem; font-weight: 600; }
+.project-current { min-width: 0; overflow-wrap: anywhere; }
+.project-bar .btn { margin-left: auto; }
+.projects-list { display: grid; gap: 0.4rem; margin: 0 0 0.75rem; padding: 0; list-style: none; max-height: 20rem; overflow: auto; }
+.project-item { display: grid; gap: 0.35rem; padding: 0.5rem 0.65rem; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.project-item.is-current { border-color: var(--success); }
+.project-item .library-name { overflow-wrap: anywhere; }
+.project-counts { color: var(--text-2); font-size: 0.85rem; }
+.projects-new-row { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.projects-new-row .input { flex: 1 1 12rem; min-width: 0; width: auto; }

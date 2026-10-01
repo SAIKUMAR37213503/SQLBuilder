@@ -2833,3 +2833,212 @@ describe('template versions', () => {
         expect(document.activeElement).toBe($('#template-list [data-action="template-load"]'));
     });
 });
+
+describe('projects', () => {
+    const projectsDialog = () => $('#projects-dialog');
+    const names = () => $$('#projects-list .library-name').map(n => n.textContent);
+    async function createProject(name) {
+        $('#projects-btn').click();
+        await settle();
+        $('#project-new-name').value = name;
+        $('#project-create-btn').click();
+        await settle();
+    }
+    async function openProjectNamed(name) {
+        $('#projects-btn').click();
+        await settle();
+        $(`#projects-list [aria-label="Open project ${name}"]`).click();
+        await settle();
+    }
+    async function saveTemplate(table, name) {
+        await fillSimpleSelect(table, 'id');
+        $('#template-save-btn').click();
+        await answerTemplate(name);
+    }
+
+    test('starts in Main and stores nothing new', () => {
+        expect($('#project-current').textContent).toBe('Main');
+        expect(backend.getItem(`${STORAGE_PREFIX}projects`)).toBeNull();
+    });
+
+    test('a new project starts empty, and each keeps its own query, templates and dialect', async () => {
+        await saveTemplate('orders', 'Orders');
+        pickDialect('postgresql');
+        await createProject('Billing');
+        expect(projectsDialog().hasAttribute('open')).toBe(false);
+        expect($('#project-current').textContent).toBe('Billing');
+        expect(toast()).toBe('Created project “Billing”. Its templates, history and schema start empty.');
+        expect(field('select.from.table').value).toBe('');
+        expect(app.templates.list()).toEqual([]);
+        // A new project starts with the dialect in use
+        expect($('#dialect-select').value).toBe('postgresql');
+
+        await saveTemplate('invoices', 'Invoices');
+        pickDialect('sqlserver');
+        await settle();
+
+        await openProjectNamed('Main');
+        expect(toast()).toBe('Opened project “Main”.');
+        expect(field('select.from.table').value).toBe('orders');
+        expect($('.query-name-text').textContent).toBe('Orders');
+        expect(app.templates.list().map(t => t.name)).toEqual(['Orders']);
+        expect($('#dialect-select').value).toBe('postgresql');
+        // Undo doesn't reach into the other project
+        app.undo();
+        expect(field('select.from.table').value).toBe('orders');
+
+        // A reload opens the project last used
+        await openProjectNamed('Billing');
+        boot(backend);
+        expect($('#project-current').textContent).toBe('Billing');
+        expect(field('select.from.table').value).toBe('invoices');
+        expect($('#dialect-select').value).toBe('sqlserver');
+        expect(app.templates.list().map(t => t.name)).toEqual(['Invoices']);
+        // An older copy of the app reads Main's data from the same keys as before
+        expect(JSON.parse(backend.getItem(`${STORAGE_PREFIX}templates`)).map(t => t.name)).toEqual(['Orders']);
+    });
+
+    test('the list shows counts; names are checked; rename and delete', async () => {
+        await saveTemplate('orders', 'Orders');
+        await createProject('Billing');
+        $('#projects-btn').click();
+        await settle();
+        expect(names()).toEqual(['Main', 'Billing']);
+        expect($$('#projects-list .project-counts').map(p => p.textContent)).toEqual([
+            '1 template · 0 history entries · 0 schema tables',
+            '0 templates · 0 history entries · 0 schema tables'
+        ]);
+        // Main and the open project can't be deleted
+        expect($$('#projects-list [data-action="project-delete"]')).toHaveLength(0);
+        expect(document.activeElement.getAttribute('aria-label')).toBe('Open project Main');
+
+        $('#project-new-name').value = ' main ';
+        $('#project-create-btn').click();
+        await settle();
+        expect($('#project-error').textContent).toBe('A project named Main already exists.');
+        expect($('#project-new-name').getAttribute('aria-invalid')).toBe('true');
+        expect(projectsDialog().hasAttribute('open')).toBe(true);
+
+        $('#projects-list [aria-label="Rename project Billing"]').click();
+        await answerPrompt('Invoices DB');
+        expect(toast()).toBe('Renamed to “Invoices DB”.');
+        expect($('#project-current').textContent).toBe('Invoices DB');
+        expect(names()).toEqual(['Main', 'Invoices DB']);
+
+        $('#projects-list [aria-label="Open project Main"]').click();
+        await settle();
+        $('#projects-btn').click();
+        await settle();
+        $('#projects-list [aria-label="Delete project Invoices DB"]').click();
+        await settle();
+        expect($('#confirm-dialog').textContent).toContain('“Invoices DB” and its 0 templates, 0 history entries and 0 schema tables will be deleted');
+        await answerConfirm(true);
+        expect(toast()).toBe('Deleted project “Invoices DB”.');
+        expect(names()).toEqual(['Main']);
+    });
+
+    test('a template moves to another project with its versions', async () => {
+        await saveTemplate('orders', 'Orders');
+        type('select.from.table', 'paid_orders');
+        await settle();
+        $('#save-btn').click();
+        await settle();
+        // Only one project: nowhere to move to
+        expect($('#template-list [data-action="template-move"]')).toBeNull();
+        await createProject('Archive');
+        await openProjectNamed('Main');
+        $('#template-list [data-action="template-move"]').click();
+        await settle();
+        expect($('#move-message').textContent).toBe('“Orders” moves with its earlier versions. Its history entries stay in this project.');
+        expect($$('#move-project option').map(o => o.textContent)).toEqual(['Archive']);
+        $('#move-dialog [type="submit"]').click();
+        await settle();
+        expect(toast()).toBe('Moved “Orders” to Archive.');
+        expect(app.templates.list()).toEqual([]);
+        // The query is no longer a saved template here
+        expect($('#query-name').textContent).toBe('Unsaved query');
+
+        await openProjectNamed('Archive');
+        const moved = app.templates.list();
+        expect(moved.map(t => t.name)).toEqual(['Orders']);
+        expect(moved[0].versions.map(v => v.workspace.select.from.table)).toEqual(['orders']);
+    });
+
+    test('a backup carries every project and restores them', async () => {
+        let exported = null;
+        vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => { exported = blob; return 'blob:x'; });
+        vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        await saveTemplate('orders', 'Orders');
+        await createProject('Billing');
+        pickDialect('mysql');
+        await saveTemplate('invoices', 'Invoices');
+        $('[data-command="export-backup"]').click();
+        await settle();
+        expect(toast()).toBe('Backed up 2 templates, 0 history entries in 2 projects and your settings.');
+        const text = await exported.text();
+        const data = JSON.parse(text);
+        expect(data.version).toBe(3);
+        expect(data.templates.map(t => t.name)).toEqual(['Orders']);
+        expect(data.projects.map(p => [p.name, p.dialect, p.templates.map(t => t.name)])).toEqual([['Billing', 'mysql', ['Invoices']]]);
+
+        boot();
+        $('[data-command="import-backup"]').click();
+        await chooseFile(text, 'backup.json');
+        expect($('#backup-summary').textContent).toContain('for the Main project, and 1 other project (Billing) and settings.');
+        $('#backup-dialog [value="confirm"]').click();
+        await settle();
+        expect(toast()).toBe('Backup restored: 1 template added, 0 history entries added, 1 other project restored. Your settings were kept.');
+        expect(app.templates.list().map(t => t.name)).toEqual(['Orders']);
+        await openProjectNamed('Billing');
+        expect(app.templates.list().map(t => t.name)).toEqual(['Invoices']);
+        expect($('#dialect-select').value).toBe('mysql');
+
+        // Merging again adds nothing and makes no second Billing
+        $('[data-command="import-backup"]').click();
+        await chooseFile(text, 'backup.json');
+        $('#backup-dialog [value="confirm"]').click();
+        await settle();
+        expect(app.projects.list().map(p => p.name)).toEqual(['Main', 'Billing']);
+        expect(app.templates.list()).toHaveLength(1);
+
+        // Replace deletes the other projects first, and opens Main if the open one went
+        await createProject('Scratch');
+        $('[data-command="import-backup"]').click();
+        await chooseFile(text, 'backup.json');
+        $('#backup-dialog input[value="replace"]').checked = true;
+        $('#backup-dialog [value="confirm"]').click();
+        await settle();
+        expect($('#confirm-dialog').textContent).toContain('your 2 other projects (Billing, Scratch) will be deleted');
+        await answerConfirm(true);
+        expect(app.projects.list().map(p => p.name)).toEqual(['Main', 'Billing']);
+        expect($('#project-current').textContent).toBe('Main');
+        expect(app.templates.list().map(t => t.name)).toEqual(['Orders']);
+    });
+
+    test('delete all saved data removes every project', async () => {
+        await createProject('Billing');
+        pickDialect('mysql');
+        await saveTemplate('invoices', 'Invoices');
+        $('#settings-btn').click();
+        $('#clear-data-btn').click();
+        await answerConfirm(true);
+        expect($('#project-current').textContent).toBe('Main');
+        expect(app.projects.list().map(p => p.name)).toEqual(['Main']);
+        expect(app.templates.list()).toEqual([]);
+        expect(backend.getItem(`${STORAGE_PREFIX}projects`)).toBeNull();
+        expect(backend.getItem(`${STORAGE_PREFIX}settings`)).toBeNull();
+    });
+
+    test('the command palette opens another project', async () => {
+        await createProject('Billing');
+        press('k', { ctrlKey: true });
+        await settle();
+        $('#palette-input').value = 'open project main';
+        $('#palette-input').dispatchEvent(new Event('input', { bubbles: true }));
+        press('Enter', {}, $('#palette-input'));
+        await settle();
+        expect($('#project-current').textContent).toBe('Main');
+        expect(toast()).toBe('Opened project “Main”.');
+    });
+});
