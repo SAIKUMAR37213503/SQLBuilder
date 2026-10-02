@@ -12,6 +12,8 @@ import { isSqliteFile } from './files.js';
 export const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 1000;
 const MAX_CURSORS = 4;
+// Statements that would start or end the import's own transaction (ROLLBACK TO a savepoint is fine)
+const ENDS_TRANSACTION = /^(?:BEGIN|COMMIT|END|START\s+TRANSACTION)\b|^ROLLBACK\b(?!\s+(?:TRANSACTION\s+)?TO\b)/i;
 
 /** What a statement does, from its first keyword. */
 export function statementKind(sql) {
@@ -57,6 +59,12 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
     function requireOpen() {
         if (!current) throw new DatabaseError('No database is open.', { code: 'NOT_OPEN' });
         return current;
+    }
+
+    function requireNoTransaction() {
+        if (capi.sqlite3_get_autocommit(current.db.pointer) === 0) {
+            throw new DatabaseError('A transaction is open in this database. Finish it (COMMIT or ROLLBACK) before importing.', { code: 'IN_TRANSACTION' });
+        }
     }
 
     function requireFile(id) {
@@ -288,9 +296,150 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
             const name = checkId(id);
             if (!isSqliteFile(bytes)) throw new DatabaseError('This isn\'t a SQLite database file.', { code: 'NOT_A_DATABASE' });
             if (files.exists(name)) throw new DatabaseError('A database with this id already exists.', { code: 'EXISTS' });
+            let data = bytes;
+            // A file saved in WAL mode is opened in the standard journal mode
+            // (bytes 18 and 19 of the header), which this storage needs
+            if (data[18] === 2 || data[19] === 2) {
+                data = new Uint8Array(bytes);
+                data[18] = 1;
+                data[19] = 1;
+            }
             await files.reserve(2);
-            files.write(name, bytes);
+            files.write(name, data);
+            // A damaged or encrypted file is refused before it reaches the list
+            let check;
+            let db = null;
+            try {
+                db = files.open(name);
+                check = db.selectValues('PRAGMA quick_check;');
+            } catch (error) {
+                check = [cleanMessage(error instanceof Error ? error.message : error).message];
+            } finally {
+                db?.close();
+            }
+            if (check.length !== 1 || check[0] !== 'ok') {
+                files.remove(name);
+                throw new DatabaseError(`This database file can't be used: ${String(check[0] || 'it is damaged')}.`, { code: 'NOT_A_DATABASE' });
+            }
             return adapter.info();
+        },
+
+        /**
+         * Runs an imported script in one transaction: all of it, or (when a
+         * statement fails) none of it. Foreign keys are checked at the end, so
+         * the script's tables and rows can come in any order.
+         * Returns what the engine reported: statements run and rows changed.
+         * @param {string} sql
+         */
+        runScript(sql) {
+            const { db } = requireOpen();
+            requireNoTransaction();
+            closeCursors();
+            const bytes = new TextEncoder().encode(String(sql ?? ''));
+            const pDb = db.pointer;
+            const started = now();
+            let statements = 0;
+            const changesBefore = capi.sqlite3_total_changes(pDb);
+            /** @type {{ message: string, code: string, offset: number, statement: number } | null} */
+            let failure = null;
+            const pSql = wasm.alloc(bytes.length + 1);
+            const ppStmt = wasm.alloc(2 * wasm.ptr.size);
+            const pzTail = wasm.ptr.add(ppStmt, wasm.ptr.size);
+            db.exec('BEGIN; PRAGMA defer_foreign_keys = ON;');
+            try {
+                wasm.heap8u().set(bytes, Number(pSql));
+                wasm.poke8(wasm.ptr.add(pSql, bytes.length), 0);
+                let at = 0;
+                while (at < bytes.length) {
+                    wasm.pokePtr([ppStmt, pzTail], 0);
+                    // The length includes the terminating zero, so SQLite reads the text in place (no copy of the rest of the script)
+                    const rc = capi.sqlite3_prepare_v3(pDb, wasm.ptr.add(pSql, at), bytes.length - at + 1, 0, ppStmt, pzTail);
+                    const pStmt = wasm.peekPtr(ppStmt);
+                    if (rc !== capi.SQLITE_OK) {
+                        const offset = capi.sqlite3_error_offset(pDb);
+                        failure = { message: capi.sqlite3_errmsg(pDb), code: capi.sqlite3_js_rc_str(rc) || 'SQLITE_ERROR', offset: offset >= 0 ? at + offset : startOf(bytes, at), statement: statements };
+                        if (pStmt) capi.sqlite3_finalize(pStmt);
+                        break;
+                    }
+                    const tail = Number(wasm.peekPtr(pzTail));
+                    const next = tail ? tail - Number(pSql) : bytes.length;
+                    if (pStmt) {
+                        try {
+                            const text = capi.sqlite3_sql(pStmt) || '';
+                            if (ENDS_TRANSACTION.test(text.replace(/^(?:\s|--[^\n]*\n?|\/\*[\s\S]*?\*\/)*/, ''))) {
+                                failure = { message: 'An imported script can\'t start or end transactions itself; the import already runs it in one.', code: 'TRANSACTION', offset: startOf(bytes, at), statement: statements };
+                                break;
+                            }
+                            let step;
+                            while ((step = capi.sqlite3_step(pStmt)) === capi.SQLITE_ROW) { /* rows of a query aren't shown in an import */ }
+                            if (step !== capi.SQLITE_DONE) {
+                                failure = { message: capi.sqlite3_errmsg(pDb), code: capi.sqlite3_js_rc_str(step) || 'SQLITE_ERROR', offset: startOf(bytes, at), statement: statements };
+                                break;
+                            }
+                            statements++;
+                        } finally {
+                            capi.sqlite3_finalize(pStmt);
+                        }
+                    }
+                    if (next <= at) break;
+                    at = next;
+                }
+                if (!failure) {
+                    try {
+                        db.exec('COMMIT;');
+                    } catch (error) {
+                        // A foreign key that points nowhere is found here
+                        failure = { ...cleanMessage(error instanceof Error ? error.message : error), offset: -1, statement: -1 };
+                    }
+                }
+            } finally {
+                if (capi.sqlite3_get_autocommit(pDb) === 0) db.exec('ROLLBACK;');
+                wasm.dealloc(ppStmt);
+                wasm.dealloc(pSql);
+                saveCurrent();
+            }
+            if (failure) {
+                const where = failure.offset >= 0 ? positionAt(bytes, failure.offset) : {};
+                throw new DatabaseError(failure.message, { code: failure.code, ...where, ...(failure.statement >= 0 ? { statement: failure.statement } : {}) });
+            }
+            // Rows inserted, updated or deleted, as SQLite counts them (triggers included)
+            return { statements, rowsAffected: capi.sqlite3_total_changes(pDb) - changesBefore, durationMs: Math.max(0, now() - started) };
+        },
+
+        /**
+         * Inserts rows with one prepared statement, in one transaction: all of
+         * them, or (when a row fails) none. `setup` runs first (CREATE TABLE).
+         * @param {{ setup?: string[], sql: string, rows: unknown[][] }} work
+         */
+        insertRows({ setup = [], sql, rows }) {
+            const { db } = requireOpen();
+            requireNoTransaction();
+            closeCursors();
+            const started = now();
+            let inserted = 0;
+            let row = 0;
+            db.exec('BEGIN; PRAGMA defer_foreign_keys = ON;');
+            try {
+                for (const statement of setup) db.exec(statement);
+                const stmt = db.prepare(sql);
+                try {
+                    for (; row < rows.length; row++) {
+                        stmt.bind(rows[row]).stepReset();
+                        inserted += capi.sqlite3_changes(db.pointer);
+                    }
+                } finally {
+                    stmt.finalize();
+                }
+                row = -1;
+                db.exec('COMMIT;');
+            } catch (error) {
+                const reason = cleanMessage(error instanceof Error ? error.message : error);
+                throw new DatabaseError(reason.message, { code: reason.code, ...(row >= 0 && row < rows.length ? { row: row + 1 } : {}) });
+            } finally {
+                if (capi.sqlite3_get_autocommit(db.pointer) === 0) db.exec('ROLLBACK;');
+                saveCurrent();
+            }
+            return { rowsInserted: inserted, durationMs: Math.max(0, now() - started) };
         },
 
         /**

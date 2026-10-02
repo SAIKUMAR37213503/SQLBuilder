@@ -3,6 +3,7 @@
 // both behave the same way.
 
 import { DatabaseError } from './engine.js';
+import { previewImport, runImport } from './importer.js';
 
 const OPERATIONS = {
     info: (a) => a.info(),
@@ -17,7 +18,10 @@ const OPERATIONS = {
     execute: (a, { sql, pageSize }) => a.execute(sql, { pageSize }),
     fetchPage: (a, { cursor, pageSize }) => a.fetchPage(cursor, { pageSize }),
     closeCursor: (a, { cursor }) => a.closeCursor(cursor),
-    schema: (a) => a.schema()
+    schema: (a) => a.schema(),
+    // Reading an import changes nothing; running it is one transaction
+    previewImport: (_a, args) => previewImport(args),
+    runImport: (a, args) => runImport(a, args)
 };
 
 export const OPERATION_NAMES = Object.freeze(Object.keys(OPERATIONS));
@@ -37,7 +41,7 @@ export async function dispatch(adapter, op, args = {}) {
 export function serializeError(error) {
     const e = /** @type {any} */ (error);
     const out = { message: e instanceof Error ? e.message : String(e), code: e?.code || 'ERROR' };
-    for (const key of ['line', 'column', 'statement']) if (typeof e?.[key] === 'number') out[key] = e[key];
+    for (const key of ['line', 'column', 'statement', 'row']) if (typeof e?.[key] === 'number') out[key] = e[key];
     return out;
 }
 

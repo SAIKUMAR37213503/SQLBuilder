@@ -27,7 +27,8 @@ export const SQLITE_HEADER = 'SQLite format 3\u0000';
 
 /** @param {Uint8Array} bytes */
 export function isSqliteFile(bytes) {
-    if (!(bytes instanceof Uint8Array) || bytes.length < 100) return false;
+    // Not instanceof: bytes copied from another realm (a frame, a test's DOM) are Uint8Arrays too
+    if (Object.prototype.toString.call(bytes) !== '[object Uint8Array]' || bytes.length < 100) return false;
     for (let i = 0; i < SQLITE_HEADER.length; i++) if (bytes[i] !== SQLITE_HEADER.charCodeAt(i)) return false;
     return true;
 }

@@ -8,6 +8,11 @@
 //   fetchPage(cursor, { pageSize }), closeCursor(cursor)
 //   schema()                       tables and views of the open database
 //   exportFile(id), importFile(id, bytes)
+//   runScript(sql)                 an imported script, in one transaction
+//   insertRows({ setup, sql, rows }) imported rows, bound to one INSERT, in one transaction
+//
+// Imports (importer.js) are two operations on top of these: previewImport
+// (reads, changes nothing) and runImport.
 //
 // A StatementResult is { sql, kind, columns, rows, more, cursor, rowsAffected,
 // durationMs, statement, start }. rowsAffected is null unless the engine
@@ -17,7 +22,7 @@
 export class DatabaseError extends Error {
     /**
      * @param {string} message
-     * @param {{ code?: string, line?: number, column?: number, statement?: number }} [details]
+     * @param {{ code?: string, line?: number, column?: number, statement?: number, row?: number }} [details]
      */
     constructor(message, details = {}) {
         super(message);
@@ -26,6 +31,8 @@ export class DatabaseError extends Error {
         if (details.line !== undefined) this.line = details.line;
         if (details.column !== undefined) this.column = details.column;
         if (details.statement !== undefined) this.statement = details.statement;
+        // The data row (1-based) an import stopped at
+        if (details.row !== undefined) this.row = details.row;
     }
 }
 
