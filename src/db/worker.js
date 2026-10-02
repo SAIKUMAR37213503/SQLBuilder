@@ -1,7 +1,8 @@
 // The database worker: runs SQLite off the page's main thread, so a long
 // query never freezes the app. Databases are stored in the Origin Private
 // File System when the browser allows it, otherwise only in memory (and the
-// app says so). Messages: { id, op, args } in, { id, ok, value | error } out.
+// app says so). Messages: { id, op, args } in, { id, ok, value | error } out;
+// an import also sends { id, progress: { done, total } } as it reads a file.
 // The first message must be { id, op: 'init', args: { wasmUrl } }.
 
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
@@ -124,7 +125,7 @@ self.onmessage = async (event) => {
         } else {
             if (!ready) throw new Error('The database engine was not started.');
             const { adapter } = await ready;
-            value = await dispatch(adapter, op, args);
+            value = await dispatch(adapter, op, args, { onProgress: (progress) => self.postMessage({ id, progress }) });
         }
         const transfer = value instanceof Uint8Array ? [value.buffer] : [];
         self.postMessage({ id, ok: true, value }, { transfer });

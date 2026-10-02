@@ -1,13 +1,15 @@
-// The SQL Lab's Import dialog: a SQL script, CSV or JSON into a database, or
-// a SQLite database file as a new database. The file is read in the page,
-// then the database worker previews it (statements, columns, the first rows)
-// without changing anything. Only Import runs it, as one transaction; when it
-// fails, the dialog stays open with the reason and nothing is kept.
+// The SQL Lab's Import dialog: a SQL script, CSV, JSON or an HTML table into a
+// database, or a SQLite database file as a new database. A chosen file goes
+// to the database worker as it is (files up to 1 GB are read there a few MB
+// at a time; only the first part is read in the page, to tell what it is).
+// The worker previews it (statements, columns, the first rows) without
+// changing anything. Only Import runs it, as one transaction; when it fails,
+// the dialog stays open with the reason and nothing is kept.
 
 import { h, debounce } from './dom.js';
 import { showDialog, closeDialog } from './dialogs.js';
 import { renderSqlCode } from './output.js';
-import { detectFormat, tableNameFor, unreadableFile, MAX_IMPORT_BYTES } from '../db/importer.js';
+import { detectFormat, tableNameFor, unreadableFile, textEncoding, maxFileBytes } from '../db/importer.js';
 import { looksLikeSqlServer } from '../db/import-sqlserver.js';
 import { COLUMN_TYPES, TYPE_LABELS, createTableSql, insertSql } from '../db/import-types.js';
 import { delimiterName } from '../db/import-csv.js';
@@ -18,8 +20,15 @@ const plural = (n, one, many = `${one}s`) => `${Number(n).toLocaleString()} ${n 
 function sizeText(bytes) {
     if (bytes < 1024) return `${bytes} bytes`;
     if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${Number((bytes / 1024 / 1024 / 1024).toFixed(2))} GB`;
 }
+
+// How much of a file is read in the page, to tell its format
+const HEAD_BYTES = 1024 * 1024;
+
+/** How far an import has read its file, as "42%" (empty before it starts). */
+const percent = (/** @type {{ done: number, total: number } | null} */ p) => (p && p.total > 0 ? ` ${Math.min(100, Math.floor((p.done / p.total) * 100))}%` : '');
 
 /** An error as a sentence, with where it happened when the message doesn't say. */
 function errorText(error) {
@@ -65,6 +74,8 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         csvOptions: $('lab-import-csv-options'),
         delimiter: $('lab-import-delimiter'),
         header: $('lab-import-header'),
+        htmlOptions: $('lab-import-html-options'),
+        htmlTable: $('lab-import-html-table'),
         tableOptions: $('lab-import-table-options'),
         table: $('lab-import-table'),
         append: $('lab-import-append'),
@@ -78,8 +89,14 @@ export function createImportDialog({ dialog, client, lab, toast }) {
     };
     const fileEmptyText = el.fileName.textContent;
 
-    /** @type {{ name: string, size: number, text: string | null, bytes: Uint8Array | null } | null} */
+    /**
+     * The chosen file: the file itself (sent to the worker), its first bytes and
+     * their text (to tell its format), and whether it is a SQLite database.
+     * @type {{ name: string, size: number, blob: Blob, head: string, headBytes: Uint8Array, database: boolean } | null}
+     */
     let file = null;
+    /** @type {{ done: number, total: number } | null} how far the preview or import has read the file */
+    let progress = null;
     /** @type {any} the worker's preview, or null */
     let preview = null;
     /** @type {string | null} why the preview failed */
@@ -96,8 +113,13 @@ export function createImportDialog({ dialog, client, lab, toast }) {
 
     const mode = () => (dialog.querySelector('input[name="lab-import-mode"]:checked')?.value === 'append' ? 'append' : 'new');
     const format = () => el.format.value;
-    const tabular = () => format() === 'csv' || format() === 'json';
-    const sourceText = () => (file ? file.text : el.text.value);
+    const tabular = () => format() === 'csv' || format() === 'json' || format() === 'html';
+    // The chosen table of an HTML page (the first with rows until one is chosen)
+    const options = () => ({ delimiter: el.delimiter.value, header: el.header.checked, table: el.htmlTable.value === '' ? undefined : Number(el.htmlTable.value) });
+    // What is imported: the file (read in the worker) or the pasted text
+    const sourceArgs = () => (file ? { source: file.blob } : { text: el.text.value });
+    const hasSource = () => (file ? file.size > 0 && file.head.trim() !== '' : el.text.value.trim() !== '');
+    const headText = () => (file ? file.head : el.text.value);
     const objects = () => (el.db.value && lab.state.open === el.db.value ? lab.state.objects || [] : []);
     const tables = () => objects().filter(o => o.type === 'table');
 
@@ -111,12 +133,19 @@ export function createImportDialog({ dialog, client, lab, toast }) {
 
     async function readFile(chosen) {
         el.error.textContent = '';
-        if (chosen.size > MAX_IMPORT_BYTES) {
-            el.error.textContent = `${chosen.name} is ${sizeText(chosen.size)}; files up to ${MAX_IMPORT_BYTES / 1024 / 1024} MB can be imported.`;
+        let head;
+        try {
+            head = new Uint8Array(await chosen.slice(0, 4096).arrayBuffer());
+        } catch {
+            el.error.textContent = `${chosen.name} couldn't be read.`;
+            return;
+        }
+        const limit = maxFileBytes();
+        if (chosen.size > limit) {
+            el.error.textContent = `${chosen.name} is ${sizeText(chosen.size)}; files up to ${sizeText(limit)} can be imported.`;
             return;
         }
         try {
-            const head = new Uint8Array(await chosen.slice(0, 4096).arrayBuffer());
             const problem = unreadableFile(head, chosen.name);
             if (problem) {
                 // Not left looking as if the previous file were still chosen
@@ -128,15 +157,18 @@ export function createImportDialog({ dialog, client, lab, toast }) {
                 return;
             }
             const database = isSqliteFile(head) || detectFormat({ name: chosen.name }) === 'sqlite';
-            const bytes = database ? new Uint8Array(await chosen.arrayBuffer()) : null;
-            file = { name: chosen.name, size: chosen.size, text: database ? null : await chosen.text(), bytes };
+            // Only the start of the file is read here; the worker reads the rest
+            const start = database ? head : new Uint8Array(await chosen.slice(0, HEAD_BYTES).arrayBuffer());
+            const text = database ? '' : new TextDecoder(textEncoding(start)).decode(start);
+            file = { name: chosen.name, size: chosen.size, blob: chosen, head: text, headBytes: head, database };
         } catch {
             el.error.textContent = `${chosen.name} couldn't be read.`;
             return;
         }
         formatPicked = false;
         tableEdited = false;
-        el.format.value = detectFormat({ name: file.name, text: file.text || '', bytes: file.bytes || undefined });
+        el.htmlTable.replaceChildren();
+        el.format.value = detectFormat({ name: file.name, text: file.head, bytes: file.headBytes });
         if (el.format.value === 'sqlite' && el.db.value) el.db.value = '';
         if (el.format.value === 'sqlite') el.newName.value = lab.freeName(tableNameFor(file.name));
         el.table.value = freeTableName(tableNameFor(file.name));
@@ -147,6 +179,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
     function clearFile() {
         file = null;
         el.file.value = '';
+        el.htmlTable.replaceChildren();
         formatPicked = false;
         update();
         refresh();
@@ -159,22 +192,30 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         const id = ++sequence;
         preview = null;
         previewError = null;
-        const text = sourceText();
+        progress = null;
         if (format() === 'sqlite') {
             render();
             return;
         }
-        if (!text || !text.trim()) {
+        if (!hasSource()) {
             render();
             return;
         }
         loading++;
         render();
         try {
-            const options = { delimiter: el.delimiter.value, header: el.header.checked };
-            const result = await client.call('previewImport', { format: format(), text, options, adapt: el.adapt.checked });
+            const onProgress = (p) => {
+                if (id !== sequence || running) return;
+                progress = p;
+                renderPreview();
+            };
+            const result = await client.call('previewImport', { format: format(), ...sourceArgs(), options: options(), adapt: el.adapt.checked }, { onProgress });
             if (id !== sequence) return;
             preview = result;
+            if (result.tables) {
+                el.htmlTable.replaceChildren(...result.tables.map(t => h('option', { value: String(t.index) }, t.label)));
+                el.htmlTable.value = String(result.table);
+            }
             if (tabular()) {
                 const names = result.columns.map(c => c.name);
                 // Keep types already chosen for the same columns
@@ -197,11 +238,11 @@ export function createImportDialog({ dialog, client, lab, toast }) {
     function blocker() {
         if (loading > 0) return 'Reading…';
         if (format() === 'sqlite') {
-            if (!file || !file.bytes) return 'Choose a SQLite database file.';
-            if (!isSqliteFile(file.bytes)) return `${file.name} isn't a SQLite database file.`;
+            if (!file || !file.database) return 'Choose a SQLite database file.';
+            if (!isSqliteFile(file.headBytes)) return `${file.name} isn't a SQLite database file.`;
             return null;
         }
-        if (!sourceText()?.trim()) return file ? `${file.name} is empty.` : 'Choose a file or paste text first.';
+        if (!hasSource()) return file ? `${file.name} is empty.` : 'Choose a file or paste text first.';
         if (previewError) return previewError;
         if (!preview || preview.format !== format()) return 'Reading…';
         if (tabular()) {
@@ -234,12 +275,13 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         el.clear.hidden = !file;
         el.pasteField.hidden = Boolean(file);
         for (const option of el.format.options) {
-            option.disabled = option.value === 'sqlite' ? !(file && file.bytes) : Boolean(file && file.bytes);
+            option.disabled = option.value === 'sqlite' ? !(file && file.database) : Boolean(file && file.database);
         }
         el.dbField.hidden = sqlite;
         el.newField.hidden = !sqlite && el.db.value !== '';
         el.csvOptions.hidden = format() !== 'csv';
-        el.adaptField.hidden = !(format() === 'sql' && looksLikeSqlServer(sourceText() || ''));
+        el.htmlOptions.hidden = !(format() === 'html' && preview?.tables?.length > 1);
+        el.adaptField.hidden = !(format() === 'sql' && looksLikeSqlServer(headText()));
         el.tableOptions.hidden = !tabular();
         const appendable = tables();
         el.append.disabled = appendable.length === 0;
@@ -264,7 +306,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
     }
 
     function runLabel() {
-        if (running) return 'Importing…';
+        if (running) return `Importing…${percent(progress)}`;
         if (format() === 'sqlite') return 'Add database';
         if (!preview || preview.format !== format()) return 'Import';
         if (format() === 'sql') return `Run ${plural(preview.statements, 'statement')}`;
@@ -273,10 +315,10 @@ export function createImportDialog({ dialog, client, lab, toast }) {
 
     function renderPreview() {
         const parts = [];
-        if (loading > 0) parts.push(h('p', { class: 'lab-import-status' }, 'Reading…'));
+        if (loading > 0) parts.push(h('p', { class: 'lab-import-status', role: 'status' }, `Reading…${percent(progress)}`));
         else if (format() === 'sqlite') {
-            if (file && file.bytes) {
-                parts.push(isSqliteFile(file.bytes)
+            if (file && file.database) {
+                parts.push(isSqliteFile(file.headBytes)
                     ? h('p', { class: 'lab-import-status' }, `${file.name}: a SQLite database file, ${sizeText(file.size)}. It is added as a new database (a copy), and your other databases aren't changed. It's checked for damage before it's added.`)
                     : h('p', { class: 'lab-import-status lab-import-problem' }, `${file.name} isn't a SQLite database file.`));
             } else {
@@ -286,7 +328,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
             parts.push(h('p', { class: 'lab-import-status lab-import-problem' }, h('strong', {}, 'This can\'t be imported: '), previewError));
         } else if (preview && preview.format === format()) {
             parts.push(...(format() === 'sql' ? sqlPreview(preview) : tablePreview(preview)));
-        } else if (!sourceText()?.trim()) {
+        } else if (!hasSource()) {
             parts.push(h('p', { class: 'lab-import-status' }, 'Choose a file or paste text, and you\'ll see what will be imported here.'));
         }
         el.preview.replaceChildren(...parts);
@@ -330,7 +372,9 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         const append = mode() === 'append' ? tables().find(t => t.name === el.appendTable.value) : null;
         const how = p.format === 'csv'
             ? `Separated by ${delimiterName(p.delimiter)}${el.delimiter.value === 'auto' ? ' (detected)' : ''}; ${p.header ? 'the first row has the column names' : 'no header row'}.`
-            : 'Read from JSON.';
+            : p.format === 'html'
+                ? `Read from ${p.tables.find(t => t.index === p.table)?.label.replace(/ \(.*\)$/, '') || 'the table'}; ${p.header ? 'the first row has the column names' : 'no header row, so the columns are numbered'}.`
+                : 'Read from JSON.';
         const head = h('p', { class: 'lab-import-status' }, `${plural(p.rowCount, 'row')} and ${plural(p.columns.length, 'column')}. ${how}`);
         const columnRows = p.columns.map((c, i) => {
             if (append) {
@@ -421,6 +465,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
             return false;
         }
         running = true;
+        progress = null;
         render();
         try {
             await lab.exclusive(() => (format() === 'sqlite' ? addDatabase(prepared) : importInto(prepared)));
@@ -430,12 +475,19 @@ export function createImportDialog({ dialog, client, lab, toast }) {
             return false;
         } finally {
             running = false;
+            progress = null;
             render();
         }
     }
 
+    /** Shows how far the import has read its file on the Import button. */
+    function onRunProgress(p) {
+        progress = p;
+        el.run.textContent = runLabel();
+    }
+
     async function addDatabase(prepared) {
-        await client.call('importFile', { id: prepared.id, bytes: file.bytes });
+        await client.call('importFile', { id: prepared.id, bytes: file.blob }, { onProgress: onRunProgress });
         lab.databases().add(prepared);
         await lab.openDatabase(prepared.id);
         lab.databases().touch(prepared.id);
@@ -457,7 +509,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         let result;
         try {
             await lab.openDatabase(id);
-            result = await client.call('runImport', { format: format(), text: sourceText(), options: { delimiter: el.delimiter.value, header: el.header.checked }, target, adapt: el.adapt.checked });
+            result = await client.call('runImport', { format: format(), ...sourceArgs(), options: options(), target, adapt: el.adapt.checked }, { onProgress: onRunProgress });
         } catch (error) {
             if (prepared) {
                 // The database made for this import goes too
@@ -507,6 +559,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         }],
         [el.delimiter, 'change', refresh],
         [el.header, 'change', refresh],
+        [el.htmlTable, 'change', refresh],
         [el.adapt, 'change', refresh],
         [el.table, 'input', () => {
             tableEdited = true;
@@ -555,6 +608,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         el.format.value = 'csv';
         el.delimiter.value = 'auto';
         el.header.checked = true;
+        el.htmlTable.replaceChildren();
         dialog.querySelector('input[name="lab-import-mode"][value="new"]').checked = true;
         el.db.replaceChildren(
             ...databases.list().map(d => h('option', { value: d.id }, d.name)),

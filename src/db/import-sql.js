@@ -388,17 +388,35 @@ export function runnableScript(text, statements) {
  * @param {number} [limit] at most this many groups
  */
 export function groupStatements(statements, limit = 200) {
+    const groups = createGroups(limit);
+    for (const s of statements) groups.add(s);
+    return groups.result();
+}
+
+/**
+ * Groups statements as they are read (a large script is read in parts).
+ * @param {number} [limit] at most this many groups are kept
+ */
+export function createGroups(limit = 200) {
     /** @type {{ label: string, kind: string, count: number, rows: number | null, line: number, column: number, skip: string | null, issues: Issue[] }[]} */
     const groups = [];
-    for (const s of statements) {
-        const last = groups[groups.length - 1];
-        if (last && last.label === s.label && last.skip === s.skip && (s.issues.length === 0) === (last.issues.length === 0)) {
-            last.count++;
-            last.rows = last.rows === null || s.rows === null ? null : last.rows + s.rows;
-            for (const issue of s.issues) if (last.issues.length < 5) last.issues.push(issue);
-        } else {
-            groups.push({ label: s.label, kind: s.kind, count: 1, rows: s.rows, line: s.line, column: s.column, skip: s.skip, issues: s.issues.slice(0, 5) });
-        }
-    }
-    return { groups: groups.slice(0, limit), more: Math.max(0, groups.length - limit) };
+    /** @type {any} */
+    let last = null;
+    let total = 0;
+    return {
+        /** @param {ScriptStatement} s */
+        add(s) {
+            if (last && last.label === s.label && last.skip === s.skip && (s.issues.length === 0) === (last.issues.length === 0)) {
+                last.count++;
+                last.rows = last.rows === null || s.rows === null ? null : last.rows + s.rows;
+                for (const issue of s.issues) if (last.issues.length < 5) last.issues.push(issue);
+            } else {
+                last = { label: s.label, kind: s.kind, count: 1, rows: s.rows, line: s.line, column: s.column, skip: s.skip, issues: s.issues.slice(0, 5) };
+                total++;
+                // Groups past the limit are only counted
+                if (groups.length < limit) groups.push(last);
+            }
+        },
+        result: () => ({ groups, more: Math.max(0, total - limit) })
+    };
 }

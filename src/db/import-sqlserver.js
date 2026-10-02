@@ -57,8 +57,19 @@ const GO_LINE = /[ \t]*GO(?:[ \t]+\d+)?[ \t]*(?:--[^\n]*)?(?=\r?\n|$)/iy;
  * @returns {{ text: string, changes: Change[] }}
  */
 export function adaptSqlServerScript(text) {
-    const src = String(text);
-    const n = src.length;
+    const adapter = createSqlServerAdapter();
+    const { text: out } = adapter.push(String(text), true);
+    return { text: out, changes: adapter.changes() };
+}
+
+/**
+ * Adapts a script that arrives in parts (a large file is read a few MB at a
+ * time). Each push adapts the complete statements at the start of the text
+ * and says how much of it was used; the rest is pushed again with the next
+ * part. The last push (final) adapts everything. Line numbers continue
+ * across pushes.
+ */
+export function createSqlServerAdapter() {
     /** @type {Map<string, Change>} */
     const changes = new Map();
     const note = (/** @type {string} */ message, /** @type {number} */ line, count = 1) => {
@@ -66,148 +77,193 @@ export function adaptSqlServerScript(text) {
         if (c) c.count += count;
         else changes.set(message, { message, count, line });
     };
-    /** @type {string[]} */
-    const out = [];
-    /** @type {Token[]} */
-    let stmt = [];
-    let depth = 0;
-    let line = 1;
-    let atLineStart = true;
-    /** Until GO: a batch of T-SQL code (a view, procedure, IF block…) */
-    let wholeBatch = false;
     /** Table names seen per lower-cased name, to warn when two schemas share one */
     const tables = new Map();
+    // Where the next push starts
+    let nextLine = 1;
+    let nextAtLineStart = true;
 
-    /** The statement's first four words (upper-cased), and whether it has any SQL yet */
-    let words = [];
-    let started = false;
-    const flush = () => {
-        if (stmt.length) out.push(adaptStatement(stmt, note, tables));
-        stmt = [];
-        depth = 0;
-        wholeBatch = false;
-        words = [];
-        started = false;
-    };
+    /**
+     * @param {string} src
+     * @param {boolean} final no more text follows
+     * @returns {{ text: string, consumed: number }} the adapted statements, and how many characters of src they were
+     */
+    function push(src, final) {
+        const n = src.length;
+        /** @type {string[]} */
+        const out = [];
+        /** @type {Token[]} */
+        let stmt = [];
+        let depth = 0;
+        let line = nextLine;
+        let atLineStart = nextAtLineStart;
+        /** Until GO: a batch of T-SQL code (a view, procedure, IF block…) */
+        let wholeBatch = false;
+        /** The statement's first four words (upper-cased), and whether it has any SQL yet */
+        let words = [];
+        let started = false;
+        // The end of the last statement adapted, where the next push starts
+        let done = { at: 0, line, atLineStart, parts: 0 };
+        const flush = () => {
+            if (stmt.length) out.push(adaptStatement(stmt, note, tables));
+            stmt = [];
+            depth = 0;
+            wholeBatch = false;
+            words = [];
+            started = false;
+        };
+        const mark = (/** @type {number} */ at) => {
+            done = { at, line, atLineStart, parts: out.length };
+        };
 
-    let i = 0;
-    while (i < n) {
-        if (atLineStart) {
-            GO_LINE.lastIndex = i;
-            const go = GO_LINE.exec(src);
-            if (go) {
-                flush();
-                out.push(go[0]);
-                i += go[0].length;
-                atLineStart = false;
+        let i = 0;
+        while (i < n) {
+            if (atLineStart) {
+                GO_LINE.lastIndex = i;
+                const go = GO_LINE.exec(src);
+                // A GO at the very end may be the start of a longer word
+                if (go && (final || i + go[0].length < n)) {
+                    flush();
+                    out.push(go[0]);
+                    i += go[0].length;
+                    atLineStart = false;
+                    mark(i);
+                    continue;
+                }
+            }
+            const c = src.charCodeAt(i);
+            const ch = src[i];
+            let j = i + 1;
+            /** @type {Token['t']} */
+            let t = 'p';
+            if (c === 10) {
+                stmt.push({ t: 'nl', v: '\n', line });
+                line++;
+                i++;
+                atLineStart = true;
                 continue;
             }
-        }
-        const c = src.charCodeAt(i);
-        const ch = src[i];
-        let j = i + 1;
-        /** @type {Token['t']} */
-        let t = 'p';
-        if (c === 10) {
-            stmt.push({ t: 'nl', v: '\n', line });
-            line++;
-            i++;
-            atLineStart = true;
-            continue;
-        }
-        if (c === 32 || c === 9 || c === 13) {
-            while (j < n && (src[j] === ' ' || src[j] === '\t' || src[j] === '\r')) j++;
-            t = 'ws';
-        } else if (ch === '-' && src[i + 1] === '-') {
-            j = src.indexOf('\n', i);
-            if (j < 0) j = n;
-            t = 'comment';
-        } else if (ch === '/' && src[i + 1] === '*') {
-            j = src.indexOf('*/', i + 2);
-            j = j < 0 ? n : j + 2;
-            t = 'comment';
-        } else if (ch === "'" || ((ch === 'N' || ch === 'n') && src[i + 1] === "'")) {
-            t = ch === "'" ? 'str' : 'nstr';
-            j = ch === "'" ? i + 1 : i + 2;
-            for (;;) {
-                const k = src.indexOf("'", j);
-                if (k < 0) {
-                    j = n;
-                    break;
+            if (c === 32 || c === 9 || c === 13) {
+                while (j < n && (src[j] === ' ' || src[j] === '\t' || src[j] === '\r')) j++;
+                t = 'ws';
+            } else if (ch === '-' && src[i + 1] === '-') {
+                j = src.indexOf('\n', i);
+                if (j < 0) j = n;
+                t = 'comment';
+            } else if (ch === '/' && src[i + 1] === '*') {
+                j = src.indexOf('*/', i + 2);
+                j = j < 0 ? n : j + 2;
+                t = 'comment';
+            } else if (ch === "'" || ((ch === 'N' || ch === 'n') && src[i + 1] === "'")) {
+                t = ch === "'" ? 'str' : 'nstr';
+                j = ch === "'" ? i + 1 : i + 2;
+                for (;;) {
+                    const k = src.indexOf("'", j);
+                    if (k < 0) {
+                        j = n;
+                        break;
+                    }
+                    if (src[k + 1] === "'") j = k + 2;
+                    else {
+                        j = k + 1;
+                        break;
+                    }
                 }
-                if (src[k + 1] === "'") j = k + 2;
-                else {
-                    j = k + 1;
-                    break;
+            } else if (ch === '[') {
+                for (;;) {
+                    const k = src.indexOf(']', j);
+                    if (k < 0) {
+                        j = n;
+                        break;
+                    }
+                    if (src[k + 1] === ']') j = k + 2;
+                    else {
+                        j = k + 1;
+                        break;
+                    }
                 }
+                t = 'ident';
+            } else if (ch === '"') {
+                const k = src.indexOf('"', j);
+                j = k < 0 ? n : k + 1;
+                t = 'ident';
+            } else if (ch === '0' && (src[i + 1] === 'x' || src[i + 1] === 'X')) {
+                j = i + 2;
+                while (j < n && /[0-9a-fA-F]/.test(src[j])) j++;
+                t = 'hex';
+            } else if (c >= 48 && c <= 57) {
+                while (j < n && /[0-9.eE]/.test(src[j])) j++;
+                t = 'num';
+            } else if (/[\p{L}_@#]/u.test(ch)) {
+                while (j < n && /[\p{L}\p{N}_@#$]/u.test(src[j])) j++;
+                t = 'word';
             }
-        } else if (ch === '[') {
-            for (;;) {
-                const k = src.indexOf(']', j);
-                if (k < 0) {
-                    j = n;
-                    break;
-                }
-                if (src[k + 1] === ']') j = k + 2;
-                else {
-                    j = k + 1;
-                    break;
-                }
-            }
-            t = 'ident';
-        } else if (ch === '"') {
-            const k = src.indexOf('"', j);
-            j = k < 0 ? n : k + 1;
-            t = 'ident';
-        } else if (ch === '0' && (src[i + 1] === 'x' || src[i + 1] === 'X')) {
-            j = i + 2;
-            while (j < n && /[0-9a-fA-F]/.test(src[j])) j++;
-            t = 'hex';
-        } else if (c >= 48 && c <= 57) {
-            while (j < n && /[0-9.eE]/.test(src[j])) j++;
-            t = 'num';
-        } else if (/[\p{L}_@#]/u.test(ch)) {
-            while (j < n && /[\p{L}\p{N}_@#$]/u.test(src[j])) j++;
-            t = 'word';
-        }
-        const v = src.slice(i, j);
-        // Count lines inside multi-line tokens (comments, strings)
-        const startLine = line;
-        for (let k = v.indexOf('\n'); k >= 0; k = v.indexOf('\n', k + 1)) line++;
-        const token = /** @type {Token} */ ({ t, v, line: startLine });
-        if (t === 'word') token.u = v.toUpperCase();
+            // A token that reaches the end of the text may go on in the next part
+            if (!final && j >= n) break;
+            const v = src.slice(i, j);
+            // Count lines inside multi-line tokens (comments, strings)
+            const startLine = line;
+            for (let k = v.indexOf('\n'); k >= 0; k = v.indexOf('\n', k + 1)) line++;
+            const token = /** @type {Token} */ ({ t, v, line: startLine });
+            if (t === 'word') token.u = v.toUpperCase();
 
-        if (t === 'word' && !wholeBatch && depth === 0 && started && atLineStart) {
-            // UPDATE t <newline> SET …: SET belongs to the UPDATE
-            const ownSet = token.u === 'SET' && words[0] === 'UPDATE';
-            if (STARTS.has(/** @type {string} */ (token.u)) && !ownSet) flush();
-        }
-        if (t !== 'ws' && t !== 'comment') atLineStart = false;
-        if (t === 'p' && ch === ';' && depth === 0 && !wholeBatch) {
-            stmt.push(token);
-            flush();
-            i = j;
-            continue;
-        }
-        if (t === 'p' && ch === '(') depth++;
-        if (t === 'p' && ch === ')') depth = Math.max(0, depth - 1);
-        stmt.push(token);
-        if (t !== 'ws' && t !== 'comment') started = true;
-        if (t === 'word' && words.length < 4) {
-            words.push(/** @type {string} */ (token.u));
-            if (words[0] === 'IF') wholeBatch = true;
-            if (words[0] === 'CREATE') {
-                const kind = words[1] === 'OR' ? words[3] : words[1];
-                if (kind && CODE_OBJECTS.has(kind)) wholeBatch = true;
+            if (t === 'word' && !wholeBatch && depth === 0 && started && atLineStart) {
+                // UPDATE t <newline> SET …: SET belongs to the UPDATE
+                const ownSet = token.u === 'SET' && words[0] === 'UPDATE';
+                if (STARTS.has(/** @type {string} */ (token.u)) && !ownSet) {
+                    // This word starts the next statement
+                    const lineHere = line;
+                    line = startLine;
+                    flush();
+                    mark(i);
+                    line = lineHere;
+                }
             }
+            if (t !== 'ws' && t !== 'comment') atLineStart = false;
+            if (t === 'p' && ch === ';' && depth === 0 && !wholeBatch) {
+                stmt.push(token);
+                flush();
+                i = j;
+                mark(i);
+                continue;
+            }
+            if (t === 'p' && ch === '(') depth++;
+            if (t === 'p' && ch === ')') depth = Math.max(0, depth - 1);
+            stmt.push(token);
+            if (t !== 'ws' && t !== 'comment') started = true;
+            if (t === 'word' && words.length < 4) {
+                words.push(/** @type {string} */ (token.u));
+                if (words[0] === 'IF') wholeBatch = true;
+                if (words[0] === 'CREATE') {
+                    const kind = words[1] === 'OR' ? words[3] : words[1];
+                    if (kind && CODE_OBJECTS.has(kind)) wholeBatch = true;
+                }
+            }
+            i = j;
         }
-        i = j;
+        if (final) {
+            flush();
+            mark(n);
+        }
+        nextLine = done.line;
+        nextAtLineStart = done.atLineStart;
+        return { text: out.slice(0, done.parts).join(''), consumed: done.at };
     }
-    flush();
-    for (const [lower, names] of tables) {
-        if (names.size > 1) note(`Tables in different schemas have the same name (${[...names].join(', ')}), so they become one name, ${lower}, in SQLite; the second CREATE TABLE will fail.`, 1);
-    }
-    return { text: out.join(''), changes: [...changes.values()].sort((a, b) => a.line - b.line) };
+
+    return {
+        push,
+        /** Every kind of change made so far, by the line it first happens on. */
+        changes() {
+            const all = new Map(changes);
+            for (const [lower, names] of tables) {
+                if (names.size > 1) {
+                    const message = `Tables in different schemas have the same name (${[...names].join(', ')}), so they become one name, ${lower}, in SQLite; the second CREATE TABLE will fail.`;
+                    all.set(message, { message, count: 1, line: 1 });
+                }
+            }
+            return [...all.values()].sort((a, b) => a.line - b.line);
+        }
+    };
 }
 
 /** Keeps only the line breaks: the statement is left out. */

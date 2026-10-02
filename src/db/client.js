@@ -2,7 +2,8 @@
 // database worker the first time it's needed; the direct client runs the
 // engine in the page (tests). Both expose the same interface:
 //
-//   call(op, args)   a promise of the operation's result (see dispatch.js)
+//   call(op, args, { onProgress })  a promise of the operation's result (see
+//                    dispatch.js); onProgress hears how much of a file an import has read
 //   start()          starts the engine; a promise of its info
 //   restart({ waitForFiles })  stops whatever is running (a long query) and starts
 //                    over; the open database is closed and must be opened again.
@@ -25,7 +26,7 @@ export function createWorkerClient({ createWorker, wasmUrl, onChange = () => {} 
     let worker = null;
     /** @type {Promise<any> | null} */
     let starting = null;
-    /** @type {Map<number, { resolve: (value: any) => void, reject: (error: any) => void }>} */
+    /** @type {Map<number, { resolve: (value: any) => void, reject: (error: any) => void, onProgress?: (progress: any) => void }>} */
     const pending = new Map();
     let nextId = 1;
     /** the next start waits for a stopped worker to let go of the files */
@@ -51,10 +52,10 @@ export function createWorkerClient({ createWorker, wasmUrl, onChange = () => {} 
         failAll(error);
     }
 
-    function post(op, args) {
+    function post(op, args, onProgress) {
         return new Promise((resolve, reject) => {
             const id = nextId++;
-            pending.set(id, { resolve, reject });
+            pending.set(id, { resolve, reject, onProgress });
             worker.postMessage({ id, op, args });
         });
     }
@@ -69,9 +70,13 @@ export function createWorkerClient({ createWorker, wasmUrl, onChange = () => {} 
             return Promise.reject(new DatabaseError('The database engine couldn\'t start in this browser.', { code: 'ENGINE_UNAVAILABLE' }));
         }
         worker.onmessage = (event) => {
-            const { id, ok, value, error } = event.data || {};
+            const { id, ok, value, error, progress } = event.data || {};
             const waiting = pending.get(id);
             if (!waiting) return;
+            if (progress) {
+                waiting.onProgress?.(progress);
+                return;
+            }
             pending.delete(id);
             if (ok) waiting.resolve(value);
             else waiting.reject(deserializeError(error));
@@ -103,9 +108,14 @@ export function createWorkerClient({ createWorker, wasmUrl, onChange = () => {} 
             return { ...state };
         },
         start,
-        async call(op, args = {}) {
+        /**
+         * @param {string} op
+         * @param {Record<string, any>} [args]
+         * @param {{ onProgress?: (progress: { done: number, total: number }) => void }} [options]
+         */
+        async call(op, args = {}, { onProgress } = {}) {
             await start();
-            return post(op, args);
+            return post(op, args, onProgress);
         },
         /** @param {{ waitForFiles?: boolean }} [options] waitForFiles: after stopping a running query */
         restart({ waitForFiles = false } = {}) {
@@ -119,6 +129,19 @@ export function createWorkerClient({ createWorker, wasmUrl, onChange = () => {} 
             set({ status: 'idle', info: null, error: null });
         }
     };
+}
+
+/**
+ * Arguments as the worker receives them. A file (a Blob) is passed as it is:
+ * posting one to a worker shares it rather than copying its bytes.
+ * @param {Record<string, any>} args
+ */
+function cloneArgs(args) {
+    const files = Object.entries(args || {}).filter(([, v]) => v && typeof v === 'object' && typeof v.slice === 'function' && typeof v.size === 'number' && !ArrayBuffer.isView(v));
+    if (files.length === 0) return structuredClone(args);
+    const rest = { ...args };
+    for (const [key] of files) delete rest[key];
+    return { ...structuredClone(rest), ...Object.fromEntries(files) };
 }
 
 /**
@@ -152,11 +175,16 @@ export function createDirectClient(createAdapter, { onChange = () => {}, storage
             return { ...state };
         },
         start,
-        async call(op, args = {}) {
+        /**
+         * @param {string} op
+         * @param {Record<string, any>} [args]
+         * @param {{ onProgress?: (progress: { done: number, total: number }) => void }} [options]
+         */
+        async call(op, args = {}, { onProgress } = {}) {
             await start();
             const engine = await adapter;
             try {
-                return structuredClone(await dispatch(engine, op, structuredClone(args)));
+                return structuredClone(await dispatch(engine, op, cloneArgs(args), { onProgress }));
             } catch (error) {
                 throw deserializeError(serializeError(error));
             }

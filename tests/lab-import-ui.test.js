@@ -328,6 +328,30 @@ describe('importing a SQL Server script', () => {
         expect(await query('SELECT count(*) FROM FactInternetSales')).toEqual([[3]]);
     });
 
+    test('a script SSMS saved as Unicode text (UTF-16) imports like the UTF-8 one', async () => {
+        boot();
+        await openLab();
+        await openImport();
+        const utf16 = new Uint8Array(2 + SSMS.length * 2);
+        utf16[0] = 0xff;
+        utf16[1] = 0xfe;
+        for (let i = 0; i < SSMS.length; i++) {
+            const code = SSMS.charCodeAt(i);
+            utf16[2 + i * 2] = code & 0xff;
+            utf16[3 + i * 2] = code >> 8;
+        }
+        await choose(new File([utf16], 'AdventureWorksDW2025.sql'));
+        expect(text('#lab-import-error')).toBe('');
+        expect($('#lab-import-format').value).toBe('sql');
+        expect($('#lab-import-adapt-field').hidden).toBe(false);
+        expect(text('#lab-import-preview')).toContain('Adapted for SQLite:');
+        $('#lab-import-run').click();
+        await settle();
+        expect(text('#lab-import-error')).toBe('');
+        expect(await tableNames()).toEqual(['DimCurrency', 'DimCustomer', 'FactInternetSales']);
+        expect(await query('SELECT count(*) FROM FactInternetSales')).toEqual([[3]]);
+    });
+
     test('the box isn\'t offered for a plain script', async () => {
         boot();
         await openLab();
@@ -335,6 +359,54 @@ describe('importing a SQL Server script', () => {
         await paste('CREATE TABLE t (a INTEGER);\nINSERT INTO t VALUES (1);');
         expect($('#lab-import-format').value).toBe('sql');
         expect($('#lab-import-adapt-field').hidden).toBe(true);
+    });
+});
+
+describe('importing an HTML table', () => {
+    const REPORT = `<!DOCTYPE html><html><head><title>Report</title><style>table { border: 1px; }</style></head><body>
+<table><caption>Summary</caption><tr><th>Server</th><td>localhost</td></tr></table>
+<table><caption>Results</caption>
+<tr><th>Action</th><th>Result</th></tr>
+<tr><td>Preparing dbo.DimDate</td><td>Success</td></tr>
+<tr><td>Save to file</td><td>Success</td></tr>
+</table></body></html>`;
+
+    test('an HTML file is read as a table; with several tables, one is chosen', async () => {
+        boot();
+        await openLab();
+        await openImport();
+        await choose(new File([REPORT], 'GenerateScriptReport.html', { type: 'text/html' }));
+        expect($('#lab-import-format').value).toBe('html');
+        expect($('#lab-import-csv-options').hidden).toBe(true);
+        expect($('#lab-import-html-options').hidden).toBe(false);
+        expect($$('#lab-import-html-table option').map(o => o.textContent)).toEqual(['Summary (1 row, 2 columns)', 'Results (2 rows, 2 columns)']);
+        // The first table with rows: no header row, so the columns are numbered
+        expect(text('#lab-import-preview')).toContain('1 row and 2 columns. Read from Summary; no header row, so the columns are numbered.');
+
+        $('#lab-import-html-table').value = '1';
+        $('#lab-import-html-table').dispatchEvent(new Event('change'));
+        await settle();
+        expect(text('#lab-import-preview')).toContain('2 rows and 2 columns. Read from Results; the first row has the column names.');
+        expect($('#lab-import-table').value).toBe('GenerateScriptReport');
+        expect($('#lab-import-run').textContent).toBe('Import 2 rows');
+        $('#lab-import-run').click();
+        await settle();
+        expect(text('#lab-import-error')).toBe('');
+        expect(await query('SELECT Action, Result FROM GenerateScriptReport ORDER BY rowid')).toEqual([['Preparing dbo.DimDate', 'Success'], ['Save to file', 'Success']]);
+    });
+
+    test('pasted HTML with one table is detected and needs no choice', async () => {
+        boot();
+        await openLab();
+        await openImport();
+        $('#lab-import-text').value = '<table><tr><th>id</th><th>name</th></tr><tr><td>1</td><td>Ada</td></tr></table>';
+        $('#lab-import-text').dispatchEvent(new Event('input'));
+        await settle();
+        await new Promise(r => setTimeout(r, 350));
+        await settle();
+        expect($('#lab-import-format').value).toBe('html');
+        expect($('#lab-import-html-options').hidden).toBe(true);
+        expect(text('#lab-import-preview')).toContain('1 row and 2 columns.');
     });
 });
 
@@ -414,5 +486,57 @@ describe('importing a SQLite database file', () => {
         $('#lab-import-clear').click();
         await settle();
         expect($('#lab-import-paste-field').hidden).toBe(false);
+    });
+});
+
+describe('importing a large file', () => {
+    test('a file over 50 MB is read in parts by the engine, with progress, and imported in one go', async () => {
+        boot();
+        await openLab();
+        await openImport();
+        // Just over 50 MB: more than a file read at once
+        const row = (i) => `${i},Person ${i},${i % 2 ? 'Engineering' : 'Sales'},${50000 + (i % 1000)},2024-01-${String((i % 28) + 1).padStart(2, '0')},${'x'.repeat(60)}\n`;
+        const lines = ['id,name,department,salary,hired,notes\n'];
+        let size = lines[0].length;
+        let count = 0;
+        while (size < 51 * 1024 * 1024) {
+            const line = row(++count);
+            lines.push(line);
+            size += line.length;
+        }
+        const seen = [];
+        const call = client.call;
+        client.call = (op, args, options) => {
+            if (op === 'previewImport' || op === 'runImport') seen.push({ op, source: args.source instanceof Blob, text: typeof args.text });
+            return call(op, args, options && { onProgress: (p) => {
+                seen.push({ op, progress: p });
+                options.onProgress(p);
+            } });
+        };
+        await choose(new File(lines, 'big.csv', { type: 'text/csv' }));
+        for (let i = 0; i < 100 && !text('#lab-import-preview').includes('rows and 6 columns'); i++) await settle();
+        expect(text('#lab-import-preview')).toContain(`${count.toLocaleString()} rows and 6 columns.`);
+        $('#lab-import-run').click();
+        for (let i = 0; i < 200 && (await client.call('schema').catch(() => [])).every(o => o.name !== 'big'); i++) await settle();
+        for (let i = 0; i < 100 && $('#lab-import-run').textContent.startsWith('Importing'); i++) await settle();
+        expect(text('#lab-import-error')).toBe('');
+        expect(await query('SELECT count(*), sum(salary) FROM big')).toEqual([[count, expect.any(Number)]]);
+        // The file itself went to the engine, never its text
+        expect(seen.filter(s => s.source !== undefined)).toEqual([
+            { op: 'previewImport', source: true, text: 'undefined' },
+            { op: 'runImport', source: true, text: 'undefined' }]);
+        const progress = seen.filter(s => s.op === 'runImport' && s.progress).map(s => s.progress);
+        expect(progress.length).toBeGreaterThan(0);
+        expect(progress.at(-1).done).toBe(progress.at(-1).total);
+    }, 120000);
+
+    test('a file over 1 GB is refused before it is read', async () => {
+        boot();
+        await openLab();
+        await openImport();
+        const huge = new File(['id,name\n1,Ada\n'], 'huge.csv', { type: 'text/csv' });
+        Object.defineProperty(huge, 'size', { value: 1.5 * 1024 * 1024 * 1024 });
+        await choose(huge);
+        expect(text('#lab-import-error')).toBe('huge.csv is 1.5 GB; files up to 1 GB can be imported.');
     });
 });

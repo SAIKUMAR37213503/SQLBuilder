@@ -8,7 +8,7 @@ import { parseCsv, detectDelimiter } from '../src/db/import-csv.js';
 import { parseJsonRows } from '../src/db/import-json.js';
 import { fitsType, describeColumns, uniqueNames, createTableSql, insertSql } from '../src/db/import-types.js';
 import { readScript, runnableScript, groupStatements } from '../src/db/import-sql.js';
-import { detectFormat, previewImport, runImport, tableNameFor, unreadableFile, MAX_IMPORT_BYTES } from '../src/db/importer.js';
+import { detectFormat, previewImport, runImport, tableNameFor, unreadableFile, decodeText, textEncoding, maxFileBytes, MAX_IMPORT_BYTES } from '../src/db/importer.js';
 import { dispatch } from '../src/db/dispatch.js';
 
 let sqlite3;
@@ -245,6 +245,26 @@ describe('format and names', () => {
         expect(unreadableFile(bytes('MSSQLBAK\0\0'), 'Company.bak')).toMatch(/is a SQL Server backup/);
         expect(unreadableFile(bytes('PGDMP\x01\x0e\0'), 'shop.bak')).toMatch(/PostgreSQL backup.*pg_restore -f backup\.sql "shop\.bak"/);
         expect(unreadableFile(bytes('PK\x03\x04\0\0'), 'archive.bak')).toBe('archive.bak isn\'t a file SQL Lab can import. Import a SQL script, a CSV or JSON file, or a SQLite database file.');
+    });
+
+    test('files are decoded by their byte order mark: SSMS saves scripts as UTF-16', () => {
+        const script = "INSERT [dbo].[T] ([Name]) VALUES (N'Café ✓ 東京')\r\nGO\r\n";
+        const le = new Uint8Array([0xff, 0xfe, ...new Uint8Array(new Uint16Array([...script].flatMap(c => { const u = c.codePointAt(0); return u > 0xffff ? [] : [u]; })).buffer)]);
+        const be = new Uint8Array(le.length);
+        be[0] = 0xfe; be[1] = 0xff;
+        for (let i = 2; i < le.length; i += 2) { be[i] = le[i + 1]; be[i + 1] = le[i]; }
+        const utf8 = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode(script)]);
+
+        expect(textEncoding(le)).toBe('utf-16le');
+        expect(textEncoding(be)).toBe('utf-16be');
+        expect(textEncoding(utf8)).toBe('utf-8');
+        expect(decodeText(le)).toBe(script);
+        expect(decodeText(be)).toBe(script);
+        expect(decodeText(utf8)).toBe(script);
+        expect(decodeText(new TextEncoder().encode(script))).toBe(script);
+
+        // A file is read in parts, so UTF-8 and UTF-16 files can both be up to 1 GB
+        expect(maxFileBytes()).toBe(1024 * 1024 * 1024);
     });
 });
 

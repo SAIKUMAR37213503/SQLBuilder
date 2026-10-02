@@ -56,10 +56,11 @@ export function detectDelimiter(text) {
 
 /**
  * @param {string} text
- * @param {{ delimiter?: string }} [options]
+ * @param {{ delimiter?: string, firstLine?: number, firstRow?: number }} [options]
+ *   firstLine, firstRow: the line and row the text starts on, when it is a part of a larger file
  * @returns {{ rows: (string | null)[][], lines: number[] }} each row's fields, and the line each row starts on
  */
-export function parseCsv(text, { delimiter = ',' } = {}) {
+export function parseCsv(text, { delimiter = ',', firstLine = 1, firstRow = 1 } = {}) {
     if (delimiter.length !== 1 || delimiter === '"' || delimiter === '\n' || delimiter === '\r') {
         throw new DatabaseError('Choose a delimiter of one character.', { code: 'BAD_INPUT' });
     }
@@ -67,9 +68,10 @@ export function parseCsv(text, { delimiter = ',' } = {}) {
     /** @type {(string | null)[][]} */
     const rows = [];
     const lines = [];
-    let line = 1;
+    let line = firstLine;
     let i = 0;
     const n = input.length;
+    const rowNumber = () => rows.length + firstRow;
 
     while (i < n) {
         // A blank line is skipped
@@ -89,7 +91,7 @@ export function parseCsv(text, { delimiter = ',' } = {}) {
                 for (;;) {
                     const close = input.indexOf('"', i);
                     if (close === -1) {
-                        throw new DatabaseError(`Row ${rows.length + 1}: a quote opened on line ${openLine} is never closed.`, { code: 'BAD_INPUT', line: openLine, row: rows.length + 1 });
+                        throw new DatabaseError(`Row ${rowNumber()}: a quote opened on line ${openLine} is never closed.`, { code: 'BAD_INPUT', line: openLine, row: rowNumber() });
                     }
                     value += input.slice(start, close);
                     if (input[close + 1] === '"') {
@@ -105,7 +107,7 @@ export function parseCsv(text, { delimiter = ',' } = {}) {
                 }
                 row.push(value);
                 if (i < n && input[i] !== delimiter && input[i] !== '\n' && input[i] !== '\r') {
-                    throw new DatabaseError(`Row ${rows.length + 1} (line ${line}): there is text after a closing quote. Put the whole field in quotes, with "" for a quote inside it.`, { code: 'BAD_INPUT', line, row: rows.length + 1 });
+                    throw new DatabaseError(`Row ${rowNumber()} (line ${line}): there is text after a closing quote. Put the whole field in quotes, with "" for a quote inside it.`, { code: 'BAD_INPUT', line, row: rowNumber() });
                 }
             } else {
                 let end = i;
