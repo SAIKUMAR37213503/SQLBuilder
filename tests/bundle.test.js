@@ -39,4 +39,14 @@ test('asset URLs carry the current content hash (cache busting)', () => {
     const html = readFileSync(join(root, 'index.html'), 'utf8');
     expect(html).toContain(`href="style.css?v=${hashOf('style.css')}"`);
     expect(html).toContain(`src="dist/sqlbuilder.js?v=${hashOf('dist/sqlbuilder.js')}"`);
+    expect(html).toContain(`href="dist/db-worker.js?v=${hashOf('dist/db-worker.js')}"`);
+    expect(html).toContain(`href="dist/sqlite3.wasm?v=${hashOf('dist/sqlite3.wasm')}"`);
+});
+
+test('the database worker is self-contained: no CDN, no remote URLs', () => {
+    const worker = readFileSync(join(root, 'dist', 'db-worker.js'), 'utf8');
+    expect(worker).not.toMatch(/import\.meta/);
+    // The only web address in it is a documentation link inside an error message
+    const urls = new Set(worker.match(/https?:\/\/[^\s"'`)]+/g) || []);
+    expect([...urls].every(url => url.startsWith('https://sqlite.org/wasm/doc/'))).toBe(true);
 });

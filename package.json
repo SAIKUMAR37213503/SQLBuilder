@@ -12,7 +12,7 @@
     "lint": "eslint .",
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
     "typecheck": "tsc -p jsconfig.json",
-    "build": "esbuild src/main.js --bundle --minify --sourcemap --format=iife --target=es2022 --legal-comments=none --outfile=dist/sqlbuilder.js && node scripts/stamp-assets.mjs",
+    "build": "esbuild src/main.js --bundle --minify --sourcemap --format=iife --target=es2022 --legal-comments=none --outfile=dist/sqlbuilder.js && node scripts/build-worker.mjs && node scripts/stamp-assets.mjs",
     "build:mobile": "node scripts/build-mobile.mjs",
     "cap:sync": "npm run build:mobile && cap sync android",
     "android:open": "cap open android",

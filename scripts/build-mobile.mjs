@@ -8,13 +8,15 @@ import { build } from 'esbuild';
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stamp } from './stamp-assets.mjs';
+import { buildWorker } from './build-worker.mjs';
 
 const root = join(import.meta.dirname, '..');
 const out = join(root, 'www');
 
 export const NATIVE_CSP = [
     "default-src 'self'",
-    "script-src 'self'",
+    // SQLite (the SQL Lab's engine) is WebAssembly; this allows compiling it, not eval()
+    "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self'",
     "img-src 'self' data:",
     "connect-src 'self'",
@@ -37,6 +39,7 @@ await build({
     logLevel: 'warning'
 });
 
+await buildWorker(out);
 cpSync(join(root, 'style.css'), join(out, 'style.css'));
 
 let html = readFileSync(join(root, 'index.html'), 'utf8');

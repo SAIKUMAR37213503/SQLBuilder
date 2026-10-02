@@ -1,6 +1,7 @@
 // Adds a content hash to the asset URLs in index.html
 //   style.css          -> style.css?v=<hash>
 //   dist/sqlbuilder.js -> dist/sqlbuilder.js?v=<hash>
+//   dist/db-worker.js, dist/sqlite3.wasm (the SQL Lab's engine) likewise
 // A changed file gets a new URL, so browsers never keep using an old copy
 // (earlier deployments told browsers to cache these files for a year).
 // Run automatically by `npm run build`; CI fails if index.html is stale.
@@ -9,7 +10,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const root = join(import.meta.dirname, '..');
-const ASSETS = ['style.css', 'dist/sqlbuilder.js'];
+const ASSETS = ['style.css', 'dist/sqlbuilder.js', 'dist/db-worker.js', 'dist/sqlite3.wasm'];
 
 export function hashOf(file, base = root) {
     return createHash('sha256').update(readFileSync(join(base, file))).digest('hex').slice(0, 12);
