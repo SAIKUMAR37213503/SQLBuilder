@@ -353,11 +353,21 @@ async function main() {
         // The name prompt focused a text field, so the soft keyboard may still be
         // up; Android spends the first Back on hiding it. Wait for it to go.
         await page.eval(`(() => { document.activeElement?.blur?.(); return true; })()`);
-        await waitFor(() => !/mInputShown=true/.test(shell('dumpsys input_method')), { timeout: 5000, message: 'the soft keyboard to hide' }).catch(() => {});
-        shell('input keyevent KEYCODE_BACK');
+        const keyboardUp = () => /(?:mInputShown|mIsInputViewShown|isInputViewShown)=true/.test(shell('dumpsys input_method'));
+        await waitFor(() => !keyboardUp(), { timeout: 5000, message: 'the soft keyboard to hide' }).catch(() => {});
         const isBuilderShown = `!document.getElementById('workspace').hidden && document.getElementById('lab').hidden`;
-        const builderShown = await waitFor(() => page.eval(isBuilderShown), { timeout: 3000, message: 'the builder' }).catch(() => false);
-        return { ok: heading === 'E2E DB' && builderShown && foregroundPackage().includes(PKG), detail: JSON.stringify({ heading, builderShown }) };
+        // Android can still spend a Back on hiding the keyboard after the page
+        // has let go of focus (what a person sees as pressing Back twice), so a
+        // second Back is allowed only while the SQL Lab is still showing.
+        let backs = 0;
+        let builderShown = false;
+        while (!builderShown && backs < 2) {
+            shell('input keyevent KEYCODE_BACK');
+            backs++;
+            builderShown = await waitFor(() => page.eval(isBuilderShown), { timeout: 3000, message: 'the builder' }).catch(() => false);
+            if (!builderShown && (await page.eval(`document.getElementById('lab').hidden`))) break;
+        }
+        return { ok: heading === 'E2E DB' && builderShown && foregroundPackage().includes(PKG), detail: JSON.stringify({ heading, builderShown, backs }) };
     });
 
     await check('SQL Lab: import a CSV (preview, then Import) into the database', async () => {
