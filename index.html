@@ -13,7 +13,7 @@
     <!-- The SQL Lab's database engine (SQLite). Listed so the offline cache keeps it and the app finds its current URL. -->
     <link rel="prefetch" href="dist/db-worker.js?v=d94cfe1334dd" id="asset-db-worker">
     <link rel="prefetch" href="dist/sqlite3.wasm?v=2ee8f3dab694" id="asset-sqlite-wasm">
-    <link rel="stylesheet" href="style.css?v=a2f69852998d">
+    <link rel="stylesheet" href="style.css?v=66200efcb23f">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -25,6 +25,10 @@
                 <h1>SQL Query Builder <span class="brand-sub">Pro Lite</span></h1>
             </div>
             <div class="toolbar" role="toolbar" aria-label="Workspace">
+                <div class="segmented view-switch" role="group" aria-label="View">
+                    <button type="button" class="segment" id="view-builder-btn" aria-pressed="true" aria-controls="workspace">Builder</button>
+                    <button type="button" class="segment" id="view-lab-btn" aria-pressed="false" aria-controls="lab">SQL Lab</button>
+                </div>
                 <button type="button" class="btn btn-ghost" id="undo-btn" aria-keyshortcuts="Control+Z Meta+Z" disabled>Undo</button>
                 <button type="button" class="btn btn-ghost" id="redo-btn" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" disabled>Redo</button>
                 <details class="menu" id="file-menu">
@@ -45,7 +49,7 @@
             </div>
         </header>
 
-        <main class="workspace">
+        <main class="workspace" id="workspace">
             <section class="panel builder-panel" aria-labelledby="builder-heading">
                 <div class="panel-header">
                     <h2 id="builder-heading">Build</h2>
@@ -135,7 +139,7 @@
                     </div>
 
                     <p class="security-note">
-                        <strong>Text only:</strong> this tool never connects to a database or runs queries, and nothing you type leaves your browser. Review generated SQL before running it anywhere.
+                        <strong>Text only here:</strong> the builder writes SQL; it never connects to a database server, and nothing you type leaves your browser. To try SQL on your own data, use SQL Lab, which runs it in a database kept on this device. Review generated SQL before running it on a real database.
                     </p>
                 </section>
 
@@ -207,6 +211,7 @@
                             <button type="button" class="btn btn-ghost btn-sm" id="schema-import-btn">Import…</button>
                             <button type="button" class="btn btn-ghost btn-sm" id="schema-export-btn">Export</button>
                             <button type="button" class="btn btn-ghost btn-sm" id="schema-clear-btn">Clear</button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="schema-db-btn" aria-haspopup="dialog">Create in SQL Lab…</button>
                         </div>
                         <div class="library-toolbar">
                             <label class="visually-hidden" for="schema-search">Search tables and columns</label>
@@ -230,6 +235,30 @@
                     </div>
                 </section>
             </div>
+        </main>
+
+        <main class="lab" id="lab" aria-labelledby="lab-heading" hidden>
+            <section class="panel lab-panel">
+                <div class="panel-header lab-header">
+                    <div class="lab-title">
+                        <h2 id="lab-heading" tabindex="-1">SQL Lab</h2>
+                        <p class="lab-engine" id="lab-engine"></p>
+                    </div>
+                </div>
+                <div class="lab-notice" id="lab-notice" role="status" aria-live="polite"></div>
+                <div class="lab-body">
+                    <nav class="lab-explorer" aria-labelledby="lab-explorer-heading">
+                        <div class="lab-explorer-head">
+                            <h3 id="lab-explorer-heading" class="lab-subheading">Databases</h3>
+                            <button type="button" class="btn btn-secondary btn-sm" id="lab-new-btn">New database…</button>
+                        </div>
+                        <ul class="lab-db-list" id="lab-db-list" aria-label="Databases"></ul>
+                        <div class="lab-objects" id="lab-objects"></div>
+                    </nav>
+                    <section class="lab-main" id="lab-main" aria-live="polite" aria-labelledby="lab-main-heading"></section>
+                </div>
+                <p class="lab-note">SQL Lab runs SQL in SQLite, a database engine embedded in this app. Your databases are kept on this device and nothing is sent anywhere. SQLite's SQL is close to standard SQL but not identical to SQL Server, PostgreSQL or MySQL, so SQL written for those may need changes here.</p>
+            </section>
         </main>
 
         <footer class="app-footer">
@@ -490,6 +519,41 @@
         </form>
     </dialog>
 
+    <dialog id="lab-tables-dialog" class="dialog dialog-wide" aria-labelledby="lab-tables-title" aria-describedby="lab-tables-intro">
+        <form method="dialog" class="dialog-body">
+            <h2 id="lab-tables-title" class="dialog-title">Create tables in SQL Lab</h2>
+            <p class="dialog-message" id="lab-tables-intro">Creates empty tables from your schema in a SQL Lab database (SQLite). Nothing runs until you select Create tables, and it all runs as one step: if any table fails, none are created.</p>
+            <div class="field-row">
+                <div class="field">
+                    <label class="field-label" for="lab-tables-db">Database</label>
+                    <select id="lab-tables-db" class="select"></select>
+                </div>
+                <div class="field" id="lab-tables-new-field">
+                    <label class="field-label" for="lab-tables-new-name">New database name</label>
+                    <input type="text" id="lab-tables-new-name" class="input" maxlength="60" autocomplete="off" spellcheck="false">
+                </div>
+            </div>
+            <fieldset class="fieldset">
+                <legend>Tables</legend>
+                <div class="lab-check-actions">
+                    <button type="button" class="btn btn-ghost btn-sm" id="lab-tables-all">Select all</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="lab-tables-none">Select none</button>
+                </div>
+                <ul class="lab-check-list" id="lab-tables-list"></ul>
+            </fieldset>
+            <ul class="lab-tables-notes" id="lab-tables-notes" aria-label="Changes for SQLite"></ul>
+            <div class="field">
+                <span class="field-label" id="lab-tables-sql-label">SQL that will run</span>
+                <pre class="sql-output lab-sql-preview" id="lab-tables-sql" tabindex="0" aria-labelledby="lab-tables-sql-label"><code id="lab-tables-code"></code></pre>
+            </div>
+            <p class="dialog-error field-error" id="lab-tables-error" role="alert"></p>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary" id="lab-tables-create">Create tables</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="confirm-dialog" class="dialog dialog-sm" aria-labelledby="confirm-title" aria-describedby="confirm-message">
         <form method="dialog" class="dialog-body">
             <h2 id="confirm-title" class="dialog-title">Are you sure?</h2>
@@ -526,6 +590,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=71eabff3a178" defer></script>
+    <script src="dist/sqlbuilder.js?v=d30cef051254" defer></script>
 </body>
 </html>

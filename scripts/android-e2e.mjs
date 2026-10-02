@@ -330,6 +330,32 @@ async function main() {
         return { ok: m.w > m.h && !m.overflow && m.appLeft >= m.left, detail: JSON.stringify(m) };
     });
 
+    await check('SQL Lab: the embedded SQLite engine starts offline, with storage on the device', async () => {
+        await page.eval(JS.click('#view-lab-btn'));
+        const engine = await waitFor(async () => {
+            const t = await page.eval(`document.getElementById('lab-engine').textContent`);
+            return /SQLite 3|not running/.test(t) && t;
+        }, { timeout: 30000, message: 'the database engine to start' });
+        const notice = await page.eval(`(() => { const n = document.getElementById('lab-notice'); return n.hidden ? '' : n.textContent; })()`);
+        screenshot('07-sql-lab');
+        return { ok: /SQLite 3\.\d+/.test(engine) && engine.includes('on this device') && notice === '', detail: JSON.stringify({ engine, notice }) };
+    });
+
+    await check('SQL Lab: create a database; Back returns to the builder', async () => {
+        await page.eval(JS.click('#lab-new-btn'));
+        await sleep(400);
+        await page.eval(`(() => { document.getElementById('prompt-input').value = 'E2E DB'; document.querySelector('#prompt-dialog [value="confirm"]').click(); return true; })()`);
+        const heading = await waitFor(async () => {
+            const t = await page.eval(`document.getElementById('lab-main-heading')?.textContent || ''`);
+            return t === 'E2E DB' && t;
+        }, { timeout: 15000, message: 'the new database to open' });
+        screenshot('08-sql-lab-database');
+        shell('input keyevent KEYCODE_BACK');
+        await sleep(600);
+        const builderShown = await page.eval(`!document.getElementById('workspace').hidden && document.getElementById('lab').hidden`);
+        return { ok: heading === 'E2E DB' && builderShown && foregroundPackage().includes(PKG), detail: JSON.stringify({ heading, builderShown }) };
+    });
+
     await check('history, templates and settings persist across an app restart', async () => {
         await page.eval(JS.click('#generate-btn'));
         await sleep(400);
@@ -347,6 +373,17 @@ async function main() {
             table: document.querySelector('[data-path="select.from.table"]').value
         })`);
         return { ok: state.history >= 1 && state.templates && state.theme === 'dark' && state.table === 'employees', detail: JSON.stringify(state) };
+    });
+
+    await check('SQL Lab: the database is still there after the restart', async () => {
+        await page.eval(JS.click('#view-lab-btn'));
+        const heading = await waitFor(async () => {
+            const t = await page.eval(`document.getElementById('lab-main-heading')?.textContent || ''`);
+            return t === 'E2E DB' && t;
+        }, { timeout: 30000, message: 'the database to reopen' });
+        const listed = await page.eval(`Array.from(document.querySelectorAll('#lab-db-list .lab-db-name'), e => e.textContent)`);
+        await page.eval(JS.click('#view-builder-btn'));
+        return { ok: heading === 'E2E DB' && listed.includes('E2E DB'), detail: JSON.stringify({ heading, listed }) };
     });
 
     await check('Back with nothing open leaves the app (to the background)', async () => {

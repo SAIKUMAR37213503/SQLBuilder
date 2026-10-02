@@ -1201,6 +1201,122 @@ kbd {
     .sql-output { max-height: none; border: 0; }
 }
 
+/* ------------------------------------------------------------- SQL Lab */
+
+.view-switch { margin-right: 0.25rem; }
+.view-switch .segment { font-size: 0.85rem; }
+
+.lab-header { align-items: flex-start; }
+.lab-title { display: grid; gap: 0.2rem; min-width: 0; }
+.lab-title h2:focus { outline: none; }
+.lab-engine { color: var(--text-muted); font-size: 0.85rem; }
+.lab-subheading { font-size: 0.85rem; font-weight: 650; color: var(--text-2); }
+.lab-notice {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    align-items: center;
+    margin-bottom: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.9rem;
+}
+.lab-notice p { flex: 1 1 18rem; }
+.lab-notice-warning { background: var(--warning-soft); color: var(--warning); border-left: 4px solid var(--warning); }
+.lab-notice-error { background: var(--danger-soft); color: var(--text); border-left: 4px solid var(--danger); }
+.lab-notice[hidden] { display: none; }
+
+.lab-body { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 760px) {
+    .lab-body { grid-template-columns: minmax(13rem, 17rem) minmax(0, 1fr); }
+}
+
+.lab-explorer {
+    display: grid;
+    gap: 0.6rem;
+    min-width: 0;
+    padding: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+}
+.lab-explorer-head { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; justify-content: space-between; }
+.lab-db-list, .lab-object-list { display: grid; gap: 0.2rem; margin: 0; padding: 0; list-style: none; }
+.lab-db-btn, .lab-object-btn {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 0.5rem;
+    align-items: baseline;
+    justify-content: space-between;
+    width: 100%;
+    min-height: 2.5rem;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.lab-db-btn:hover, .lab-object-btn:hover { background: var(--surface); border-color: var(--border); }
+.lab-db-btn:focus-visible, .lab-object-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.lab-db-btn[aria-current="true"], .lab-object-btn[aria-current="true"] { background: var(--surface); border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.lab-db-btn:disabled, .lab-object-btn:disabled { cursor: progress; }
+.lab-db-name, .lab-object-name { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.lab-object-name { font-family: var(--font-mono); font-size: 0.85rem; }
+.lab-db-meta, .lab-object-meta { color: var(--text-muted); font-size: 0.75rem; }
+.lab-objects { display: grid; gap: 0.6rem; }
+.lab-objects:empty { display: none; }
+.lab-object-group { display: grid; gap: 0.3rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+.lab-empty-hint { color: var(--text-muted); font-size: 0.85rem; }
+
+.lab-main { display: grid; gap: 0.75rem; min-width: 0; }
+.lab-main-head { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; justify-content: space-between; }
+.lab-db-title { font-size: 1rem; font-weight: 650; overflow-wrap: anywhere; }
+.lab-db-title:focus, .lab-main .empty-title:focus { outline: none; }
+.lab-main-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+
+.lab-structure { display: grid; gap: 0.6rem; }
+.lab-structure-head { display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: baseline; }
+.lab-structure-title { font-family: var(--font-mono); font-size: 0.95rem; overflow-wrap: anywhere; }
+.lab-structure-rows { color: var(--text-muted); font-size: 0.85rem; }
+.lab-table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.lab-table-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.lab-columns { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.lab-columns th, .lab-columns td { padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; white-space: nowrap; }
+.lab-columns thead th { background: var(--surface-2); color: var(--text-2); font-size: 0.8rem; font-weight: 650; }
+.lab-columns tbody th { font-family: var(--font-mono); font-weight: 600; }
+.lab-columns tbody tr:last-child > * { border-bottom: 0; }
+.lab-columns .muted { color: var(--text-muted); }
+.lab-create-sql > summary { min-height: 2.25rem; padding: 0.35rem 0; font-size: 0.85rem; font-weight: 650; cursor: pointer; }
+.lab-create-sql .sql-output { max-height: 20rem; }
+
+.lab-note { margin-top: 1rem; color: var(--text-muted); font-size: 0.8rem; }
+
+/* Create tables in SQL Lab */
+.lab-check-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.25rem; }
+.lab-check-list { display: grid; gap: 0.3rem; max-height: 14rem; overflow: auto; margin: 0; padding: 0; list-style: none; }
+.lab-check-name { font-family: var(--font-mono); font-size: 0.85rem; overflow-wrap: anywhere; }
+.lab-check-state { color: var(--text-muted); font-size: 0.8rem; }
+.check input:disabled + .lab-check-name { color: var(--text-muted); }
+.lab-tables-notes { display: grid; gap: 0.25rem; margin: 0; padding: 0.6rem 0.75rem 0.6rem 1.75rem; border-radius: var(--radius-sm); background: var(--info-soft); color: var(--text-2); font-size: 0.85rem; }
+.lab-tables-notes[hidden] { display: none; }
+.lab-sql-preview { max-height: 16rem; }
+#lab-tables-new-field[hidden] { display: none; }
+
+/* The phone action bar is for the builder */
+body.view-lab .mobile-bar { display: none; }
+@media (max-width: 759px) {
+    body.view-lab .app { padding-bottom: calc(2rem + var(--safe-bottom)); }
+    body.view-lab .toast { bottom: calc(1.5rem + var(--safe-bottom)); }
+}
+@media (max-width: 719px) {
+    .view-switch { width: 100%; margin-right: 0; }
+    .view-switch .segment { flex: 1 1 0; }
+    .lab-db-btn, .lab-object-btn { min-height: 2.75rem; }
+}
+
 .noscript { padding: 1rem; text-align: center; }
 
 /* ------------------------------------------------------------ practice */

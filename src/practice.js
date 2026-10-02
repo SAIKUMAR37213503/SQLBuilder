@@ -1,5 +1,5 @@
 // Practice: checks a query against an exercise's goal by how it is built.
-// The app never runs SQL, so a check looks at the query model (which tables
+// Checks don't run SQL: a check looks at the query model (which tables
 // are read, how they are joined, what is filtered, grouped and sorted), never
 // at results. Checks accept the usual ways of writing the same thing: table
 // aliases, quoted names, table-qualified columns, COUNT(*) or COUNT(id),

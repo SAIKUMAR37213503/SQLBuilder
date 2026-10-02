@@ -93,6 +93,6 @@ export function renderPracticePanel(panel, ex, { tables, missing, hints, result,
             h('pre', { class: 'library-snippet practice-answer-sql', tabindex: '0', 'aria-label': 'Model answer SQL' }, answerSql),
             h('div', { class: 'library-actions' },
                 action('Load it into the builder', 'practice-load-answer', { label: 'Load the model answer into the builder (Undo brings back your query)' }))) : null,
-        h('p', { class: 'practice-note' }, 'Checks look at how the query is built, not at its results: this app never runs SQL. A different query can be right too.')
+        h('p', { class: 'practice-note' }, 'Checks look at how the query is built, not at its results. A different query can be right too.')
     );
 }
