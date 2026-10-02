@@ -7,7 +7,7 @@
 import { h, debounce } from './dom.js';
 import { showDialog, closeDialog } from './dialogs.js';
 import { renderSqlCode } from './output.js';
-import { detectFormat, tableNameFor, MAX_IMPORT_BYTES } from '../db/importer.js';
+import { detectFormat, tableNameFor, unreadableFile, MAX_IMPORT_BYTES } from '../db/importer.js';
 import { COLUMN_TYPES, TYPE_LABELS, createTableSql, insertSql } from '../db/import-types.js';
 import { delimiterName } from '../db/import-csv.js';
 import { isSqliteFile } from '../db/files.js';
@@ -113,7 +113,17 @@ export function createImportDialog({ dialog, client, lab, toast }) {
             return;
         }
         try {
-            const head = new Uint8Array(await chosen.slice(0, 100).arrayBuffer());
+            const head = new Uint8Array(await chosen.slice(0, 4096).arrayBuffer());
+            const problem = unreadableFile(head, chosen.name);
+            if (problem) {
+                // Not left looking as if the previous file were still chosen
+                file = null;
+                el.file.value = '';
+                update();
+                refresh();
+                el.error.textContent = problem;
+                return;
+            }
             const database = isSqliteFile(head) || detectFormat({ name: chosen.name }) === 'sqlite';
             const bytes = database ? new Uint8Array(await chosen.arrayBuffer()) : null;
             file = { name: chosen.name, size: chosen.size, text: database ? null : await chosen.text(), bytes };

@@ -29,7 +29,8 @@ const FIRST_SQL_WORD = /^(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTE
  */
 export function detectFormat({ name = '', text = '', bytes }) {
     if (bytes && bytes.length >= 16 && new TextDecoder().decode(bytes.subarray(0, 15)) === 'SQLite format 3') return 'sqlite';
-    const ext = /\.([a-z0-9]+)$/i.exec(name)?.[1]?.toLowerCase() || '';
+    // employees.csv.bak is read as employees.csv
+    const ext = /\.([a-z0-9]+)$/i.exec(String(name).replace(/\.bak$/i, ''))?.[1]?.toLowerCase() || '';
     if (['sqlite', 'sqlite3', 'db', 'db3'].includes(ext)) return 'sqlite';
     if (ext === 'sql') return 'sql';
     if (['json', 'jsonl', 'ndjson'].includes(ext)) return 'json';
@@ -40,9 +41,35 @@ export function detectFormat({ name = '', text = '', bytes }) {
     return 'csv';
 }
 
-/** A table name from a file name: employees.csv → employees. */
+/**
+ * Why a file's first bytes can't be imported, or null when they can be read
+ * (text, or a SQLite database). A file named .bak can hold anything: a copy
+ * of a SQLite database or a SQL script imports as usual, but a SQL Server or
+ * PostgreSQL backup needs that server to restore it.
+ * @param {Uint8Array} head the first few KB of the file
+ * @param {string} name
+ * @returns {string | null}
+ */
+export function unreadableFile(head, name) {
+    const start = new TextDecoder('latin1').decode(head.subarray(0, 16));
+    if (start.startsWith('SQLite format 3')) return null;
+    if (start.startsWith('TAPE') || start.startsWith('MSSQLBAK')) {
+        return `${name} is a SQL Server backup. SQL Lab can't restore SQL Server backups, as only SQL Server can read them. In SQL Server Management Studio, right-click the database and choose Tasks, then Generate Scripts…; under Advanced, set "Types of data to script" to "Schema and data", save the script as a .sql file and import that.`;
+    }
+    if (start.startsWith('PGDMP')) {
+        return `${name} is a PostgreSQL backup in pg_dump's custom format, which only PostgreSQL can read. Turn it into a SQL script with pg_restore -f backup.sql "${name}" (or make one with pg_dump --format=plain) and import the .sql file.`;
+    }
+    // Text never contains NUL bytes; UTF-16 text is the exception, with a byte order mark
+    const utf16 = (head[0] === 0xff && head[1] === 0xfe) || (head[0] === 0xfe && head[1] === 0xff);
+    if (!utf16 && head.includes(0)) {
+        return `${name} isn't a file SQL Lab can import. Import a SQL script, a CSV or JSON file, or a SQLite database file.`;
+    }
+    return null;
+}
+
+/** A table name from a file name: employees.csv → employees (employees.csv.bak too). */
 export function tableNameFor(fileName) {
-    const stem = String(fileName || '').replace(/\.[^.]*$/, '').trim();
+    const stem = String(fileName || '').replace(/\.bak$/i, '').replace(/\.[^.]*$/, '').trim();
     return stem.slice(0, MAX_TABLE_NAME) || 'imported_data';
 }
 

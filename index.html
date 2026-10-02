@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <!-- The SQL Lab's database engine (SQLite). Listed so the offline cache keeps it and the app finds its current URL. -->
-    <link rel="prefetch" href="dist/db-worker.js?v=2670acb9aeb0" id="asset-db-worker">
+    <link rel="prefetch" href="dist/db-worker.js?v=e1ff3ac1d1d6" id="asset-db-worker">
     <link rel="prefetch" href="dist/sqlite3.wasm?v=2ee8f3dab694" id="asset-sqlite-wasm">
     <link rel="stylesheet" href="style.css?v=c9f949ef6477">
 </head>
@@ -566,9 +566,9 @@
                 <span class="field-label" id="lab-import-file-label">File</span>
                 <div class="lab-import-source">
                     <button type="button" class="btn btn-secondary btn-sm" id="lab-import-file-btn" aria-describedby="lab-import-file-name">Choose a file…</button>
-                    <span class="lab-import-file-name" id="lab-import-file-name">No file chosen (.sql, .csv, .json, .sqlite; up to 50 MB)</span>
+                    <span class="lab-import-file-name" id="lab-import-file-name">No file chosen (.sql, .csv, .json, .sqlite, .bak; up to 50 MB)</span>
                     <button type="button" class="btn btn-ghost btn-sm" id="lab-import-clear" hidden>Remove file</button>
-                    <input type="file" id="lab-import-file" class="visually-hidden" tabindex="-1" aria-hidden="true" accept=".sql,.csv,.tsv,.txt,.json,.jsonl,.ndjson,.sqlite,.sqlite3,.db,.db3">
+                    <input type="file" id="lab-import-file" class="visually-hidden" tabindex="-1" aria-hidden="true" accept=".sql,.csv,.tsv,.txt,.json,.jsonl,.ndjson,.sqlite,.sqlite3,.db,.db3,.bak">
                 </div>
             </div>
             <div class="field" id="lab-import-paste-field">
@@ -672,6 +672,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=69864c9669fc" defer></script>
+    <script src="dist/sqlbuilder.js?v=89ec163520be" defer></script>
 </body>
 </html>
