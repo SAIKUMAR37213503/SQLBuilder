@@ -110,7 +110,7 @@ export function findJsonError(text) {
 }
 
 /** JSON.parse with errors that say where. */
-function parse(text, lineOffset = 0) {
+export function parseJson(text, lineOffset = 0) {
     try {
         return JSON.parse(text, reviver);
     } catch {
@@ -134,7 +134,7 @@ export function parseJsonRows(text) {
     let from = null;
     let lines = null;
     if (input[0] === '[') {
-        const value = parse(input);
+        const value = parseJson(input);
         items = /** @type {unknown[]} */ (value);
     } else if (input[0] === '{') {
         const all = input.split(/\r?\n/);
@@ -154,7 +154,7 @@ export function parseJsonRows(text) {
             }
         } else {
             // JSON Lines: one object per line
-            items = filled.map(l => parse(l.text, l.line - 1));
+            items = filled.map(l => parseJson(l.text, l.line - 1));
             lines = filled.map(l => l.line);
         }
     } else {
@@ -163,23 +163,57 @@ export function parseJsonRows(text) {
     if (!Array.isArray(items)) throw new DatabaseError('JSON for a table must be a list of objects.', { code: 'BAD_INPUT' });
     if (items.length === 0) throw new DatabaseError('The JSON list is empty, so there are no rows to import.', { code: 'BAD_INPUT' });
 
-    /** @type {Map<string, number>} */
-    const index = new Map();
-    const keys = [];
-    items.forEach((item, i) => {
-        if (!isRecord(item)) {
-            const what = Array.isArray(item) ? 'a list' : item === null ? 'null' : `${typeof item === 'string' ? 'text' : typeof item}`;
-            throw new DatabaseError(`Item ${i + 1}${lines ? ` (line ${lines[i]})` : ''} is ${what}, not an object, so it can't be a row.`, { code: 'BAD_INPUT', row: i + 1, line: lines ? lines[i] : undefined });
-        }
-        for (const key of Object.keys(/** @type {object} */ (item))) {
-            if (!index.has(key)) {
-                index.set(key, keys.length);
-                keys.push(key);
+    const keys = createKeyList();
+    items.forEach((item, i) => keys.add(item, i + 1, lines ? lines[i] : null));
+    let nested = 0;
+    const rows = items.map(item => {
+        const row = jsonRow(item, keys.list);
+        nested += row.nested;
+        return row.values;
+    });
+    return { columns: uniqueNames(keys.list), rows, nested, from, lines };
+}
+
+/**
+ * The keys of the rows read so far, in the order they first appear. Refuses
+ * an item that isn't an object.
+ */
+export function createKeyList() {
+    /** @type {Set<string>} */
+    const seen = new Set();
+    /** @type {string[]} */
+    const list = [];
+    return {
+        list,
+        /**
+         * @param {unknown} item
+         * @param {number} number the item's number (from 1)
+         * @param {number | null} line its line, for JSON Lines
+         */
+        add(item, number, line) {
+            if (!isRecord(item)) {
+                const what = Array.isArray(item) ? 'a list' : item === null ? 'null' : `${typeof item === 'string' ? 'text' : typeof item}`;
+                throw new DatabaseError(`Item ${number}${line ? ` (line ${line})` : ''} is ${what}, not an object, so it can't be a row.`, { code: 'BAD_INPUT', row: number, line: line ?? undefined });
+            }
+            for (const key of Object.keys(/** @type {object} */ (item))) {
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    list.push(key);
+                }
             }
         }
-    });
+    };
+}
+
+/**
+ * An item's values in the order of `keys`: missing and null become NULL,
+ * nested objects and lists JSON text.
+ * @param {unknown} item
+ * @param {string[]} keys
+ */
+export function jsonRow(item, keys) {
     let nested = 0;
-    const rows = items.map(item => keys.map(key => {
+    const values = keys.map(key => {
         const value = /** @type {Record<string, unknown>} */ (item)[key];
         if (value === undefined || value === null) return null;
         if (typeof value === 'object') {
@@ -187,6 +221,6 @@ export function parseJsonRows(text) {
             return JSON.stringify(value);
         }
         return value;
-    }));
-    return { columns: uniqueNames(keys), rows, nested, from, lines };
+    });
+    return { values, nested };
 }

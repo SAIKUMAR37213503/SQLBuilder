@@ -5,6 +5,7 @@
 //   exists(name), remove(name), names()
 //   read(name)          the file's bytes (a .sqlite file)
 //   write(name, bytes)  replace or create a file from bytes
+//   writeFrom(name, file)  the same from a file (a Blob), read a few MB at a time
 //   reserve(count)      make room for more files (OPFS pool slots)
 //   persistent          false when nothing survives a reload
 
@@ -17,6 +18,7 @@
  *   remove: (name: string) => void,
  *   read: (name: string) => Uint8Array,
  *   write: (name: string, bytes: Uint8Array) => void,
+ *   writeFrom: (name: string, file: Blob) => Promise<void>,
  *   names: () => string[],
  *   reserve: (count: number) => Promise<void>
  * }} DatabaseFiles
@@ -31,6 +33,23 @@ export function isSqliteFile(bytes) {
     if (Object.prototype.toString.call(bytes) !== '[object Uint8Array]' || bytes.length < 100) return false;
     for (let i = 0; i < SQLITE_HEADER.length; i++) if (bytes[i] !== SQLITE_HEADER.charCodeAt(i)) return false;
     return true;
+}
+
+/** How much of a database file is copied at a time. */
+const COPY_BYTES = 4 * 1024 * 1024;
+
+/**
+ * A file's bytes a few MB at a time; undefined at the end.
+ * @param {Blob} file
+ */
+function chunksOf(file) {
+    let at = 0;
+    return async () => {
+        if (at >= file.size) return undefined;
+        const chunk = new Uint8Array(await file.slice(at, Math.min(file.size, at + COPY_BYTES)).arrayBuffer());
+        at += chunk.length;
+        return chunk;
+    };
 }
 
 /**
@@ -77,6 +96,21 @@ export function createMemoryFiles(sqlite3) {
         write(name, bytes) {
             stored.set(name, new Uint8Array(bytes));
         },
+        async writeFrom(name, file) {
+            const bytes = new Uint8Array(file.size);
+            const next = chunksOf(file);
+            let at = 0;
+            for (let chunk; (chunk = await next()) !== undefined;) {
+                bytes.set(chunk.subarray(0, bytes.length - at), at);
+                at += chunk.length;
+            }
+            // A file saved in WAL mode opens in the standard journal mode (as OPFS files do)
+            if (bytes[18] === 2 || bytes[19] === 2) {
+                bytes[18] = 1;
+                bytes[19] = 1;
+            }
+            stored.set(name, bytes);
+        },
         names: () => [...stored.keys()],
         async reserve() {}
     };
@@ -103,6 +137,10 @@ export function createOpfsFiles(pool) {
         read: (name) => pool.exportFile(path(name)),
         write(name, bytes) {
             pool.importDb(path(name), bytes);
+        },
+        // Written straight to the file, so a large database is never held in memory
+        async writeFrom(name, file) {
+            await pool.importDb(path(name), chunksOf(file));
         },
         names: () => pool.getFileNames().map((/** @type {string} */ f) => f.replace(/^\//, '')),
         /** Each open database can need a file for itself and one for its journal. */
