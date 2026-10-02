@@ -385,6 +385,26 @@ async function main() {
         return { ok: label === 'Import 4 rows' && rows === 'Rows: 4' && toast.includes('Imported 4 rows into Employees'), detail: JSON.stringify({ label, rows, toast }) };
     });
 
+    await check('SQL Lab: run the average-salary query and see its rows', async () => {
+        await page.eval(JS.click('#view-lab-btn'));
+        await sleep(600);
+        await page.eval(`(() => {
+            const area = document.getElementById('lab-sql');
+            area.value = 'SELECT Department, AVG(Salary) AS AvgSalary FROM Employees GROUP BY Department ORDER BY AvgSalary DESC;';
+            area.dispatchEvent(new Event('input', { bubbles: true }));
+            return true;
+        })()`);
+        await sleep(400);
+        await page.eval(JS.click('#lab-run-btn'));
+        const rows = await waitFor(async () => {
+            const r = await page.eval(`Array.from(document.querySelectorAll('.lab-result tbody tr'), tr => Array.from(tr.children, td => td.textContent).join('='))`);
+            return r.length === 2 && r;
+        }, { timeout: 15000, message: 'the query results' });
+        screenshot('10-sql-lab-results');
+        await page.eval(JS.click('#view-builder-btn'));
+        return { ok: rows[0] === 'Engineering=110000' && rows[1] === 'Sales=80000', detail: JSON.stringify(rows) };
+    });
+
     await check('history, templates and settings persist across an app restart', async () => {
         await page.eval(JS.click('#generate-btn'));
         await sleep(400);

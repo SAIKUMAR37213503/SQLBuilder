@@ -19,6 +19,7 @@ Everything you enter stays **on your device**:
 | Saved templates | Queries you chose to save | Same |
 | Settings (theme, dialect, formatting options) | Remembers your preferences | Same |
 | SQL Lab databases (tables and data you create or import) and their names | Lets you work with data in SQL Lab | App storage on your device (the browser's private file storage for the app); names in localStorage |
+| SQL Lab history (the SQL you ran, with the database name and result) and the SQL being written for each database | Lets you run it again | localStorage on your device |
 
 - This data is never sent to the developer or anyone else.
 - On Android, the app opts out of Android backup (`allowBackup="false"`), so it is not copied to Google Drive or other backups. It is deleted when you uninstall the app or clear its storage.

@@ -16,7 +16,7 @@ It comes in four forms, all built from the same code:
 
 ## Features
 
-**SQL Lab (embedded database):** create databases that live on your device, import data into them and see what they contain.
+**SQL Lab (embedded database):** create databases that live on your device, import data into them, see what they contain and run SQL in them.
 - Databases are kept in the browser's private storage for this site (the Origin Private File System), so they survive reloads and work offline. They are shared by all projects.
 - Create, open, rename, duplicate, close and delete databases; browse their tables and views, with columns, types, keys, foreign keys, the real row count and the `CREATE` statement.
 - **Import…** brings data into a database: a SQL script, CSV (any delimiter, detected or chosen; with or without a header row), JSON (a list of objects, JSON Lines, or an object holding one list), or a whole SQLite database file (.sqlite / .db), up to 50 MB. Files are read on your device, never uploaded.
@@ -24,6 +24,14 @@ It comes in four forms, all built from the same code:
   - Rows go into a new table or are added to an existing one (columns matched by name). They are inserted with one prepared `INSERT` and bound values, never by writing values into SQL. Leading zeros (`007`) stay text; dates are stored as text, as SQLite has no date type.
   - Everything runs in one transaction, with foreign keys checked at the end: if any statement or row fails, nothing is kept, the database made for the import is removed, and the dialog says which line or row failed and why. A script's own `BEGIN`/`COMMIT` lines are left out (and `GO` lines end a statement); the preview says so.
   - Malformed input is refused with the row and line (an unclosed quote, a row with too many values, invalid JSON). A database file is checked (`PRAGMA quick_check`) before it is added.
+- **Run SQL:** type SQL in SQL Lab's editor (highlighted as you type) and select **Run** or press Ctrl+Enter (⌘+Enter on a Mac). Select part of the SQL to run only that.
+  - **Results** shows each statement's rows a page at a time (**Load 100 more rows**, up to 1,000; NULLs and BLOBs are marked). Counts and times are what the engine reported: a result says "First 100 rows shown; more available" until every row has been read, and nothing is estimated.
+  - **Messages** lists each statement with its line, what it did ("Query completed successfully. 3 rows affected.") and its time. A script stops at the first error, which shows its line and column, and the editor selects the place; the statements before it ran and their changes are kept.
+  - Transactions work as on a server: `BEGIN` shows a **Transaction open** chip until `COMMIT` or `ROLLBACK`; closing the database rolls back an unfinished one.
+  - **Stop** ends a long query (for example a runaway recursive CTE) by restarting the engine: committed changes are kept, an unfinished transaction is rolled back, and the database is opened again.
+  - Before you run, notices point out, with line and column, what SQLite is likely to reject (`TOP`, `GETDATE()`, `ISNULL()`…). The SQL is never changed for you.
+  - **History** keeps the last 50 runs in SQL Lab (separate from the builder's history), with the database and the result; put any back in the editor. Each database keeps the SQL you were writing.
+- **Open in SQL Lab** (next to Copy, or from the command palette) puts the generated SQL in SQL Lab's editor exactly as generated. When it was generated for SQL Server, PostgreSQL or MySQL, SQL Lab says SQLite may not support all of it and offers **Use the Generic SQL version instead**.
 - **Create in SQL Lab…** (Schema tab) creates your schema's tables in a new or existing database. It shows the exact SQL first, lists anything changed for SQLite (for example `NVARCHAR(MAX)` is written as `NVARCHAR`, and `dbo.Employees` becomes `Employees` because SQLite has no schemas), skips tables the database already has, and runs it all as one transaction.
 - The engine is [SQLite](https://sqlite.org) compiled to WebAssembly (`@sqlite.org/sqlite-wasm`, pinned). It runs in a background worker, starts only when SQL Lab is first opened, and is served from the app itself (never a CDN).
 - SQLite's SQL is close to standard SQL but not the same as SQL Server, PostgreSQL or MySQL. SQL Lab says so on screen and never rewrites your SQL to pretend otherwise.
@@ -276,6 +284,7 @@ src/
 │   ├── dispatch.js       The operations a client may call, and errors as plain data
 │   ├── client.js         Worker client (lazy start, restart, failure state) and an in-page client for tests
 │   ├── databases.js      The SQL Lab's database list (names, dates), app-wide
+│   ├── lab-history.js    SQL Lab's history of runs (its own key, last 50)
 │   ├── schema-sql.js     Schema tab tables as SQLite CREATE TABLE, with notes on what was adapted
 │   ├── importer.js       Imports: preview (changes nothing) and run (one transaction), in the worker
 │   ├── import-sql.js     Reads a SQL script: statements, rows of values, what SQLite can't run
@@ -304,6 +313,9 @@ src/
     ├── projects.js   The Projects dialog's list
     ├── lab.js        The SQL Lab view: databases, tables, structure, Create in SQL Lab dialog
     ├── lab-import.js The SQL Lab's Import dialog (file or paste, preview, confirm)
+    ├── lab-console.js SQL Lab's console: editor, notices, Run/Stop, results, messages, history
+    ├── lab-editor.js  The SQL editor (a textarea over highlighted text)
+    ├── lab-results.js Result grids and messages, from what the engine reported
     ├── theme.js, shortcuts.js, dom.js (safe element builder)
 ```
 
