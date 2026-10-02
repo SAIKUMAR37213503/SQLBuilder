@@ -4,8 +4,9 @@
 //
 //   call(op, args)   a promise of the operation's result (see dispatch.js)
 //   start()          starts the engine; a promise of its info
-//   restart()        stops whatever is running (a long query) and starts over;
-//                    the open database is closed and must be opened again
+//   restart({ waitForFiles })  stops whatever is running (a long query) and starts
+//                    over; the open database is closed and must be opened again.
+//                    waitForFiles: wait for the stopped worker to let go of the files
 //   state            { status: 'idle' | 'starting' | 'ready' | 'failed', info, error }
 //   destroy()
 
@@ -27,6 +28,8 @@ export function createWorkerClient({ createWorker, wasmUrl, onChange = () => {} 
     /** @type {Map<number, { resolve: (value: any) => void, reject: (error: any) => void }>} */
     const pending = new Map();
     let nextId = 1;
+    /** the next start waits for a stopped worker to let go of the files */
+    let waitMs = 0;
     const state = { status: 'idle', info: null, error: null };
 
     function set(changes) {
@@ -78,7 +81,7 @@ export function createWorkerClient({ createWorker, wasmUrl, onChange = () => {} 
             stopWorker(new DatabaseError('The database engine stopped unexpectedly.', { code: 'ENGINE_UNAVAILABLE' }));
             set({ status: 'failed', error: event.message || 'The database worker failed to load.' });
         };
-        const started = post('init', { wasmUrl }).then(
+        const started = post('init', { wasmUrl, waitMs }).then(
             (info) => {
                 set({ status: 'ready', info });
                 return info;
@@ -104,9 +107,11 @@ export function createWorkerClient({ createWorker, wasmUrl, onChange = () => {} 
             await start();
             return post(op, args);
         },
-        restart() {
+        /** @param {{ waitForFiles?: boolean }} [options] waitForFiles: after stopping a running query */
+        restart({ waitForFiles = false } = {}) {
             stopWorker(new DatabaseError('Stopped.', { code: 'STOPPED' }));
             set({ status: 'idle', info: null, error: null });
+            waitMs = waitForFiles ? 10000 : 0;
             return start();
         },
         destroy() {

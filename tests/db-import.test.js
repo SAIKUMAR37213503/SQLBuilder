@@ -191,6 +191,14 @@ TRUNCATE TABLE m;`);
         expect(messages[6][0]).toMatch(/^7:1 SQLite has no TRUNCATE/);
     });
 
+    test('functions SQLite doesn\'t have are flagged when called, not as names', () => {
+        const { statements } = readScript('SELECT GETDATE(), LEN (name), t.year, year FROM t WHERE YEAR(d) = 2024;');
+        expect(statements[0].issues.map(i => `${i.column} ${i.message}`)).toEqual([
+            '8 SQLite has no GETDATE() function. Use CURRENT_TIMESTAMP or datetime(\'now\').',
+            '19 SQLite has no LEN() function. Use length().',
+            '57 SQLite has no YEAR() function. Use strftime(\'%Y\', value).']);
+    });
+
     test('an unclosed quote or comment stops the preview, saying where', () => {
         expect(readScript("SELECT 1;\nINSERT INTO t VALUES ('oops);").problem).toMatchObject({ line: 2, column: 23 });
         expect(readScript('SELECT 1; /* never closed').problem.message).toMatch(/A \/\* comment opened on line 1, column 11/);

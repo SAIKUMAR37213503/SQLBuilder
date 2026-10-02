@@ -19,6 +19,7 @@ const OPERATIONS = {
     fetchPage: (a, { cursor, pageSize }) => a.fetchPage(cursor, { pageSize }),
     closeCursor: (a, { cursor }) => a.closeCursor(cursor),
     schema: (a) => a.schema(),
+    countRows: (a, { name }) => a.countRows(name),
     // Reading an import changes nothing; running it is one transaction
     previewImport: (_a, args) => previewImport(args),
     runImport: (a, args) => runImport(a, args)

@@ -228,6 +228,20 @@ describe('SQLite adapter', () => {
         expect(run.results[0]).toMatchObject({ kind: 'modify', rows: [[1]], more: true, cursor: null, rowsAffected: 2 });
     });
 
+    test('countRows counts a table or view and leaves open results alone', async () => {
+        const { adapter } = setup();
+        await adapter.create('first1');
+        adapter.execute(`${COMPANY}\nCREATE VIEW "Odd ""name""" AS SELECT * FROM Employees WHERE Salary > 95000;`);
+        const run = adapter.execute('SELECT EmployeeID FROM Employees ORDER BY EmployeeID', { pageSize: 1 });
+        const { cursor } = run.results[0];
+        expect(adapter.countRows('Employees')).toBe(4);
+        expect(adapter.countRows('Odd "name"')).toBe(2);
+        expect(() => adapter.countRows('Employees; DROP TABLE Employees')).toThrow(/no table or view named/);
+        expect(adapter.fetchPage(cursor, { pageSize: 10 }).rows).toEqual([[2], [3], [4]]);
+        adapter.close();
+        expect(() => adapter.countRows('Employees')).toThrow(/No database is open/);
+    });
+
     test('large results come a page at a time', async () => {
         const { adapter } = setup();
         await adapter.create('first1');
@@ -283,10 +297,32 @@ describe('SQLite adapter', () => {
         const { adapter } = setup();
         await adapter.create('first1');
         for (const sql of ['', '   ', '-- just a comment', ';;', '/* x */ ;']) {
-            expect(adapter.execute(sql)).toEqual({ results: [], error: null, inTransaction: false });
+            expect(adapter.execute(sql)).toEqual({ results: [], omitted: 0, statements: 0, changes: 0, error: null, inTransaction: false });
         }
         const run = adapter.execute('SELECT 1; -- trailing comment');
         expect(run.results).toHaveLength(1);
+    });
+
+    test('each result says the line its statement starts on; changes are totalled', async () => {
+        const { adapter } = setup();
+        await adapter.create('first1');
+        const run = adapter.execute('-- setup\nCREATE TABLE t (x);\n\nINSERT INTO t VALUES (1), (2);   UPDATE t SET x = x + 1;\nSELECT * FROM t;');
+        expect(run.results.map(r => [r.kind, r.line])).toEqual([['schema', 2], ['modify', 4], ['modify', 4], ['query', 5]]);
+        expect(run).toMatchObject({ statements: 4, changes: 4, omitted: 0 });
+    });
+
+    test('a long script returns its first results and its last, and counts the rest', async () => {
+        const { adapter } = setup();
+        await adapter.create('first1');
+        const sql = ['CREATE TABLE t (x);', ...Array.from({ length: 500 }, (_, i) => `INSERT INTO t VALUES (${i});`), 'SELECT COUNT(*) FROM t;'].join('\n');
+        const started = performance.now();
+        const run = adapter.execute(sql);
+        expect(performance.now() - started).toBeLessThan(5000);
+        expect(run.statements).toBe(502);
+        expect(run.results).toHaveLength(200);
+        expect(run.omitted).toBe(302);
+        expect(run.results.at(-1)).toMatchObject({ kind: 'query', rows: [[500]], line: 502 });
+        expect(run.changes).toBe(500);
     });
 
     test('statements with semicolons inside strings and comments split correctly', async () => {

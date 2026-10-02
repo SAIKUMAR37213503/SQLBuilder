@@ -42,6 +42,26 @@ const NOT_SQLITE = {
     DESCRIBE: 'DESCRIBE is MySQL and isn\'t in SQLite.'
 };
 
+// Functions of the other dialects that SQLite doesn't have, and what it uses instead
+const NOT_SQLITE_FUNCTIONS = {
+    GETDATE: 'Use CURRENT_TIMESTAMP or datetime(\'now\').',
+    SYSDATETIME: 'Use CURRENT_TIMESTAMP or datetime(\'now\').',
+    NOW: 'Use CURRENT_TIMESTAMP or datetime(\'now\').',
+    CURDATE: 'Use CURRENT_DATE or date(\'now\').',
+    DATEADD: 'Use date(value, \'+1 day\') or datetime(value, \'+1 hour\').',
+    DATE_ADD: 'Use date(value, \'+1 day\').',
+    DATEDIFF: 'Use julianday(end) - julianday(start) for days.',
+    DATEPART: 'Use strftime(), for example strftime(\'%Y\', value).',
+    YEAR: 'Use strftime(\'%Y\', value).',
+    MONTH: 'Use strftime(\'%m\', value).',
+    TO_CHAR: 'Use strftime() or printf().',
+    LEN: 'Use length().',
+    ISNULL: 'Use IFNULL() or COALESCE().',
+    NVL: 'Use IFNULL() or COALESCE().',
+    CHARINDEX: 'Use instr(text, part).',
+    GETUTCDATE: 'Use datetime(\'now\'), which is UTC.'
+};
+
 const WORD_START = /[\p{L}_@#]/u;
 const WORD_CHAR = /[\p{L}\p{N}_$@#]/u;
 // ASCII without a regular expression: a script can be millions of characters
@@ -185,7 +205,9 @@ export function scanScript(text) {
             else if (word === 'ENGINE' && s.words[0] === 'CREATE' && s.depth === 0) flag('Table options such as ENGINE= are MySQL; SQLite can\'t read them.', i);
             else if (word === 'MAX' && s.lastPunct === '(' && ['VARCHAR', 'NVARCHAR', 'VARBINARY'].includes(s.prev)) flag('(MAX) sizes are SQL Server; SQLite can\'t read them. Leave the size out.', i);
             else if (word === 'FETCH' && (s.prev === 'ROWS' || s.prev === 'ROW')) flag('OFFSET … FETCH isn\'t in SQLite. Use LIMIT … OFFSET instead.', i);
-            else if (word === 'ILIKE') flag('ILIKE is PostgreSQL. SQLite\'s LIKE already ignores the case of ASCII letters.', i);
+            else if (Object.hasOwn(NOT_SQLITE_FUNCTIONS, word) && s.prev !== '.' && /^\s*\(/.test(text.slice(k, k + 20)) && s.lastPunct !== '.') {
+                flag(`SQLite has no ${word}() function. ${NOT_SQLITE_FUNCTIONS[word]}`, i);
+            } else if (word === 'ILIKE') flag('ILIKE is PostgreSQL. SQLite\'s LIKE already ignores the case of ASCII letters.', i);
             s.prev2 = s.prev;
             s.prev2At = s.prevAt;
             s.prev = word;

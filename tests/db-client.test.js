@@ -208,6 +208,22 @@ describe('worker client', () => {
         expect(created[0].terminated).toBe(true);
         expect(created).toHaveLength(2);
         expect(client.state.status).toBe('ready');
+        expect(created[0].messages[0].args.waitMs).toBe(0);
+        expect(created[1].messages[0].args.waitMs).toBe(0);
+    });
+
+    test('a restart after stopping a query waits for the old worker to let go of the files', async () => {
+        const { factory, created } = fakeWorkerFactory();
+        const client = createWorkerClient({ createWorker: factory, wasmUrl: 'x' });
+        await client.start();
+        const hanging = client.call('hang');
+        await new Promise(r => setTimeout(r, 5));
+        const restarted = client.restart({ waitForFiles: true });
+        await expect(hanging).rejects.toMatchObject({ code: 'STOPPED' });
+        await restarted;
+        expect(created[1].messages[0]).toMatchObject({ op: 'init', args: { waitMs: 10000 } });
+        await client.restart();
+        expect(created[2].messages[0].args.waitMs).toBe(0);
     });
 
     test('a failed start is reported and stays failed until restart', async () => {

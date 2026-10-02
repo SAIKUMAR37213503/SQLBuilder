@@ -12,6 +12,8 @@ import { isSqliteFile } from './files.js';
 export const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 1000;
 const MAX_CURSORS = 4;
+// Results returned for one script; later ones are counted, and the last is always kept
+const MAX_RESULTS = 200;
 // Statements that would start or end the import's own transaction (ROLLBACK TO a savepoint is fine)
 const ENDS_TRANSACTION = /^(?:BEGIN|COMMIT|END|START\s+TRANSACTION)\b|^ROLLBACK\b(?!\s+(?:TRANSACTION\s+)?TO\b)/i;
 
@@ -179,52 +181,65 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
     /**
      * Finds the statement starting at `offset` by preparing it (without running it).
      * Returns its text and end, an error, `{ skip }` for an empty statement, or null at the end.
-     * @param {Uint8Array} bytes
+     * @param {Uint8Array} bytes the script
+     * @param {{ pSql: any, ppStmt: any, pzTail: any }} mem the script copied into wasm memory once
      * @param {number} offset
      */
-    function nextStatement(bytes, offset) {
+    function nextStatement(bytes, mem, offset) {
         if (offset >= bytes.length) return null;
         const pDb = current.db.pointer;
-        const stack = wasm.scopedAllocPush();
-        try {
-            const length = bytes.length - offset;
-            const ppStmt = wasm.scopedAlloc(2 * wasm.ptr.size + length + 1);
-            const pzTail = wasm.ptr.add(ppStmt, wasm.ptr.size);
-            const pSql = wasm.ptr.add(pzTail, wasm.ptr.size);
-            wasm.heap8u().set(bytes.subarray(offset), Number(pSql));
-            wasm.poke8(wasm.ptr.add(pSql, length), 0);
-            wasm.pokePtr([ppStmt, pzTail], 0);
-            const rc = capi.sqlite3_prepare_v3(pDb, pSql, length, 0, ppStmt, pzTail);
-            const pStmt = wasm.peekPtr(ppStmt);
-            if (rc !== capi.SQLITE_OK) {
-                const at = capi.sqlite3_error_offset(pDb);
-                const failure = { message: capi.sqlite3_errmsg(pDb), code: capi.sqlite3_js_rc_str(rc) || 'SQLITE_ERROR', offset: at >= 0 ? offset + at : startOf(bytes, offset) };
-                if (pStmt) capi.sqlite3_finalize(pStmt);
-                return { error: failure };
-            }
-            const tail = Number(wasm.peekPtr(pzTail));
-            const end = tail ? offset + (tail - Number(pSql)) : bytes.length;
-            if (!pStmt) return end > offset && end < bytes.length ? { skip: end } : null;
-            const text = capi.sqlite3_sql(pStmt);
-            capi.sqlite3_finalize(pStmt);
-            return { text, start: offset, end };
-        } finally {
-            wasm.scopedAllocPop(stack);
+        const { pSql, ppStmt, pzTail } = mem;
+        wasm.pokePtr([ppStmt, pzTail], 0);
+        // The length includes the terminating zero, so SQLite reads the text in place
+        const rc = capi.sqlite3_prepare_v3(pDb, wasm.ptr.add(pSql, offset), bytes.length - offset + 1, 0, ppStmt, pzTail);
+        const pStmt = wasm.peekPtr(ppStmt);
+        if (rc !== capi.SQLITE_OK) {
+            const at = capi.sqlite3_error_offset(pDb);
+            const failure = { message: capi.sqlite3_errmsg(pDb), code: capi.sqlite3_js_rc_str(rc) || 'SQLITE_ERROR', offset: at >= 0 ? offset + at : startOf(bytes, offset) };
+            if (pStmt) capi.sqlite3_finalize(pStmt);
+            return { error: failure };
         }
+        const tail = Number(wasm.peekPtr(pzTail));
+        const end = tail ? tail - Number(pSql) : bytes.length;
+        if (!pStmt) return end > offset && end < bytes.length ? { skip: end } : null;
+        const text = capi.sqlite3_sql(pStmt);
+        capi.sqlite3_finalize(pStmt);
+        return { text, start: offset, end };
+    }
+
+    /** Copies a script into wasm memory (freed with freeScript). */
+    function copyScript(bytes) {
+        const pSql = wasm.alloc(bytes.length + 1);
+        wasm.heap8u().set(bytes, Number(pSql));
+        wasm.poke8(wasm.ptr.add(pSql, bytes.length), 0);
+        const ppStmt = wasm.alloc(2 * wasm.ptr.size);
+        return { pSql, ppStmt, pzTail: wasm.ptr.add(ppStmt, wasm.ptr.size) };
+    }
+
+    function freeScript(mem) {
+        wasm.dealloc(mem.ppStmt);
+        wasm.dealloc(mem.pSql);
+    }
+
+    /** The first byte at or after `offset` that isn't whitespace, a comment or a semicolon. */
+    function startOf(bytes, offset) {
+        let i = offset;
+        while (i < bytes.length) {
+            const b = bytes[i];
+            if (b === 32 || b === 9 || b === 10 || b === 13 || b === 12 || b === 59) i++;
+            else if (b === 45 && bytes[i + 1] === 45) {
+                while (i < bytes.length && bytes[i] !== 10) i++;
+            } else if (b === 47 && bytes[i + 1] === 42) {
+                i += 2;
+                while (i < bytes.length && !(bytes[i] === 42 && bytes[i + 1] === 47)) i++;
+                i = Math.min(bytes.length, i + 2);
+            } else break;
+        }
+        return i;
     }
 
     /** Whether another statement follows `offset` (without preparing it, which could fail early). */
-    function hasMore(bytes, offset) {
-        const rest = new TextDecoder().decode(bytes.subarray(offset));
-        return /[^\s;]/.test(rest.replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?(?:\*\/|$)/g, ''));
-    }
-
-    /** The first byte at or after `offset` that isn't whitespace, so an error points at the statement. */
-    function startOf(bytes, offset) {
-        let at = offset;
-        while (at < bytes.length && (bytes[at] === 32 || bytes[at] === 9 || bytes[at] === 10 || bytes[at] === 13)) at++;
-        return at;
-    }
+    const hasMore = (bytes, offset) => startOf(bytes, offset) < bytes.length;
 
     const adapter = {
         info() {
@@ -458,9 +473,19 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
             let error = null;
             let offset = 0;
             let index = 0;
+            let omitted = 0;
+            const changesBefore = capi.sqlite3_total_changes(current.db.pointer);
+            // Line numbers of statements, counted as the script is read
+            let line = 1;
+            let counted = 0;
+            const lineOf = (/** @type {number} */ at) => {
+                for (; counted < at; counted++) if (bytes[counted] === 10) line++;
+                return line;
+            };
+            const mem = copyScript(bytes);
             try {
                 for (;;) {
-                    const next = nextStatement(bytes, offset);
+                    const next = nextStatement(bytes, mem, offset);
                     if (!next) break;
                     if ('skip' in next) {
                         offset = next.skip;
@@ -472,7 +497,13 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
                     }
                     try {
                         const result = runStatement(next.text, size, !hasMore(bytes, next.end));
-                        results.push({ ...result, statement: index });
+                        const entry = { ...result, statement: index, line: lineOf(startOf(bytes, next.start)) };
+                        // A long script keeps the first results and the last one (with rows)
+                        if (results.length >= MAX_RESULTS) {
+                            const dropped = results.pop();
+                            if (dropped) omitted++;
+                        }
+                        results.push(entry);
                     } catch (e) {
                         const reason = cleanMessage(e instanceof Error ? e.message : e);
                         error = { ...reason, offset: startOf(bytes, next.start), statement: index };
@@ -482,13 +513,15 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
                     index++;
                 }
             } finally {
+                freeScript(mem);
                 saveCurrent();
             }
             if (error) {
                 const { line, column } = positionAt(bytes, error.offset);
                 error = { message: error.message, code: error.code, statement: error.statement, line, column };
             }
-            return { results, error, inTransaction: capi.sqlite3_get_autocommit(current.db.pointer) === 0 };
+            // changes: rows inserted, updated or deleted by the whole script, as SQLite counts them
+            return { results, omitted, statements: index, changes: capi.sqlite3_total_changes(current.db.pointer) - changesBefore, error, inTransaction: capi.sqlite3_get_autocommit(current.db.pointer) === 0 };
         },
 
         /** The next page of a result that had more rows. */
@@ -538,6 +571,18 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
                     foreignKeys: [...foreignKeys.values()]
                 };
             });
+        },
+
+        /**
+         * The number of rows in a table or view of the open database. Unlike
+         * execute, open result cursors are left alone.
+         * @param {string} name
+         */
+        countRows(name) {
+            const { db } = requireOpen();
+            const found = db.selectValue("SELECT name FROM sqlite_schema WHERE type IN ('table', 'view') AND name = ?", [String(name)]);
+            if (found === undefined) throw new DatabaseError(`There's no table or view named ${name}.`, { code: 'NOT_FOUND' });
+            return Number(db.selectValue(`SELECT COUNT(*) FROM "${String(found).replace(/"/g, '""')}"`));
         },
 
         destroy() {

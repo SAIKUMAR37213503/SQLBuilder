@@ -21,12 +21,14 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
  * Takes the databases lock and keeps it for this worker's lifetime (the
  * browser releases it when the worker or its tab goes away). Only one tab
  * can use the database files at a time; false means another tab has them.
+ * With `waitMs`, waits up to that long for it to be released.
  */
-function takeLock() {
+function takeLock(waitMs = 0) {
     const locks = /** @type {any} */ (self.navigator)?.locks;
     if (!locks) return Promise.resolve(true);
+    const options = waitMs > 0 && typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(waitMs) } : { ifAvailable: true };
     return new Promise((resolve) => {
-        locks.request(LOCK_NAME, { ifAvailable: true }, (lock) => {
+        locks.request(LOCK_NAME, options, (lock) => {
             resolve(Boolean(lock));
             return lock ? new Promise(() => {}) : undefined;
         }).catch(() => resolve(false));
@@ -72,9 +74,14 @@ async function filesFree() {
     }
 }
 
-async function openStorage(sqlite3) {
+/**
+ * @param {any} sqlite3
+ * @param {number} waitMs how long to wait for a worker that was just stopped
+ *   to let go of the files (a stopped query: a couple of seconds in Chromium)
+ */
+async function openStorage(sqlite3, waitMs) {
     // A tab that was just closed can hold the lock for a moment
-    let locked = await takeLock();
+    let locked = await takeLock(waitMs);
     for (let attempt = 1; !locked && attempt <= 5; attempt++) {
         await sleep(100 * attempt);
         locked = await takeLock();
@@ -94,7 +101,7 @@ async function openStorage(sqlite3) {
     }
 }
 
-async function start(wasmUrl) {
+async function start(wasmUrl, waitMs) {
     // The package's types omit the options the module factory accepts
     const sqlite3 = await /** @type {any} */ (sqlite3InitModule)({
         // The wasm file comes from this app's own origin, never a CDN
@@ -102,7 +109,7 @@ async function start(wasmUrl) {
         print: () => {},
         printErr: () => {}
     });
-    const { files, reason } = await openStorage(sqlite3);
+    const { files, reason } = await openStorage(sqlite3, waitMs);
     return { adapter: createSqliteAdapter(sqlite3, files), storage: { persistent: files.persistent, reason } };
 }
 
@@ -111,7 +118,7 @@ self.onmessage = async (event) => {
     try {
         let value;
         if (op === 'init') {
-            ready ||= start(String(args?.wasmUrl || ''));
+            ready ||= start(String(args?.wasmUrl || ''), Math.min(30000, Math.max(0, Number(args?.waitMs) || 0)));
             const { adapter, storage } = await ready;
             value = { ...adapter.info(), storageReason: storage.reason };
         } else {

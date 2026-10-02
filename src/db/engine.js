@@ -4,9 +4,10 @@
 //
 //   info()                         engine name/version, persistence, open db
 //   create(id), open(id), close(), remove(id), removeAll(), duplicate(from, to)
-//   execute(sql, { pageSize })     { results: StatementResult[], error, inTransaction }
+//   execute(sql, { pageSize })     { results: StatementResult[], omitted, statements, changes, error, inTransaction }
 //   fetchPage(cursor, { pageSize }), closeCursor(cursor)
 //   schema()                       tables and views of the open database
+//   countRows(name)                rows in one table or view (open cursors are kept)
 //   exportFile(id), importFile(id, bytes)
 //   runScript(sql)                 an imported script, in one transaction
 //   insertRows({ setup, sql, rows }) imported rows, bound to one INSERT, in one transaction
@@ -15,7 +16,8 @@
 // (reads, changes nothing) and runImport.
 //
 // A StatementResult is { sql, kind, columns, rows, more, cursor, rowsAffected,
-// durationMs, statement, start }. rowsAffected is null unless the engine
+// durationMs, statement, line }. A long script returns its first results and
+// its last (`omitted` counts the rest). rowsAffected is null unless the engine
 // reported it; durationMs is measured by the engine around that statement.
 
 /** An error the engine reports, with what's known about where it happened. */
