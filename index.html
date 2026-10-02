@@ -11,9 +11,9 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <!-- The SQL Lab's database engine (SQLite). Listed so the offline cache keeps it and the app finds its current URL. -->
-    <link rel="prefetch" href="dist/db-worker.js?v=e1ff3ac1d1d6" id="asset-db-worker">
+    <link rel="prefetch" href="dist/db-worker.js?v=2419c2a7f7a8" id="asset-db-worker">
     <link rel="prefetch" href="dist/sqlite3.wasm?v=2ee8f3dab694" id="asset-sqlite-wasm">
-    <link rel="stylesheet" href="style.css?v=c9f949ef6477">
+    <link rel="stylesheet" href="style.css?v=36bf14883c48">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -595,6 +595,10 @@
                     <input type="text" id="lab-import-new-name" class="input" maxlength="60" autocomplete="off" spellcheck="false">
                 </div>
             </div>
+            <div class="field" id="lab-import-adapt-field" hidden>
+                <label class="check"><input type="checkbox" id="lab-import-adapt" checked aria-describedby="lab-import-adapt-hint"> <span>Adapt SQL Server syntax for SQLite</span></label>
+                <p class="field-hint" id="lab-import-adapt-hint">This looks like a SQL Server script (for example from SSMS Generate Scripts). Each change is listed in the preview before anything runs. Clear this to run the script as written.</p>
+            </div>
             <fieldset class="fieldset" id="lab-import-csv-options">
                 <legend>CSV</legend>
                 <div class="field-row">
@@ -672,6 +676,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=89ec163520be" defer></script>
+    <script src="dist/sqlbuilder.js?v=687736d0618e" defer></script>
 </body>
 </html>
