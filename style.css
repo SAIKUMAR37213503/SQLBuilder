@@ -1499,3 +1499,128 @@ body.view-lab .mobile-bar { display: none; }
     border-radius: var(--radius-sm);
 }
 .help-note { margin-top: 0.5rem; padding-top: 0.45rem; color: var(--text-2); border-top: 1px solid var(--border); }
+
+/* SQL Lab console: editor, Run, results, messages, history */
+.lab-head-slot { display: grid; gap: 0.5rem; min-width: 0; }
+.lab-console { display: grid; gap: 0.5rem; min-width: 0; }
+.lab-console[hidden], .lab-tabs[hidden], .lab-panel[hidden] { display: none; }
+.lab-console-head { display: flex; gap: 0.5rem; align-items: center; justify-content: space-between; }
+.lab-editor {
+    position: relative;
+    min-width: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--code-bg);
+}
+.lab-editor:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+.lab-editor-highlight, .lab-editor-input {
+    margin: 0;
+    padding: 0.6rem 0.75rem;
+    border: 0;
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    tab-size: 4;
+    white-space: pre;
+    overflow-wrap: normal;
+    letter-spacing: normal;
+}
+.lab-editor-highlight {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    color: var(--text);
+    pointer-events: none;
+}
+.lab-editor-highlight code { font-family: inherit; }
+.lab-editor-input {
+    position: relative;
+    display: block;
+    width: 100%;
+    min-height: 9rem;
+    max-height: 60vh;
+    resize: vertical;
+    overflow: auto;
+    background: transparent;
+    color: transparent;
+    caret-color: var(--text);
+}
+.lab-editor-input:focus { outline: none; }
+.lab-editor-input::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); color: transparent; }
+@media (forced-colors: active) {
+    .lab-editor-highlight { display: none; }
+    .lab-editor-input { color: CanvasText; }
+}
+.lab-sql-from, .lab-sql-notices {
+    display: grid;
+    gap: 0.35rem;
+    justify-items: start;
+    padding: 0.5rem 0.75rem;
+    border-left: 4px solid var(--warning);
+    border-radius: var(--radius-sm);
+    background: var(--warning-soft);
+    color: var(--text);
+    font-size: 0.85rem;
+}
+.lab-sql-from { border-left-color: var(--accent); background: var(--info-soft); }
+.lab-sql-from[hidden], .lab-sql-notices[hidden] { display: none; }
+.lab-sql-notices ul { display: grid; gap: 0.2rem; margin: 0; padding-left: 1.1rem; }
+.lab-sql-notice-title { font-weight: 650; }
+.lab-link-btn { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
+.lab-link-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.lab-run-bar { display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; }
+.lab-run-bar [hidden] { display: none; }
+.lab-run-hint { flex: 1 1 14rem; margin: 0; }
+.lab-transaction { border-color: var(--warning); background: var(--warning-soft); color: var(--warning); font-weight: 600; }
+
+.lab-tabs { display: flex; gap: 0.25rem; overflow-x: auto; border-bottom: 1px solid var(--border); }
+.lab-tab {
+    min-height: 2.5rem;
+    padding: 0.4rem 0.8rem;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    background: none;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.lab-tab:hover { color: var(--text); }
+.lab-tab[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--text); }
+.lab-tab:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.lab-panel { display: grid; gap: 0.75rem; min-width: 0; }
+.lab-panel:focus { outline: none; }
+
+.lab-result { display: grid; gap: 0.4rem; justify-items: start; min-width: 0; }
+.lab-result > .lab-table-scroll { justify-self: stretch; }
+.lab-result-head { display: flex; flex-wrap: wrap; gap: 0.2rem 0.75rem; align-items: baseline; }
+.lab-result-title { font-size: 0.85rem; font-weight: 650; }
+.lab-result-status { font-size: 0.85rem; color: var(--text-2); }
+.lab-result-time { font-size: 0.8rem; color: var(--text-muted); }
+.lab-result-scroll { max-height: 26rem; overflow: auto; }
+.lab-data td.is-number { text-align: right; }
+.lab-data .lab-blob { color: var(--text-muted); }
+.lab-result-error { padding: 0.5rem 0.75rem; border-left: 4px solid var(--danger); border-radius: var(--radius-sm); background: var(--danger-soft); font-size: 0.85rem; }
+
+.lab-message-summary { font-weight: 600; }
+.lab-messages { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.85rem; }
+.lab-message { display: flex; flex-wrap: wrap; gap: 0.1rem 0.75rem; align-items: baseline; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); min-width: 0; }
+.lab-message:last-child { border-bottom: 0; }
+.lab-message-where { color: var(--text-muted); font-size: 0.8rem; white-space: nowrap; }
+.lab-message-text { flex: 1 1 12rem; min-width: 0; }
+.lab-message-time { color: var(--text-muted); font-size: 0.8rem; }
+.lab-message-sql { flex-basis: 100%; color: var(--text-2); font-family: var(--font-mono); font-size: 0.8rem; overflow-wrap: anywhere; }
+.lab-message-more { color: var(--text-muted); font-style: italic; }
+.lab-message-error { box-shadow: inset 4px 0 0 var(--danger); background: var(--danger-soft); }
+.lab-message-note { color: var(--text-2); font-size: 0.85rem; }
+
+.lab-history-head { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; justify-content: space-between; }
+.lab-history { display: grid; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
+.lab-history-item { display: grid; gap: 0.3rem; padding: 0.5rem 0.65rem; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 0; }
+.lab-history-item.is-error { box-shadow: inset 3px 0 0 var(--danger); }
+.lab-history-sql { font-family: var(--font-mono); font-size: 0.8rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5rem; overflow: hidden; }
+.lab-history-meta { display: flex; flex-wrap: wrap; gap: 0.1rem 0.75rem; color: var(--text-muted); font-size: 0.8rem; }
+.lab-history-error { color: var(--danger); }
+.lab-history-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }

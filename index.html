@@ -11,9 +11,9 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <!-- The SQL Lab's database engine (SQLite). Listed so the offline cache keeps it and the app finds its current URL. -->
-    <link rel="prefetch" href="dist/db-worker.js?v=387db0c8a79e" id="asset-db-worker">
+    <link rel="prefetch" href="dist/db-worker.js?v=2670acb9aeb0" id="asset-db-worker">
     <link rel="prefetch" href="dist/sqlite3.wasm?v=2ee8f3dab694" id="asset-sqlite-wasm">
-    <link rel="stylesheet" href="style.css?v=b1d0b9c4786a">
+    <link rel="stylesheet" href="style.css?v=c9f949ef6477">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -94,6 +94,7 @@
                             <button type="button" class="btn btn-ghost" id="select-all-btn">Select all</button>
                             <button type="button" class="btn btn-ghost" id="download-btn">Download</button>
                             <button type="button" class="btn btn-ghost" id="share-btn" hidden>Share</button>
+                            <button type="button" class="btn btn-ghost" id="open-in-lab-btn" title="Run this SQL in SQL Lab's embedded SQLite database">Open in SQL Lab</button>
                             <button type="button" class="btn btn-copy" id="copy-btn" aria-keyshortcuts="Control+Shift+C Meta+Shift+C">Copy</button>
                         </div>
                     </div>
@@ -671,6 +672,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=70a777164cc7" defer></script>
+    <script src="dist/sqlbuilder.js?v=69864c9669fc" defer></script>
 </body>
 </html>

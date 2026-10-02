@@ -1,7 +1,8 @@
 // The SQL Lab view: the databases kept in this browser (create, open,
 // rename, duplicate, delete), what each contains (tables, views and their
-// columns), creating the Schema tab's tables in a database, and importing
-// SQL, CSV, JSON or SQLite files (lab-import.js).
+// columns), creating the Schema tab's tables in a database, importing SQL,
+// CSV, JSON or SQLite files (lab-import.js), and running SQL in the open
+// database (lab-console.js).
 //
 // The engine runs in a worker (see db/client.js) and starts the first time
 // the SQL Lab is shown, so the builder never pays for it.
@@ -10,9 +11,17 @@ import { h, formatTime } from './dom.js';
 import { renderSqlCode } from './output.js';
 import { formDialog, confirmDialog, promptDialog } from './dialogs.js';
 import { createDatabaseList, DatabaseListError } from '../db/databases.js';
-import { sqliteCreateTables, sqliteName, sqliteTableName } from '../db/schema-sql.js';
+import { sqliteCreateTables, sqliteTableName } from '../db/schema-sql.js';
 import { createStorage, createMemoryBackend } from '../storage.js';
 import { createImportDialog } from './lab-import.js';
+import { createConsole } from './lab-console.js';
+
+const TABS = [
+    { id: 'results', label: 'Results' },
+    { id: 'messages', label: 'Messages' },
+    { id: 'table', label: 'Table' },
+    { id: 'history', label: 'History' }
+];
 
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -61,7 +70,9 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         /** @type {{ rows: number | null, error: string | null } | null} */
         selectedCount: null,
         busy: false,
-        started: false
+        started: false,
+        /** which of TABS is showing */
+        tab: 'table'
     };
 
     // ------------------------------------------------------------ engine
@@ -144,8 +155,8 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         state.selectedCount = null;
         if (!state.selected) return;
         try {
-            const run = await client.call('execute', { sql: `SELECT COUNT(*) FROM ${sqliteName(state.selected)}`, pageSize: 1 });
-            state.selectedCount = run.error ? { rows: null, error: run.error.message } : { rows: Number(run.results[0].rows[0][0]), error: null };
+            // Not execute: that would close the open results' cursors
+            state.selectedCount = { rows: await client.call('countRows', { name: state.selected }), error: null };
         } catch (error) {
             state.selectedCount = { rows: null, error: describeError(error) };
         }
@@ -172,6 +183,7 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
             }
             throw error;
         }
+        if (state.open !== id) state.tab = 'table';
         state.open = id;
         state.selected = null;
         databases.setLastOpen(id);
@@ -251,9 +263,10 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
     function selectObject(name) {
         return task(async () => {
             state.selected = name;
+            state.tab = 'table';
             await countSelected();
         }).then(() => {
-            doc.getElementById('lab-main-heading')?.focus();
+            doc.getElementById('lab-structure-title')?.focus();
         });
     }
 
@@ -292,6 +305,7 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
             freeName,
             async select(name) {
                 state.selected = name;
+                state.tab = 'table';
                 await countSelected();
             },
             render: () => render(),
@@ -542,18 +556,82 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         return h('button', { type: 'button', class: `btn btn-${variant} btn-sm`, 'aria-label': label, dataset: { labAction: action, ...extra }, disabled: state.busy }, text);
     }
 
+    // ----------------------------------------------------------- console
+
+    const sqlConsole = createConsole({
+        storage,
+        client,
+        toast,
+        confirm: (options) => confirmDialog(dialogs.confirm, options),
+        lab: {
+            open: () => {
+                const entry = usable() && state.open ? databases.get(state.open) : null;
+                return entry ? { id: entry.id, name: entry.name } : null;
+            },
+            exclusive,
+            busy: () => state.busy,
+            async afterRun(run) {
+                if (run.results.some(r => r.kind !== 'query') && state.open) databases.touch(state.open);
+                await task(loadObjects);
+            },
+            async reopen() {
+                const id = state.open;
+                await start();
+                if (id && usable()) await task(() => openDatabase(id, { quiet: true }));
+            },
+            showTab: (tab) => {
+                state.tab = tab;
+            },
+            render: () => render()
+        }
+    });
+
+    // The main area keeps its parts, so the editor keeps its text, focus and undo
+    const head = h('div', { class: 'lab-head-slot' });
+    const tabButtons = TABS.map(t => h('button', {
+        type: 'button', role: 'tab', class: 'lab-tab', id: `lab-tab-${t.id}`, 'aria-controls': 'lab-panel', dataset: { tab: t.id }
+    }, t.label));
+    const tabList = h('div', { class: 'lab-tabs', role: 'tablist', 'aria-label': 'Database results' }, tabButtons);
+    const panel = h('div', { class: 'lab-panel', id: 'lab-panel', role: 'tabpanel', tabindex: '-1' });
+    el.main.replaceChildren(head, sqlConsole.root, tabList, panel);
+
+    function showTab(id, { focus = false } = {}) {
+        state.tab = id;
+        render();
+        if (focus) doc.getElementById(`lab-tab-${id}`)?.focus();
+    }
+    tabList.addEventListener('click', (event) => {
+        const button = /** @type {any} */ (event.target).closest('[role="tab"]');
+        if (button) showTab(button.dataset.tab);
+    });
+    tabList.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
+        const at = TABS.findIndex(t => t.id === state.tab);
+        const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: TABS.length - 1 }[event.key];
+        if (to === undefined) return;
+        event.preventDefault();
+        showTab(TABS[(to + TABS.length) % TABS.length].id, { focus: true });
+    });
+    panel.addEventListener('click', (event) => sqlConsole.onPanelClick(event));
+
     function renderMain() {
         const s = engineState();
+        const entry = usable() && state.open ? databases.get(state.open) : null;
+        // Not while the engine restarts (Stop): the database is reopened after
+        sqlConsole.setDatabase(state.open && databases.get(state.open) ? state.open : null);
+        // SQL brought from the builder shows even before a database is open
+        sqlConsole.root.hidden = s.status === 'failed' || (!state.open && !sqlConsole.editor.value.trim());
+        tabList.hidden = !entry;
+        panel.hidden = !entry;
+        sqlConsole.render();
         if (!usable()) {
-            el.main.replaceChildren(h('h3', { id: 'lab-main-heading', class: 'visually-hidden', tabindex: '-1' }, 'Database'),
+            head.replaceChildren(h('h3', { id: 'lab-main-heading', class: 'visually-hidden', tabindex: '-1' }, 'Database'),
                 h('p', { class: 'lab-empty-hint' }, s.status === 'starting' || s.status === 'idle' ? 'Starting the database engine…' : 'Databases aren\'t available right now.'));
             return;
         }
-        const entry = state.open ? databases.get(state.open) : null;
         const hasSchema = schemaTables().length > 0;
         if (!entry) {
             const none = databases.size === 0;
-            el.main.replaceChildren(h('div', { class: 'empty-state lab-empty' },
+            head.replaceChildren(h('div', { class: 'empty-state lab-empty' },
                 h('h3', { class: 'empty-title', id: 'lab-main-heading', tabindex: '-1' }, none ? 'No databases yet' : 'No database open'),
                 h('p', {}, none
                     ? `Create a database, or import a SQL, CSV, JSON or SQLite file, to keep tables and data ${where}.`
@@ -564,7 +642,7 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
                     hasSchema ? h('button', { type: 'button', class: 'btn btn-secondary btn-sm', dataset: { labAction: 'from-schema' }, disabled: state.busy }, 'Create your schema\'s tables…') : null)));
             return;
         }
-        const header = h('div', { class: 'lab-main-head' },
+        head.replaceChildren(h('div', { class: 'lab-main-head' },
             h('h3', { id: 'lab-main-heading', class: 'lab-db-title', tabindex: '-1' }, entry.name),
             h('div', { class: 'lab-main-actions' },
                 importer ? actionButton('Import…', 'import', `Import SQL, CSV or JSON into ${entry.name}`, 'secondary') : null,
@@ -572,23 +650,39 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
                 actionButton('Rename…', 'rename', `Rename ${entry.name}`, 'ghost', { id: entry.id }),
                 actionButton('Duplicate', 'duplicate', `Duplicate ${entry.name}`, 'ghost', { id: entry.id }),
                 actionButton('Close', 'close', `Close ${entry.name}`),
-                actionButton('Delete…', 'delete', `Delete ${entry.name}`, 'danger-ghost', { id: entry.id })));
-        const object = state.selected ? state.objects?.find(o => o.name === state.selected) : null;
-        if (!object) {
-            const count = state.objects?.length || 0;
-            el.main.replaceChildren(header, count
-                ? h('p', { class: 'lab-empty-hint' }, `${plural(state.objects.filter(o => o.type === 'table').length, 'table')}${state.objects.some(o => o.type === 'view') ? ` and ${plural(state.objects.filter(o => o.type === 'view').length, 'view')}` : ''}. Select one to see its columns.`)
-                : h('div', { class: 'empty-state' },
-                    h('p', { class: 'empty-title' }, 'This database is empty'),
-                    h('p', {}, hasSchema
-                        ? 'Import a SQL script, CSV or JSON file, or create the tables from your schema.'
-                        : 'Import a SQL script, CSV or JSON file, or add tables in the Schema tab and create them here.'),
-                    h('div', { class: 'empty-actions' },
-                        importer ? h('button', { type: 'button', class: 'btn btn-primary btn-sm', dataset: { labAction: 'import' }, disabled: state.busy }, 'Import data…') : null,
-                        hasSchema ? h('button', { type: 'button', class: `btn ${importer ? 'btn-secondary' : 'btn-primary'} btn-sm`, dataset: { labAction: 'from-schema' }, disabled: state.busy }, 'Create your schema\'s tables…') : null)));
-            return;
+                actionButton('Delete…', 'delete', `Delete ${entry.name}`, 'danger-ghost', { id: entry.id }))));
+
+        for (const button of tabButtons) {
+            const current = button.dataset.tab === state.tab;
+            button.setAttribute('aria-selected', String(current));
+            button.tabIndex = current ? 0 : -1;
         }
-        el.main.replaceChildren(header, renderStructure(object));
+        panel.setAttribute('aria-labelledby', `lab-tab-${state.tab}`);
+        const views = {
+            results: () => sqlConsole.resultsView(),
+            messages: () => sqlConsole.messagesView(),
+            history: () => sqlConsole.historyView(),
+            table: () => [tableView(hasSchema)]
+        };
+        panel.replaceChildren(...views[state.tab]());
+    }
+
+    /** The Table tab: the selected table or view, or what the database holds. */
+    function tableView(hasSchema) {
+        const object = state.selected ? state.objects?.find(o => o.name === state.selected) : null;
+        if (object) return renderStructure(object);
+        const count = state.objects?.length || 0;
+        if (count) {
+            return h('p', { class: 'lab-empty-hint' }, `${plural(state.objects.filter(o => o.type === 'table').length, 'table')}${state.objects.some(o => o.type === 'view') ? ` and ${plural(state.objects.filter(o => o.type === 'view').length, 'view')}` : ''}. Select one to see its columns.`);
+        }
+        return h('div', { class: 'empty-state' },
+            h('p', { class: 'empty-title' }, 'This database is empty'),
+            h('p', {}, hasSchema
+                ? 'Run CREATE TABLE above, import a SQL script, CSV or JSON file, or create the tables from your schema.'
+                : 'Run CREATE TABLE above, import a SQL script, CSV or JSON file, or add tables in the Schema tab and create them here.'),
+            h('div', { class: 'empty-actions' },
+                importer ? h('button', { type: 'button', class: 'btn btn-primary btn-sm', dataset: { labAction: 'import' }, disabled: state.busy }, 'Import data…') : null,
+                hasSchema ? h('button', { type: 'button', class: `btn ${importer ? 'btn-secondary' : 'btn-primary'} btn-sm`, dataset: { labAction: 'from-schema' }, disabled: state.busy }, 'Create your schema\'s tables…') : null));
     }
 
     function renderStructure(object) {
@@ -668,6 +762,18 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         render,
         createTablesFromSchema,
         importData,
+        /**
+         * Puts SQL generated in the builder in the editor and shows SQL Lab.
+         * @param {{ sql: string, dialect: string, generic: string }} from
+         */
+        openSql(from) {
+            sqlConsole.openSql(from);
+            show();
+            sqlConsole.editor.focus();
+        },
+        /** Runs the editor's SQL (Ctrl+Enter anywhere in SQL Lab). */
+        run: () => sqlConsole.run(),
+        get console() { return sqlConsole; },
         get databases() { return databases; },
         get state() { return { ...state }; },
 
@@ -677,6 +783,9 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
             state.open = null;
             state.objects = null;
             state.selected = null;
+            sqlConsole.clearHistory();
+            sqlConsole.editor.value = '';
+            sqlConsole.reset();
             if (!any) {
                 databases.clear();
                 return true;

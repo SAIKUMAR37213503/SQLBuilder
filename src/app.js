@@ -133,6 +133,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         output: $('sql-output'),
         code: $('sql-code'),
         copy: $('copy-btn'),
+        openInLab: $('open-in-lab-btn'),
         share: $('share-btn'),
         download: $('download-btn'),
         selectAll: $('select-all-btn'),
@@ -874,6 +875,25 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         } else {
             toast('Copy failed — use Select all, then copy with your keyboard.', 'error');
         }
+    }
+
+    /** Puts the generated SQL in SQL Lab's editor, as generated (it isn't run). */
+    function openInLab() {
+        commitSoon.flush();
+        scheduleRefresh.flush();
+        if (!state.sql) {
+            toast(hasErrors(state.issues) ? 'Nothing to open yet — resolve the checks first.' : 'Nothing to open yet — generate a query first.', 'error');
+            return;
+        }
+        let generic = '';
+        if (state.settings.dialect !== 'generic') {
+            try {
+                generic = generateSQL(state.workspace, { ...generationOptions(), dialect: 'generic' });
+            } catch {
+                // offered only when it can be generated
+            }
+        }
+        lab.openSql({ sql: state.sql, dialect: state.settings.dialect, generic });
     }
 
     /**
@@ -2412,6 +2432,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             el.lab.hidden
                 ? { id: 'open-lab', group: 'SQL Lab', label: 'Open SQL Lab', keywords: 'database run execute sqlite tables data', run: () => setView('lab') }
                 : { id: 'open-builder', group: 'SQL Lab', label: 'Back to the query builder', keywords: 'builder', run: () => setView('builder') },
+            { id: 'open-in-lab', group: 'SQL Lab', label: 'Open the SQL in SQL Lab', keywords: 'run execute database sqlite test query', run: openInLab },
             { id: 'lab-import', group: 'SQL Lab', label: 'Import into SQL Lab…', keywords: 'database sqlite csv json sql file load data', run: () => { setView('lab', { focus: false }); lab.importData(); } },
             schema.size > 0 && { id: 'schema-to-lab', group: 'SQL Lab', label: 'Create schema tables in SQL Lab…', keywords: 'database sqlite create table run', run: () => lab.createTablesFromSchema() },
             { id: 'open-history', group: 'Library', label: 'Open history', run: () => openLibraryTab('history') },
@@ -2493,6 +2514,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.undo.addEventListener('click', undo);
     el.redo.addEventListener('click', redo);
     el.copy.addEventListener('click', copySql);
+    el.openInLab.addEventListener('click', openInLab);
     el.save.addEventListener('click', saveQuery);
     el.share.hidden = !platform.canShare;
     el.share.addEventListener('click', shareSql);
@@ -2629,13 +2651,18 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         el.labTablesDialog, el.labImportDialog].forEach(enhanceDialog);
 
     bindShortcuts(doc, signal, {
-        generate,
+        // In SQL Lab, Ctrl+Enter runs the SQL instead
+        generate: () => {
+            if (el.lab.hidden) generate();
+            else if (!doc.querySelector('dialog[open]')) lab.run();
+        },
         copy: copySql,
         // Not over another dialog: saving can open the template dialog
         save: () => { if (!doc.querySelector('dialog[open]')) saveQuery(); },
         palette: showPalette,
-        undo,
-        redo,
+        // Undo and Redo belong to the builder
+        undo: () => { if (el.lab.hidden) undo(); },
+        redo: () => { if (el.lab.hidden) redo(); },
         help: () => showDialog(el.shortcutsDialog),
         escape: () => {
             if (el.fileMenu.open) {
