@@ -64,7 +64,7 @@ Nothing here is submitted automatically; every Play Console step is manual. Goog
   > • Copy, share or export as a .sql or JSON file
   > • Light and dark themes
   >
-  > Private by design: the app works completely offline, needs no account and requests no permissions. Your queries stay on your device. SQL Builder Pro Lite generates SQL text only. It never connects to a database or runs queries.
+  > Private by design: the app works completely offline, needs no account and requests no permissions. Your queries stay on your device. SQL Builder Pro Lite never connects to a database server; its SQL Lab runs SQL only in a SQLite database kept on your device.
 
   Before publishing, make sure every claim still matches the app, and don't add unverifiable claims ("best", "#1").
 - [ ] App icon: `store/play-icon-512.png`

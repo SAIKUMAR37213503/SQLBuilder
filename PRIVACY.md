@@ -1,10 +1,12 @@
 # Privacy Policy: SQL Builder Pro Lite
 
-_Last updated: 27 September 2026_
+_Last updated: 2 October 2026_
 
 This policy covers the **SQL Builder Pro Lite** Android app (package `com.saikumar.sqlbuilder`) and the SQL Builder website. They are the same application.
 
-SQL Builder Pro Lite is a tool that **writes SQL text**. It does not connect to any database, it does not run the SQL it generates, and it has no accounts, server or backend.
+SQL Builder Pro Lite is a tool that **writes SQL text**. It has no accounts, server or backend, and it does not connect to any database server.
+
+Its optional **SQL Lab** lets you create databases and run SQL in them. These databases are created and kept **on your device** by a database engine (SQLite) that is part of the app; SQL Lab only runs SQL you choose to run, and neither your SQL nor your data leaves your device.
 
 ## What the app stores, and where
 
@@ -16,17 +18,18 @@ Everything you enter stays **on your device**:
 | Query history | Lets you reopen recent queries (can be turned off in Settings) | Same |
 | Saved templates | Queries you chose to save | Same |
 | Settings (theme, dialect, formatting options) | Remembers your preferences | Same |
+| SQL Lab databases (tables and data you create) and their names | Lets you work with data in SQL Lab | App storage on your device (the browser's private file storage for the app); names in localStorage |
 
 - This data is never sent to the developer or anyone else.
 - On Android, the app opts out of Android backup (`allowBackup="false"`), so it is not copied to Google Drive or other backups. It is deleted when you uninstall the app or clear its storage.
-- You can delete history, templates, settings and the query in progress at any time: **Settings → Delete all saved data…** in the app (or **Clear history** in the History tab), or Android **Settings → Apps → SQL Builder Pro Lite → Storage → Clear storage**.
+- You can delete history, templates, settings, SQL Lab databases and the query in progress at any time: **Settings → Delete all saved data…** in the app (or **Clear history** in the History tab), or Android **Settings → Apps → SQL Builder Pro Lite → Storage → Clear storage**.
 
 ## What the app does not do
 
 - It collects no personal information. There are no accounts or sign-in.
 - It includes no analytics, crash reporting, advertising or tracking SDKs.
 - It makes no network requests. The Android app is packaged with all its files and requests **no Android permissions**, not even internet access. The only entry in its manifest is an internal permission, added by the AndroidX library, that stops other apps from sending it broadcasts.
-- It doesn't connect to databases or execute SQL.
+- It doesn't connect to database servers or cloud databases. SQL runs only in SQL Lab, only when you run it, and only in the database on your device.
 - It doesn't upload your queries or send them to any external service or AI.
 
 ## Sharing and exporting
@@ -39,7 +42,7 @@ When you tap **Copy**, **Share** or **Download/Export**, the app hands the SQL o
 ## The website
 
 The website version (hosted on Vercel) works the same way:
-- your data is stored only in your browser's localStorage;
+- your data is stored only in your browser (localStorage, and the browser's private file storage for SQL Lab databases);
 - the page sends nothing you type to any server.
 
 Like any web host, Vercel receives standard request information, such as your IP address and browser type, when your browser downloads the page. That is outside the app's code and is covered by [Vercel's privacy policy](https://vercel.com/legal/privacy-policy). The Android app does not contact Vercel or any other server.

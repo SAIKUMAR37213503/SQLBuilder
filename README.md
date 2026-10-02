@@ -2,7 +2,7 @@
 
 Build SQL visually in your browser: SELECT (with joins, nested conditions, subqueries, CTEs, CASE, window functions, grouping and UNION / INTERSECT / EXCEPT), INSERT, UPDATE and DELETE. The output is clean, consistently formatted SQL for Generic SQL, PostgreSQL, MySQL or SQL Server.
 
-It is a static page with no server, no accounts and no analytics. It **never connects to a database or runs queries**, and nothing you type leaves your browser.
+It is a static page with no server, no accounts and no analytics. It **never connects to a database server**, and nothing you type leaves your browser. The optional **SQL Lab** runs SQL in a SQLite database embedded in the app and kept on your device (see [SQL Lab](#sql-lab)).
 
 **▶ Live app: [sql-builder-saikumar.vercel.app](https://sql-builder-saikumar.vercel.app)**. It is redeployed automatically from `main`.
 
@@ -15,6 +15,13 @@ It comes in four forms, all built from the same code:
 ---
 
 ## Features
+
+**SQL Lab (embedded database):** create databases that live on your device and see what they contain.
+- Databases are kept in the browser's private storage for this site (the Origin Private File System), so they survive reloads and work offline. They are shared by all projects.
+- Create, open, rename, duplicate, close and delete databases; browse their tables and views, with columns, types, keys, foreign keys, the real row count and the `CREATE` statement.
+- **Create in SQL Lab…** (Schema tab) creates your schema's tables in a new or existing database. It shows the exact SQL first, lists anything changed for SQLite (for example `NVARCHAR(MAX)` is written as `NVARCHAR`, and `dbo.Employees` becomes `Employees` because SQLite has no schemas), skips tables the database already has, and runs it all as one transaction.
+- The engine is [SQLite](https://sqlite.org) compiled to WebAssembly (`@sqlite.org/sqlite-wasm`, pinned). It runs in a background worker, starts only when SQL Lab is first opened, and is served from the app itself (never a CDN).
+- SQLite's SQL is close to standard SQL but not the same as SQL Server, PostgreSQL or MySQL. SQL Lab says so on screen and never rewrites your SQL to pretend otherwise.
 
 **Query types:** SELECT, INSERT, UPDATE, DELETE.
 
@@ -157,7 +164,7 @@ What changes per dialect:
 
 Everything else (joins, WHERE, GROUP BY, CTEs, CASE, INSERT … SELECT, UPDATE, DELETE, the other window functions and frames) is written the same way in every dialect.
 
-Not built for any dialect yet: `RETURNING` / `OUTPUT` and `MERGE`. The builder doesn't add SQL Server's `OPTION (MAXRECURSION n)` or change MySQL's `cte_max_recursion_depth`. Functions and data types you type (date/time functions, casts, …) are not translated between dialects: expressions are passed through unchanged, and the only check on them is the `TRUE` / `FALSE` warning on SQL Server. The app never connects to a database, so it can't check a specific server version or schema.
+Not built for any dialect yet: `RETURNING` / `OUTPUT` and `MERGE`. The builder doesn't add SQL Server's `OPTION (MAXRECURSION n)` or change MySQL's `cte_max_recursion_depth`. Functions and data types you type (date/time functions, casts, …) are not translated between dialects: expressions are passed through unchanged, and the only check on them is the `TRUE` / `FALSE` warning on SQL Server. The builder never connects to a database server, so it can't check a specific server version or schema.
 
 ## Example
 
@@ -256,6 +263,15 @@ src/
 ├── suggest.js        Which tables/columns a builder field can use (scope, aliases, CTEs)
 ├── joins.js          JOIN assistant (ON from foreign keys) and schema checks (tips/warnings)
 ├── storage.js        Guarded localStorage wrapper
+├── db/               SQL Lab's database engine
+│   ├── engine.js         The engine contract, errors with line/column, database ids
+│   ├── sqlite-adapter.js SQLite: open/create/delete, run scripts statement by statement, pages of rows, schema
+│   ├── files.js          Where database files live: OPFS (opfs-sahpool) or memory
+│   ├── worker.js         The database worker (bundled to dist/db-worker.js by scripts/build-worker.mjs)
+│   ├── dispatch.js       The operations a client may call, and errors as plain data
+│   ├── client.js         Worker client (lazy start, restart, failure state) and an in-page client for tests
+│   ├── databases.js      The SQL Lab's database list (names, dates), app-wide
+│   └── schema-sql.js     Schema tab tables as SQLite CREATE TABLE, with notes on what was adapted
 ├── section-help.js   The explanations shown by each section's info button
 ├── settings.js / history.js / templates.js / undo.js / examples.js
 ├── app.js            Controller: state, events, rendering pipeline
@@ -276,6 +292,7 @@ src/
     ├── versions.js   The template Versions dialog
     ├── help-popover.js  The info buttons' shared popover and its placement
     ├── projects.js   The Projects dialog's list
+    ├── lab.js        The SQL Lab view: databases, tables, structure, Create in SQL Lab dialog
     ├── theme.js, shortcuts.js, dom.js (safe element builder)
 ```
 
@@ -300,9 +317,9 @@ Design decisions:
 See [SECURITY.md](SECURITY.md). In short:
 - No network requests are made with your data.
 - User input is rendered as text only.
-- Imported JSON and pasted SQL are validated and never executed.
+- Imported JSON and pasted SQL are validated and never executed. SQL Lab only runs SQL you choose to run, in the embedded database on your device.
 - Storage is limited to this browser, and you can delete it from Settings.
-- The deployment sends a strict Content-Security-Policy. The Android app embeds an equivalent CSP.
+- The deployment sends a strict Content-Security-Policy. The Android app embeds an equivalent CSP. Both allow `'wasm-unsafe-eval'`, which lets the page compile SQLite's WebAssembly; it does not allow `eval()`.
 - The Android app requests no permissions, has no analytics or ads, and never loads remote content. See [PRIVACY.md](PRIVACY.md).
 - The Windows (Microsoft Store) app is the same PWA, so it gets the same headers and CSP as the website.
 
@@ -342,6 +359,10 @@ Fabric_Sync/                                      ← unrelated Power BI content
 ```
 
 ## Limitations
+
+- **SQL Lab** runs SQLite only. SQL written for SQL Server, PostgreSQL or MySQL may fail or behave differently there (for example `TOP`, `OFFSET … FETCH`, `NVARCHAR(MAX)`, schemas like `dbo.`). It can't connect to a database server.
+- SQL Lab's databases can be used in one tab or window at a time; a second one shows a notice with Try again. If the browser can't store files (older browsers, some private modes), databases last only until the page is closed, and the page says so.
+- SQL Lab databases aren't in backups yet.
 
 - **Not a SQL parser.** Expressions you type (columns, custom conditions, CASE parts, INSERT values) are inserted as written. Validation only checks balanced quotes and parentheses and rejects `;` and `--`. It cannot tell whether a column exists or a function is valid.
 - Import SQL reads one statement. INSERT with `DEFAULT VALUES`, `SET`, `IGNORE` or `RETURNING`; UPDATE with an alias, `FROM`, several tables, `ORDER BY`/`LIMIT` or `OUTPUT`; DELETE with `USING`, a join or an alias; any statement after `WITH`; and SELECTs using `DISTINCT ON`, `USING`, `NATURAL` or `LATERAL` joins, `APPLY`, comma-separated FROM tables, table functions or hints, `MATERIALIZED` CTEs, `NULLS FIRST/LAST`, `WITH ROLLUP`, named windows, parenthesized UNION parts, `FOR UPDATE`, `RETURNING` or a SELECT without FROM, are refused with their location. Comments aren't kept, PostgreSQL parameter names can't be recovered from `$1`, and a CASE or window column the builder can't write the same way stays a plain expression.
