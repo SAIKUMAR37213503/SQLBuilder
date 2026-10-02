@@ -68,6 +68,32 @@ export function unreadableFile(head, name) {
     return null;
 }
 
+/**
+ * The text encoding a file's byte order mark names. SQL Server Management
+ * Studio saves scripts as UTF-16 ("Unicode text") by default.
+ * @param {Uint8Array} head the first bytes of the file
+ * @returns {'utf-8' | 'utf-16le' | 'utf-16be'}
+ */
+export function textEncoding(head) {
+    if (head[0] === 0xff && head[1] === 0xfe) return 'utf-16le';
+    if (head[0] === 0xfe && head[1] === 0xff) return 'utf-16be';
+    return 'utf-8';
+}
+
+/**
+ * The text of a file, decoded by its byte order mark (UTF-8 without one).
+ * The mark itself is dropped.
+ * @param {Uint8Array} bytes
+ */
+export function decodeText(bytes) {
+    return new TextDecoder(textEncoding(bytes)).decode(bytes);
+}
+
+/** The largest file that can be imported: UTF-16 takes two bytes a character. */
+export function maxFileBytes(head) {
+    return textEncoding(head) === 'utf-8' ? MAX_IMPORT_BYTES : MAX_IMPORT_BYTES * 2;
+}
+
 /** A table name from a file name: employees.csv → employees (employees.csv.bak too). */
 export function tableNameFor(fileName) {
     const stem = String(fileName || '').replace(/\.bak$/i, '').replace(/\.[^.]*$/, '').trim();

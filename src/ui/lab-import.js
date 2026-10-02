@@ -7,7 +7,7 @@
 import { h, debounce } from './dom.js';
 import { showDialog, closeDialog } from './dialogs.js';
 import { renderSqlCode } from './output.js';
-import { detectFormat, tableNameFor, unreadableFile, MAX_IMPORT_BYTES } from '../db/importer.js';
+import { detectFormat, tableNameFor, unreadableFile, decodeText, maxFileBytes } from '../db/importer.js';
 import { looksLikeSqlServer } from '../db/import-sqlserver.js';
 import { COLUMN_TYPES, TYPE_LABELS, createTableSql, insertSql } from '../db/import-types.js';
 import { delimiterName } from '../db/import-csv.js';
@@ -111,12 +111,19 @@ export function createImportDialog({ dialog, client, lab, toast }) {
 
     async function readFile(chosen) {
         el.error.textContent = '';
-        if (chosen.size > MAX_IMPORT_BYTES) {
-            el.error.textContent = `${chosen.name} is ${sizeText(chosen.size)}; files up to ${MAX_IMPORT_BYTES / 1024 / 1024} MB can be imported.`;
+        let head;
+        try {
+            head = new Uint8Array(await chosen.slice(0, 4096).arrayBuffer());
+        } catch {
+            el.error.textContent = `${chosen.name} couldn't be read.`;
+            return;
+        }
+        const limit = maxFileBytes(head);
+        if (chosen.size > limit) {
+            el.error.textContent = `${chosen.name} is ${sizeText(chosen.size)}; files up to ${limit / 1024 / 1024} MB can be imported.`;
             return;
         }
         try {
-            const head = new Uint8Array(await chosen.slice(0, 4096).arrayBuffer());
             const problem = unreadableFile(head, chosen.name);
             if (problem) {
                 // Not left looking as if the previous file were still chosen
@@ -129,7 +136,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
             }
             const database = isSqliteFile(head) || detectFormat({ name: chosen.name }) === 'sqlite';
             const bytes = database ? new Uint8Array(await chosen.arrayBuffer()) : null;
-            file = { name: chosen.name, size: chosen.size, text: database ? null : await chosen.text(), bytes };
+            file = { name: chosen.name, size: chosen.size, text: database ? null : decodeText(new Uint8Array(await chosen.arrayBuffer())), bytes };
         } catch {
             el.error.textContent = `${chosen.name} couldn't be read.`;
             return;

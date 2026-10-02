@@ -328,6 +328,30 @@ describe('importing a SQL Server script', () => {
         expect(await query('SELECT count(*) FROM FactInternetSales')).toEqual([[3]]);
     });
 
+    test('a script SSMS saved as Unicode text (UTF-16) imports like the UTF-8 one', async () => {
+        boot();
+        await openLab();
+        await openImport();
+        const utf16 = new Uint8Array(2 + SSMS.length * 2);
+        utf16[0] = 0xff;
+        utf16[1] = 0xfe;
+        for (let i = 0; i < SSMS.length; i++) {
+            const code = SSMS.charCodeAt(i);
+            utf16[2 + i * 2] = code & 0xff;
+            utf16[3 + i * 2] = code >> 8;
+        }
+        await choose(new File([utf16], 'AdventureWorksDW2025.sql'));
+        expect(text('#lab-import-error')).toBe('');
+        expect($('#lab-import-format').value).toBe('sql');
+        expect($('#lab-import-adapt-field').hidden).toBe(false);
+        expect(text('#lab-import-preview')).toContain('Adapted for SQLite:');
+        $('#lab-import-run').click();
+        await settle();
+        expect(text('#lab-import-error')).toBe('');
+        expect(await tableNames()).toEqual(['DimCurrency', 'DimCustomer', 'FactInternetSales']);
+        expect(await query('SELECT count(*) FROM FactInternetSales')).toEqual([[3]]);
+    });
+
     test('the box isn\'t offered for a plain script', async () => {
         boot();
         await openLab();
