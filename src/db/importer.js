@@ -15,11 +15,14 @@ import { parseHtmlRows, looksLikeHtml } from './import-html.js';
 import { readScript, runnableScript, groupStatements } from './import-sql.js';
 import { adaptSqlServerScript, looksLikeSqlServer } from './import-sqlserver.js';
 import { COLUMN_TYPES, describeColumns, uniqueNames, bindValue, createTableSql, insertSql } from './import-types.js';
+import { MAX_FILE_BYTES, textEncoding } from './import-stream.js';
 
-/** Files larger than this aren't imported. */
+export { textEncoding };
+
+/** Pasted text longer than this isn't imported (a file is read in parts, up to MAX_FILE_BYTES). */
 export const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
 export const PREVIEW_ROWS = 50;
-const MAX_COLUMNS = 2000;
+export const MAX_COLUMNS = 2000;
 export const MAX_TABLE_NAME = 128;
 
 const FIRST_SQL_WORD = /^(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|WITH|BEGIN|COMMIT|PRAGMA|VALUES|SET|USE|DECLARE|START|EXPLAIN|ANALYZE|VACUUM|REINDEX|TRUNCATE|GRANT|LOCK)\b/i;
@@ -72,18 +75,6 @@ export function unreadableFile(head, name) {
 }
 
 /**
- * The text encoding a file's byte order mark names. SQL Server Management
- * Studio saves scripts as UTF-16 ("Unicode text") by default.
- * @param {Uint8Array} head the first bytes of the file
- * @returns {'utf-8' | 'utf-16le' | 'utf-16be'}
- */
-export function textEncoding(head) {
-    if (head[0] === 0xff && head[1] === 0xfe) return 'utf-16le';
-    if (head[0] === 0xfe && head[1] === 0xff) return 'utf-16be';
-    return 'utf-8';
-}
-
-/**
  * The text of a file, decoded by its byte order mark (UTF-8 without one).
  * The mark itself is dropped.
  * @param {Uint8Array} bytes
@@ -92,9 +83,9 @@ export function decodeText(bytes) {
     return new TextDecoder(textEncoding(bytes)).decode(bytes);
 }
 
-/** The largest file that can be imported: UTF-16 takes two bytes a character. */
-export function maxFileBytes(head) {
-    return textEncoding(head) === 'utf-8' ? MAX_IMPORT_BYTES : MAX_IMPORT_BYTES * 2;
+/** The largest file that can be imported (it is read a few MB at a time). */
+export function maxFileBytes() {
+    return MAX_FILE_BYTES;
 }
 
 /** A table name from a file name: employees.csv → employees (employees.csv.bak too). */
@@ -108,8 +99,8 @@ function checkSize(text) {
     if (text.length > MAX_IMPORT_BYTES) throw new DatabaseError(`This is too large to import (the limit is ${MAX_IMPORT_BYTES / 1024 / 1024} MB).`, { code: 'TOO_LARGE' });
 }
 
-const TABULAR = ['csv', 'json', 'html'];
-const NOT_TABULAR = 'Choose SQL, CSV, JSON or HTML.';
+export const TABULAR = ['csv', 'json', 'html'];
+export const NOT_TABULAR = 'Choose SQL, CSV, JSON or HTML.';
 
 /**
  * CSV, JSON or an HTML table as columns and rows.
@@ -145,7 +136,26 @@ function readTable(format, text, { delimiter = 'auto', header = true, table } = 
     return { columns: uniqueNames(names), rows, lines, nested: 0, from: null, delimiter: used, header, html: null };
 }
 
-const display = (/** @type {unknown} */ value) => (typeof value === 'boolean' ? String(value) : value ?? null);
+export const display = (/** @type {unknown} */ value) => (typeof value === 'boolean' ? String(value) : value ?? null);
+
+/**
+ * What a preview says about how a table's values are read.
+ * @param {'csv' | 'json' | 'html'} format
+ * @param {{ from: string | null, nested: number, html: { spanned: number, padded: number } | null, described: { type: string }[] }} table
+ */
+export function tableNotes(format, { from, nested, html, described }) {
+    const notes = [];
+    if (from) notes.push(`The rows are read from the "${from}" list.`);
+    if (nested) notes.push(`${nested.toLocaleString()} ${nested === 1 ? 'value is a nested object or list; it is' : 'values are nested objects or lists; they are'} stored as JSON text.`);
+    if (html) {
+        if (html.spanned) notes.push(`${html.spanned.toLocaleString()} ${html.spanned === 1 ? 'cell spans' : 'cells span'} several columns: the value goes in the first, and the others are NULL.`);
+        if (html.padded) notes.push(`${html.padded.toLocaleString()} ${html.padded === 1 ? 'row has' : 'rows have'} fewer cells than the widest row; the missing cells are NULL.`);
+        notes.push('Cells are read as plain text: tags and styles are dropped. Empty cells become NULL.');
+    } else if (format === 'csv') notes.push('Empty cells become NULL. A quoted empty value ("") becomes empty text.');
+    else notes.push('Missing keys and null become NULL. true and false are stored as 1 and 0 (SQLite has no boolean type).');
+    if (described.some(c => c.type === 'DATE' || c.type === 'DATETIME')) notes.push('SQLite has no date type: dates are stored as text, like 2024-01-31, which sorts and compares correctly.');
+    return notes;
+}
 
 /**
  * What an import would do. Changes nothing.
@@ -183,16 +193,7 @@ export function previewImport({ format, text, options = {}, adapt = false }) {
     if (!TABULAR.includes(format)) throw new DatabaseError(NOT_TABULAR, { code: 'BAD_INPUT' });
     const table = readTable(format, text, options);
     const described = describeColumns(table.rows, table.columns.length);
-    const notes = [];
-    if (table.from) notes.push(`The rows are read from the "${table.from}" list.`);
-    if (table.nested) notes.push(`${table.nested.toLocaleString()} ${table.nested === 1 ? 'value is a nested object or list; it is' : 'values are nested objects or lists; they are'} stored as JSON text.`);
-    if (table.html) {
-        if (table.html.spanned) notes.push(`${table.html.spanned.toLocaleString()} ${table.html.spanned === 1 ? 'cell spans' : 'cells span'} several columns: the value goes in the first, and the others are NULL.`);
-        if (table.html.padded) notes.push(`${table.html.padded.toLocaleString()} ${table.html.padded === 1 ? 'row has' : 'rows have'} fewer cells than the widest row; the missing cells are NULL.`);
-        notes.push('Cells are read as plain text: tags and styles are dropped. Empty cells become NULL.');
-    } else if (format === 'csv') notes.push('Empty cells become NULL. A quoted empty value ("") becomes empty text.');
-    else notes.push('Missing keys and null become NULL. true and false are stored as 1 and 0 (SQLite has no boolean type).');
-    if (described.some(c => c.type === 'DATE' || c.type === 'DATETIME')) notes.push('SQLite has no date type: dates are stored as text, like 2024-01-31, which sorts and compares correctly.');
+    const notes = tableNotes(format, { from: table.from, nested: table.nested, html: table.html, described });
     return {
         format,
         delimiter: table.delimiter,
@@ -204,6 +205,41 @@ export function previewImport({ format, text, options = {}, adapt = false }) {
         sample: table.rows.slice(0, PREVIEW_ROWS).map(row => row.map(display)),
         notes
     };
+}
+
+/**
+ * Checks where imported rows go: a new table (its CREATE TABLE is returned
+ * as `setup`) or an existing one, whose columns the file's must match.
+ * @param {any} adapter
+ * @param {string[]} names the file's column names
+ * @param {{ mode: 'new' | 'append', table: string, types?: string[] } | undefined} target
+ */
+export function prepareTarget(adapter, names, target) {
+    const name = String(target?.table ?? '').trim();
+    if (!name) throw new DatabaseError('Enter a table name.', { code: 'BAD_INPUT' });
+    if (name.length > MAX_TABLE_NAME) throw new DatabaseError(`Table names can be up to ${MAX_TABLE_NAME} characters.`, { code: 'BAD_INPUT' });
+    if (/^sqlite_/i.test(name)) throw new DatabaseError('Names starting with "sqlite_" are reserved by SQLite.', { code: 'BAD_INPUT' });
+    const existing = adapter.schema().find((/** @type {any} */ o) => o.name.toLowerCase() === name.toLowerCase());
+
+    /** @type {string[]} */
+    let setup = [];
+    let tableName = name;
+    let columns = names;
+    if (target?.mode === 'append') {
+        if (!existing || existing.type !== 'table') throw new DatabaseError(`There is no table named ${name} in this database.`, { code: 'BAD_INPUT' });
+        tableName = existing.name;
+        const byName = new Map(existing.columns.map((/** @type {any} */ c) => [c.name.toLowerCase(), c.name]));
+        const missing = columns.filter(c => !byName.has(c.toLowerCase()));
+        if (missing.length) throw new DatabaseError(`${existing.name} has no ${missing.length === 1 ? 'column' : 'columns'} named ${missing.join(', ')}. Rename ${missing.length === 1 ? 'it' : 'them'} in the file to match, or import into a new table.`, { code: 'BAD_INPUT' });
+        columns = columns.map(c => byName.get(c.toLowerCase()));
+    } else {
+        if (existing) throw new DatabaseError(`This database already has a ${existing.type} named ${existing.name}. Choose another name, or add the rows to that table.`, { code: 'EXISTS' });
+        const types = target?.types || [];
+        const chosen = columns.map((_, i) => (COLUMN_TYPES.includes(types[i]) ? types[i] : null));
+        if (chosen.some(t => t === null)) throw new DatabaseError('Choose a type for every column.', { code: 'BAD_INPUT' });
+        setup = [createTableSql(name, columns.map((c, i) => ({ name: c, type: /** @type {string} */ (chosen[i]) })))];
+    }
+    return { setup, tableName, columns };
 }
 
 /**
@@ -227,30 +263,7 @@ export function runImport(adapter, { format, text, options = {}, target, adapt =
     }
     if (!TABULAR.includes(format)) throw new DatabaseError(NOT_TABULAR, { code: 'BAD_INPUT' });
     const table = readTable(format, text, options);
-    const name = String(target?.table ?? '').trim();
-    if (!name) throw new DatabaseError('Enter a table name.', { code: 'BAD_INPUT' });
-    if (name.length > MAX_TABLE_NAME) throw new DatabaseError(`Table names can be up to ${MAX_TABLE_NAME} characters.`, { code: 'BAD_INPUT' });
-    if (/^sqlite_/i.test(name)) throw new DatabaseError('Names starting with "sqlite_" are reserved by SQLite.', { code: 'BAD_INPUT' });
-    const existing = adapter.schema().find((/** @type {any} */ o) => o.name.toLowerCase() === name.toLowerCase());
-
-    /** @type {string[]} */
-    let setup = [];
-    let tableName = name;
-    let columns = table.columns;
-    if (target?.mode === 'append') {
-        if (!existing || existing.type !== 'table') throw new DatabaseError(`There is no table named ${name} in this database.`, { code: 'BAD_INPUT' });
-        tableName = existing.name;
-        const byName = new Map(existing.columns.map((/** @type {any} */ c) => [c.name.toLowerCase(), c.name]));
-        const missing = columns.filter(c => !byName.has(c.toLowerCase()));
-        if (missing.length) throw new DatabaseError(`${existing.name} has no ${missing.length === 1 ? 'column' : 'columns'} named ${missing.join(', ')}. Rename ${missing.length === 1 ? 'it' : 'them'} in the file to match, or import into a new table.`, { code: 'BAD_INPUT' });
-        columns = columns.map(c => byName.get(c.toLowerCase()));
-    } else {
-        if (existing) throw new DatabaseError(`This database already has a ${existing.type} named ${existing.name}. Choose another name, or add the rows to that table.`, { code: 'EXISTS' });
-        const types = target?.types || [];
-        const chosen = columns.map((_, i) => (COLUMN_TYPES.includes(types[i]) ? types[i] : null));
-        if (chosen.some(t => t === null)) throw new DatabaseError('Choose a type for every column.', { code: 'BAD_INPUT' });
-        setup = [createTableSql(name, columns.map((c, i) => ({ name: c, type: /** @type {string} */ (chosen[i]) })))];
-    }
+    const { setup, tableName, columns } = prepareTarget(adapter, table.columns, target);
     const rows = table.rows.map(row => row.map(bindValue));
     try {
         const result = adapter.insertRows({ setup, sql: insertSql(tableName, columns), rows });
