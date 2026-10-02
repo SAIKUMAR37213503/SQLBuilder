@@ -3042,3 +3042,155 @@ describe('projects', () => {
         expect(toast()).toBe('Opened project “Main”.');
     });
 });
+
+describe('section help', () => {
+    const popover = () => $('#help-popover');
+    const helpFor = (key) => $(`[data-help="${key}"]`);
+    const pointer = (type, target, options = {}) => {
+        const Event = window.PointerEvent || MouseEvent;
+        target.dispatchEvent(new Event(type, { bubbles: true, pointerType: 'mouse', ...options }));
+    };
+    const selectType = (type) => {
+        const radio = $(`input[name="query-type"][value="${type}"]`);
+        radio.checked = true;
+        radio.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    test('each section of the main query has an info button outside its header', async () => {
+        add('select.ctes', 'cte');
+        await settle();
+        const buttons = $$('#builder [data-help]');
+        expect(buttons.map(b => b.dataset.help)).toEqual(['with', 'columns', 'from', 'joins', 'where', 'grouping', 'sorting', 'setops']);
+        for (const b of buttons) {
+            expect(b.type).toBe('button');
+            expect(b.closest('summary')).toBe(null);
+            expect(b.getAttribute('aria-expanded')).toBe('false');
+            expect(b.getAttribute('aria-controls')).toBe('help-popover');
+        }
+        expect(helpFor('where').getAttribute('aria-label')).toBe('About WHERE');
+        // The CTE's own query repeats the sections without the buttons
+        expect($$('[data-path="select.ctes.0.query"] [data-help]')).toHaveLength(0);
+        expect(popover().hidden).toBe(true);
+        expect(popover().getAttribute('role')).toBe('tooltip');
+    });
+
+    test('a click opens it and keeps it open; it explains the clause and leaves the section and query alone', async () => {
+        await fillSimpleSelect();
+        const before = JSON.stringify(app.state.workspace);
+        const sqlBefore = sql();
+        const details = $('[data-section="select:where"]');
+        const wasOpen = details.open;
+        helpFor('where').click();
+        expect(popover().hidden).toBe(false);
+        expect($('.help-title').textContent).toBe('WHERE — Filter rows');
+        expect($$('.help-list dt').map(n => n.textContent)).toEqual(['What it is', 'What SQL does', 'Example']);
+        expect($('.help-list dd').textContent).toBe('Filters rows based on a condition.');
+        expect($('.help-code').textContent).toBe('WHERE Salary > 50000');
+        expect($('.help-note')).toBe(null);
+        expect(helpFor('where').getAttribute('aria-expanded')).toBe('true');
+        expect(helpFor('where').getAttribute('aria-describedby')).toBe('help-popover');
+        expect(details.open).toBe(wasOpen);
+        await settle();
+        expect(popover().hidden).toBe(false);
+        expect(JSON.stringify(app.state.workspace)).toBe(before);
+        expect(sql()).toBe(sqlBefore);
+        // Again: closes
+        helpFor('where').click();
+        expect(popover().hidden).toBe(true);
+        expect(helpFor('where').getAttribute('aria-expanded')).toBe('false');
+        expect(helpFor('where').hasAttribute('aria-describedby')).toBe(false);
+    });
+
+    test('GROUP BY & HAVING explains both parts', () => {
+        helpFor('grouping').click();
+        expect($$('.help-list dt').map(n => n.textContent)).toEqual(['GROUP BY', 'HAVING', 'What SQL does', 'Example']);
+    });
+
+    test('hovering the button or the section title opens it; leaving closes it', async () => {
+        pointer('pointerover', helpFor('joins'));
+        await vi.advanceTimersByTimeAsync(299);
+        expect(popover().hidden).toBe(true);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(popover().hidden).toBe(false);
+        expect($('.help-title').textContent).toBe('Joins — Combine rows from other tables');
+        // Moving onto the popover keeps it open to read
+        pointer('pointerout', helpFor('joins'), { relatedTarget: popover() });
+        await settle();
+        expect(popover().hidden).toBe(false);
+        pointer('pointerleave', popover(), { relatedTarget: document.body });
+        await vi.advanceTimersByTimeAsync(150);
+        expect(popover().hidden).toBe(true);
+
+        const title = $('[data-section="select:from"] .section-title');
+        pointer('pointerover', title);
+        await vi.advanceTimersByTimeAsync(400);
+        expect(popover().hidden).toBe(true);
+        await vi.advanceTimersByTimeAsync(200);
+        expect($('.help-title').textContent).toBe('FROM — Where the rows come from');
+        expect(helpFor('from').getAttribute('aria-expanded')).toBe('true');
+        pointer('pointerout', title, { relatedTarget: document.body });
+        await settle();
+        expect(popover().hidden).toBe(true);
+        // Leaving before the delay never shows it; a touch doesn't count as hover
+        pointer('pointerover', helpFor('where'));
+        pointer('pointerout', helpFor('where'), { relatedTarget: document.body });
+        pointer('pointerover', helpFor('where'), { pointerType: 'touch' });
+        await settle();
+        expect(popover().hidden).toBe(true);
+    });
+
+    test('keyboard focus opens it, Escape and moving on close it', async () => {
+        helpFor('columns').focus();
+        expect(popover().hidden).toBe(false);
+        expect($('.help-title').textContent).toBe('Columns — What each result row contains');
+        press('Escape', {}, helpFor('columns'));
+        expect(popover().hidden).toBe(true);
+        expect(document.activeElement).toBe(helpFor('columns'));
+        helpFor('from').focus();
+        expect($('.help-title').textContent).toBe('FROM — Where the rows come from');
+        field('select.from.table').focus();
+        expect(popover().hidden).toBe(true);
+    });
+
+    test('a pinned one closes on a click elsewhere', () => {
+        helpFor('setops').click();
+        expect($('.help-title').textContent).toBe('UNION / INTERSECT / EXCEPT — Combine result sets');
+        pointer('pointerdown', popover());
+        expect(popover().hidden).toBe(false);
+        pointer('pointerdown', field('select.from.table'));
+        expect(popover().hidden).toBe(true);
+    });
+
+    test('follows the dialect: titles, examples and notes', async () => {
+        pickDialect('sqlserver');
+        await settle();
+        expect(helpFor('sorting').getAttribute('aria-label')).toBe('About ORDER BY, TOP & OFFSET');
+        helpFor('sorting').click();
+        expect($('.help-title').textContent).toBe('ORDER BY, TOP & OFFSET — Sort, limit and skip rows');
+        expect($('.help-code').textContent).toBe('ORDER BY salary DESC OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY');
+        expect($('.help-note').textContent).toMatch(/^SQL Server: A limit alone is written SELECT TOP n\./);
+        // The builder redraws for another dialect: the open popover closes
+        pickDialect('mysql');
+        await settle();
+        expect(popover().hidden).toBe(true);
+        helpFor('joins').click();
+        expect($('.help-note').textContent).toBe('MySQL: No FULL JOIN; a LEFT JOIN and a RIGHT JOIN combined with UNION gives the same rows.');
+    });
+
+    test('INSERT, UPDATE and DELETE have a heading with help', async () => {
+        for (const [type, heading] of [['insert', 'INSERTAdd new rows'], ['update', 'UPDATEChange existing rows'], ['delete', 'DELETERemove rows']]) {
+            selectType(type);
+            await settle();
+            expect($('.dml-title').textContent).toBe(heading);
+            expect($$('#builder [data-help]').map(b => b.dataset.help)).toEqual([type]);
+            helpFor(type).click();
+            expect($('.help-title').textContent.startsWith(type.toUpperCase())).toBe(true);
+            helpFor(type).click();
+        }
+        // INSERT … SELECT: the inner query's sections have no buttons
+        selectType('insert');
+        choose('insert.source', 'select');
+        await settle();
+        expect($$('#builder [data-help]').map(b => b.dataset.help)).toEqual(['insert']);
+    });
+});

@@ -29,6 +29,8 @@ import {
 import { EXAMPLES, EXAMPLE_TOPICS, EXAMPLE_LEVELS, examplesFor, formatSample } from './examples.js';
 import { h, byPath, debounce, cssEscape, formatTime } from './ui/dom.js';
 import { renderEditor } from './ui/builder.js';
+import { createHelpPopover } from './ui/help-popover.js';
+import { sectionHelp } from './section-help.js';
 import { renderSqlCode, selectContents } from './ui/output.js';
 import { renderDialectComparison } from './ui/compare.js';
 import { renderHistoryList, renderTemplateList, renderExampleList, renderSchemaList, renderSchemaImportPreview } from './ui/library.js';
@@ -286,6 +288,15 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         dialect: () => getDialect(state.settings.dialect)
     };
 
+    // Section help: one popover for every info button in the builder
+    const helpPopover = createHelpPopover({
+        doc,
+        root: el.builder,
+        content: (key) => sectionHelp(key, state.settings.dialect),
+        dialectLabel: () => getDialect(state.settings.dialect).shortLabel,
+        signal
+    });
+
     function renderBuilder(focus = null) {
         const active = /** @type {any} */ (doc.activeElement);
         const previous = active && el.builder.contains(active)
@@ -294,6 +305,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
         if (suggester) suggester.close();
         el.builder.replaceChildren(renderEditor(state.workspace, ui));
+        helpPopover.sync();
         renderJoinHints();
 
         const target = focus || previous;
