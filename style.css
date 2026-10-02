@@ -421,7 +421,7 @@ kbd {
 
 .item-list { display: grid; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
 /* Long option labels (e.g. in a UNION card's select) must not widen the page */
-.item-list > li, .card > *, .select-editor > .section { min-width: 0; }
+.item-list > li, .card > *, .select-editor > .section, .select-editor > .section-frame { min-width: 0; }
 .card-header > .select { flex: 0 1 auto; min-width: 0; }
 
 .row {
@@ -531,6 +531,9 @@ kbd {
 }
 
 .dml-editor { display: grid; gap: 0.9rem; }
+.dml-head { display: flex; gap: 0.5rem; align-items: center; justify-content: space-between; }
+.dml-title { display: flex; flex-wrap: wrap; gap: 0 0.5rem; align-items: baseline; min-width: 0; }
+.dml-tagline { color: var(--text-muted); font-size: 0.85rem; }
 
 .callout {
     padding: 0.6rem 0.75rem;
@@ -1283,3 +1286,67 @@ kbd {
 .project-counts { color: var(--text-2); font-size: 0.85rem; }
 .projects-new-row { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .projects-new-row .input { flex: 1 1 12rem; min-width: 0; width: auto; }
+
+/* Section help: the info button beside a section header, and its popover */
+.section-frame { position: relative; }
+.section-frame > .section > .section-summary { padding-right: 2.75rem; }
+.help-btn {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    padding: 0;
+    color: var(--text-muted);
+    font: italic 700 0.85rem/1 Georgia, "Times New Roman", serif;
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    border-radius: 50%;
+    cursor: help;
+    position: relative;
+}
+.section-frame > .help-btn { position: absolute; top: 0.45rem; right: 0.55rem; }
+.help-btn:hover, .help-btn[aria-expanded="true"] { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.help-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* A finger-sized target without a bigger circle */
+.help-btn::after { content: ""; position: absolute; inset: -0.5rem; }
+@media (pointer: coarse) {
+    .help-btn::after { inset: -0.6rem; }
+}
+
+.help-popover {
+    position: fixed;
+    z-index: 55;
+    top: 0;
+    left: 0;
+    width: max-content;
+    max-width: min(22rem, calc(100vw - 16px));
+    padding: 0.7rem 0.85rem;
+    overflow: auto;
+    color: var(--text);
+    font-size: 0.85rem;
+    line-height: 1.45;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    overscroll-behavior: contain;
+}
+.help-popover[hidden] { display: none; }
+.help-title { margin-bottom: 0.4rem; color: var(--text-2); }
+.help-title strong { color: var(--text); font-family: var(--font-mono); }
+.help-list { display: grid; gap: 0.1rem; margin: 0; }
+.help-list dt { margin-top: 0.35rem; color: var(--text-muted); font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+.help-list dt:first-child { margin-top: 0; }
+.help-list dd { margin: 0; }
+.help-code {
+    display: block;
+    padding: 0.3rem 0.45rem;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.help-note { margin-top: 0.5rem; padding-top: 0.45rem; color: var(--text-2); border-top: 1px solid var(--border); }

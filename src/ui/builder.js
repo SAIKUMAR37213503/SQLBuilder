@@ -10,6 +10,8 @@
 
 import { h } from './dom.js';
 import { getDialect } from '../dialects.js';
+import { sectionHelp } from '../section-help.js';
+import { helpButton } from './help-popover.js';
 import { OPERATORS, JOIN_TYPES, SET_OPERATORS, AGGREGATES, WINDOW_FUNCTIONS, joinPath } from '../model.js';
 
 const SET_OPERATOR_LABELS = {
@@ -138,15 +140,18 @@ function rowTools(itemPath, index, count, noun) {
 }
 
 /**
+ * A collapsible section. With `help` (a resolved sectionHelp entry) an info
+ * button sits beside the header; it is outside <summary>, so pressing it
+ * doesn't open or close the section.
  * @param {string} key
  * @param {string} title
- * @param {{ open?: boolean, count?: number, description?: string }} options
+ * @param {{ open?: boolean, count?: number, description?: string, help?: any }} options
  * @param {...any} content
  */
-function section(key, title, { open, count, description } = {}, ...content) {
-    return h('details', { class: 'section', open, dataset: { section: key } },
+function section(key, title, { open, count, description, help } = {}, ...content) {
+    const details = h('details', { class: 'section', open, dataset: { section: key } },
         h('summary', { class: 'section-summary' },
-            h('span', { class: 'section-title' }, title),
+            h('span', { class: 'section-title', dataset: { helpHover: help ? help.key : null } }, title),
             count ? h('span', { class: 'badge', 'aria-label': `${count} item${count === 1 ? '' : 's'}` }, String(count)) : null
         ),
         h('div', { class: 'section-body' },
@@ -154,6 +159,7 @@ function section(key, title, { open, count, description } = {}, ...content) {
             content
         )
     );
+    return help ? h('div', { class: 'section-frame' }, details, helpButton(help.key, help.title)) : details;
 }
 
 function addBar(...buttons) {
@@ -198,6 +204,19 @@ class Renderer {
         return section(key, title, { ...options, open: this.ui.isOpen(key, Boolean(options.open)) }, ...content);
     }
 
+    /** Help for a section of the main query (nested queries repeat the same sections, so they have none). */
+    help(key, ctx) {
+        return ctx.top ? sectionHelp(key, this.dialect.id) : null;
+    }
+
+    /** The heading of an INSERT, UPDATE or DELETE editor, with its help. */
+    dmlHead(key) {
+        const help = sectionHelp(key, this.dialect.id);
+        return h('div', { class: 'dml-head' },
+            h('p', { class: 'dml-title', dataset: { helpHover: key } }, h('strong', {}, help.title), h('span', { class: 'dml-tagline' }, help.tagline)),
+            helpButton(key, help.title));
+    }
+
     // ------------------------------------------------------------------ SELECT
 
     select(q, path, ctx) {
@@ -207,21 +226,21 @@ class Renderer {
 
         return h('div', { class: `select-editor${nested ? ' nested' : ''}`, dataset: { path } },
             ctx.top ? this.section(`${path}:ctes`, 'WITH (common table expressions)', {
-                open: q.ctes.length > 0, count: q.ctes.length,
+                open: q.ctes.length > 0, count: q.ctes.length, help: this.help('with', ctx),
                 description: 'Name a query once and use it like a table in the main query.'
             }, this.ctes(q, path, ctx)) : null,
 
-            this.section(`${path}:columns`, 'Columns', { open: true, count: q.columns.length }, this.columns(q, path)),
-            this.section(`${path}:from`, 'FROM', { open: true }, this.source(q.from, joinPath(path, 'from'), ctx, 'FROM')),
-            this.section(`${path}:joins`, 'Joins', { open: q.joins.length > 0, count: q.joins.length }, this.joins(q, path, ctx)),
-            this.section(`${path}:where`, 'WHERE (filter rows)', { open: q.where.items.length > 0, count: q.where.items.length },
+            this.section(`${path}:columns`, 'Columns', { open: true, count: q.columns.length, help: this.help('columns', ctx) }, this.columns(q, path)),
+            this.section(`${path}:from`, 'FROM', { open: true, help: this.help('from', ctx) }, this.source(q.from, joinPath(path, 'from'), ctx, 'FROM')),
+            this.section(`${path}:joins`, 'Joins', { open: q.joins.length > 0, count: q.joins.length, help: this.help('joins', ctx) }, this.joins(q, path, ctx)),
+            this.section(`${path}:where`, 'WHERE (filter rows)', { open: q.where.items.length > 0, count: q.where.items.length, help: this.help('where', ctx) },
                 this.group(q.where, joinPath(path, 'where'), ctx, { clause: 'WHERE', root: true })),
-            this.section(`${path}:grouping`, 'GROUP BY & HAVING', { open: hasGrouping, count: q.groupBy.length + q.having.items.length },
+            this.section(`${path}:grouping`, 'GROUP BY & HAVING', { open: hasGrouping, count: q.groupBy.length + q.having.items.length, help: this.help('grouping', ctx) },
                 this.grouping(q, path, ctx)),
-            ctx.branch ? null : this.section(`${path}:sorting`, `ORDER BY, ${this.dialect.ui.limitLabel} & OFFSET`, { open: hasSorting, count: q.orderBy.length },
+            ctx.branch ? null : this.section(`${path}:sorting`, `ORDER BY, ${this.dialect.ui.limitLabel} & OFFSET`, { open: hasSorting, count: q.orderBy.length, help: this.help('sorting', ctx) },
                 this.sorting(q, path)),
             ctx.branch ? null : this.section(`${path}:setops`, 'UNION / INTERSECT / EXCEPT', {
-                open: q.setOps.length > 0, count: q.setOps.length,
+                open: q.setOps.length > 0, count: q.setOps.length, help: this.help('setops', ctx),
                 description: 'Combine this query with other SELECT queries. Each must return the same number of columns.'
             }, this.setOps(q, path, ctx))
         );
@@ -549,6 +568,7 @@ class Renderer {
     insert(q, path) {
         const fromSelect = q.source === 'select';
         return h('div', { class: 'dml-editor', dataset: { path } },
+            this.dmlHead('insert'),
             field(joinPath(path, 'table'), q.table, { label: 'Table', placeholder: 'e.g. employees', required: true }),
             field(joinPath(path, 'columns'), q.columns, { label: 'Columns', placeholder: 'e.g. name, department, salary', hint: 'Comma-separated. Optional, but recommended.' }),
             h('div', { class: 'row' },
@@ -628,6 +648,7 @@ class Renderer {
 
     update(q, path) {
         return h('div', { class: 'dml-editor', dataset: { path } },
+            this.dmlHead('update'),
             field(joinPath(path, 'table'), q.table, { label: 'Table', placeholder: 'e.g. employees', required: true }),
             h('fieldset', { class: 'fieldset', dataset: { path: joinPath(path, 'set') } },
                 h('legend', {}, 'SET'),
@@ -648,6 +669,7 @@ class Renderer {
 
     delete(q, path) {
         return h('div', { class: 'dml-editor', dataset: { path } },
+            this.dmlHead('delete'),
             field(joinPath(path, 'table'), q.table, { label: 'Table', placeholder: 'e.g. audit_log', required: true }),
             this.dmlWhere(q, path, 'DELETE')
         );
