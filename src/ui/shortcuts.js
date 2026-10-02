@@ -4,12 +4,12 @@
 import { isTextEntry } from './dom.js';
 
 export const SHORTCUTS = [
-    { keys: ['Mod', 'Enter'], description: 'Generate SQL (and save it to history)' },
+    { keys: ['Mod', 'Enter'], description: 'Generate SQL (and save it to history); in SQL Lab, run the SQL' },
     { keys: ['Mod', 'Shift', 'C'], description: 'Copy SQL' },
     { keys: ['Mod', 'S'], description: 'Save the query (updates the template it was loaded from)' },
     { keys: ['Mod', 'K'], description: 'Open the command palette' },
-    { keys: ['Mod', 'Z'], description: 'Undo (outside text fields)' },
-    { keys: ['Mod', 'Shift', 'Z'], description: 'Redo (outside text fields)' },
+    { keys: ['Mod', 'Z'], description: 'Undo (in the builder, outside text fields)' },
+    { keys: ['Mod', 'Shift', 'Z'], description: 'Redo (in the builder, outside text fields)' },
     { keys: ['?'], description: 'Show keyboard shortcuts' },
     { keys: ['↓'], description: 'In a table or column field, show suggestions from your schema' },
     { keys: ['Esc'], description: 'Close suggestions, dialogs and menus' }

@@ -2,7 +2,7 @@
 
 Build SQL visually in your browser: SELECT (with joins, nested conditions, subqueries, CTEs, CASE, window functions, grouping and UNION / INTERSECT / EXCEPT), INSERT, UPDATE and DELETE. The output is clean, consistently formatted SQL for Generic SQL, PostgreSQL, MySQL or SQL Server.
 
-It is a static page with no server, no accounts and no analytics. It **never connects to a database or runs queries**, and nothing you type leaves your browser.
+It is a static page with no server, no accounts and no analytics. It **never connects to a database server**, and nothing you type leaves your browser. The optional **SQL Lab** runs SQL in a SQLite database embedded in the app and kept on your device (see [SQL Lab](#sql-lab)).
 
 **▶ Live app: [sql-builder-saikumar.vercel.app](https://sql-builder-saikumar.vercel.app)**. It is redeployed automatically from `main`.
 
@@ -15,6 +15,26 @@ It comes in four forms, all built from the same code:
 ---
 
 ## Features
+
+**SQL Lab (embedded database):** create databases that live on your device, import data into them, see what they contain and run SQL in them.
+- Databases are kept in the browser's private storage for this site (the Origin Private File System), so they survive reloads and work offline. They are shared by all projects.
+- Create, open, rename, duplicate, close and delete databases; browse their tables and views, with columns, types, keys, foreign keys, the real row count and the `CREATE` statement.
+- **Import…** brings data into a database: a SQL script, CSV (any delimiter, detected or chosen; with or without a header row), JSON (a list of objects, JSON Lines, or an object holding one list), or a whole SQLite database file (.sqlite / .db), up to 50 MB. Files are read on your device, never uploaded.
+  - Nothing runs until you confirm. The preview lists a script's statements (for example `CREATE TABLE Employees`, `INSERT INTO Employees` with 120 rows of values) and marks, with line and column, what SQLite is likely to reject (`TOP`, `OFFSET … FETCH`, `ON DUPLICATE KEY`, `AUTO_INCREMENT`, `dbo.` schemas, `SET`, `GO`…). For CSV and JSON it shows the real row count, each column's suggested type (INTEGER, REAL, TEXT, DATE, DATETIME, BOOLEAN; changeable, with a count of values that don't fit), the first 50 rows and the exact SQL that will run.
+  - Rows go into a new table or are added to an existing one (columns matched by name). They are inserted with one prepared `INSERT` and bound values, never by writing values into SQL. Leading zeros (`007`) stay text; dates are stored as text, as SQLite has no date type.
+  - Everything runs in one transaction, with foreign keys checked at the end: if any statement or row fails, nothing is kept, the database made for the import is removed, and the dialog says which line or row failed and why. A script's own `BEGIN`/`COMMIT` lines are left out (and `GO` lines end a statement); the preview says so.
+  - Malformed input is refused with the row and line (an unclosed quote, a row with too many values, invalid JSON). A database file is checked (`PRAGMA quick_check`) before it is added.
+- **Run SQL:** type SQL in SQL Lab's editor (highlighted as you type) and select **Run** or press Ctrl+Enter (⌘+Enter on a Mac). Select part of the SQL to run only that.
+  - **Results** shows each statement's rows a page at a time (**Load 100 more rows**, up to 1,000; NULLs and BLOBs are marked). Counts and times are what the engine reported: a result says "First 100 rows shown; more available" until every row has been read, and nothing is estimated.
+  - **Messages** lists each statement with its line, what it did ("Query completed successfully. 3 rows affected.") and its time. A script stops at the first error, which shows its line and column, and the editor selects the place; the statements before it ran and their changes are kept.
+  - Transactions work as on a server: `BEGIN` shows a **Transaction open** chip until `COMMIT` or `ROLLBACK`; closing the database rolls back an unfinished one.
+  - **Stop** ends a long query (for example a runaway recursive CTE) by restarting the engine: committed changes are kept, an unfinished transaction is rolled back, and the database is opened again.
+  - Before you run, notices point out, with line and column, what SQLite is likely to reject (`TOP`, `GETDATE()`, `ISNULL()`…). The SQL is never changed for you.
+  - **History** keeps the last 50 runs in SQL Lab (separate from the builder's history), with the database and the result; put any back in the editor. Each database keeps the SQL you were writing.
+- **Open in SQL Lab** (next to Copy, or from the command palette) puts the generated SQL in SQL Lab's editor exactly as generated. When it was generated for SQL Server, PostgreSQL or MySQL, SQL Lab says SQLite may not support all of it and offers **Use the Generic SQL version instead**.
+- **Create in SQL Lab…** (Schema tab) creates your schema's tables in a new or existing database. It shows the exact SQL first, lists anything changed for SQLite (for example `NVARCHAR(MAX)` is written as `NVARCHAR`, and `dbo.Employees` becomes `Employees` because SQLite has no schemas), skips tables the database already has, and runs it all as one transaction.
+- The engine is [SQLite](https://sqlite.org) compiled to WebAssembly (`@sqlite.org/sqlite-wasm`, pinned). It runs in a background worker, starts only when SQL Lab is first opened, and is served from the app itself (never a CDN).
+- SQLite's SQL is close to standard SQL but not the same as SQL Server, PostgreSQL or MySQL. SQL Lab says so on screen and never rewrites your SQL to pretend otherwise.
 
 **Query types:** SELECT, INSERT, UPDATE, DELETE.
 
@@ -157,7 +177,7 @@ What changes per dialect:
 
 Everything else (joins, WHERE, GROUP BY, CTEs, CASE, INSERT … SELECT, UPDATE, DELETE, the other window functions and frames) is written the same way in every dialect.
 
-Not built for any dialect yet: `RETURNING` / `OUTPUT` and `MERGE`. The builder doesn't add SQL Server's `OPTION (MAXRECURSION n)` or change MySQL's `cte_max_recursion_depth`. Functions and data types you type (date/time functions, casts, …) are not translated between dialects: expressions are passed through unchanged, and the only check on them is the `TRUE` / `FALSE` warning on SQL Server. The app never connects to a database, so it can't check a specific server version or schema.
+Not built for any dialect yet: `RETURNING` / `OUTPUT` and `MERGE`. The builder doesn't add SQL Server's `OPTION (MAXRECURSION n)` or change MySQL's `cte_max_recursion_depth`. Functions and data types you type (date/time functions, casts, …) are not translated between dialects: expressions are passed through unchanged, and the only check on them is the `TRUE` / `FALSE` warning on SQL Server. The builder never connects to a database server, so it can't check a specific server version or schema.
 
 ## Example
 
@@ -256,6 +276,21 @@ src/
 ├── suggest.js        Which tables/columns a builder field can use (scope, aliases, CTEs)
 ├── joins.js          JOIN assistant (ON from foreign keys) and schema checks (tips/warnings)
 ├── storage.js        Guarded localStorage wrapper
+├── db/               SQL Lab's database engine
+│   ├── engine.js         The engine contract, errors with line/column, database ids
+│   ├── sqlite-adapter.js SQLite: open/create/delete, run scripts statement by statement, pages of rows, schema
+│   ├── files.js          Where database files live: OPFS (opfs-sahpool) or memory
+│   ├── worker.js         The database worker (bundled to dist/db-worker.js by scripts/build-worker.mjs)
+│   ├── dispatch.js       The operations a client may call, and errors as plain data
+│   ├── client.js         Worker client (lazy start, restart, failure state) and an in-page client for tests
+│   ├── databases.js      The SQL Lab's database list (names, dates), app-wide
+│   ├── lab-history.js    SQL Lab's history of runs (its own key, last 50)
+│   ├── schema-sql.js     Schema tab tables as SQLite CREATE TABLE, with notes on what was adapted
+│   ├── importer.js       Imports: preview (changes nothing) and run (one transaction), in the worker
+│   ├── import-sql.js     Reads a SQL script: statements, rows of values, what SQLite can't run
+│   ├── import-csv.js     RFC 4180 CSV reader and delimiter detection
+│   ├── import-json.js    Rows from JSON (with error positions) and JSON Lines
+│   └── import-types.js   Column type suggestions and the CREATE TABLE / INSERT for imported rows
 ├── section-help.js   The explanations shown by each section's info button
 ├── settings.js / history.js / templates.js / undo.js / examples.js
 ├── app.js            Controller: state, events, rendering pipeline
@@ -276,6 +311,11 @@ src/
     ├── versions.js   The template Versions dialog
     ├── help-popover.js  The info buttons' shared popover and its placement
     ├── projects.js   The Projects dialog's list
+    ├── lab.js        The SQL Lab view: databases, tables, structure, Create in SQL Lab dialog
+    ├── lab-import.js The SQL Lab's Import dialog (file or paste, preview, confirm)
+    ├── lab-console.js SQL Lab's console: editor, notices, Run/Stop, results, messages, history
+    ├── lab-editor.js  The SQL editor (a textarea over highlighted text)
+    ├── lab-results.js Result grids and messages, from what the engine reported
     ├── theme.js, shortcuts.js, dom.js (safe element builder)
 ```
 
@@ -300,9 +340,9 @@ Design decisions:
 See [SECURITY.md](SECURITY.md). In short:
 - No network requests are made with your data.
 - User input is rendered as text only.
-- Imported JSON and pasted SQL are validated and never executed.
+- Imported JSON and pasted SQL are validated and never executed. SQL Lab only runs SQL you choose to run, in the embedded database on your device: an imported script runs only after you confirm its preview, and imported CSV/JSON values are bound to a prepared statement, never written into SQL.
 - Storage is limited to this browser, and you can delete it from Settings.
-- The deployment sends a strict Content-Security-Policy. The Android app embeds an equivalent CSP.
+- The deployment sends a strict Content-Security-Policy. The Android app embeds an equivalent CSP. Both allow `'wasm-unsafe-eval'`, which lets the page compile SQLite's WebAssembly; it does not allow `eval()`.
 - The Android app requests no permissions, has no analytics or ads, and never loads remote content. See [PRIVACY.md](PRIVACY.md).
 - The Windows (Microsoft Store) app is the same PWA, so it gets the same headers and CSP as the website.
 
@@ -342,6 +382,10 @@ Fabric_Sync/                                      ← unrelated Power BI content
 ```
 
 ## Limitations
+
+- **SQL Lab** runs SQLite only. SQL written for SQL Server, PostgreSQL or MySQL may fail or behave differently there (for example `TOP`, `OFFSET … FETCH`, `NVARCHAR(MAX)`, schemas like `dbo.`). It can't connect to a database server.
+- SQL Lab's databases can be used in one tab or window at a time; a second one shows a notice with Try again. If the browser can't store files (older browsers, some private modes), databases last only until the page is closed, and the page says so.
+- SQL Lab databases aren't in backups yet.
 
 - **Not a SQL parser.** Expressions you type (columns, custom conditions, CASE parts, INSERT values) are inserted as written. Validation only checks balanced quotes and parentheses and rejects `;` and `--`. It cannot tell whether a column exists or a function is valid.
 - Import SQL reads one statement. INSERT with `DEFAULT VALUES`, `SET`, `IGNORE` or `RETURNING`; UPDATE with an alias, `FROM`, several tables, `ORDER BY`/`LIMIT` or `OUTPUT`; DELETE with `USING`, a join or an alias; any statement after `WITH`; and SELECTs using `DISTINCT ON`, `USING`, `NATURAL` or `LATERAL` joins, `APPLY`, comma-separated FROM tables, table functions or hints, `MATERIALIZED` CTEs, `NULLS FIRST/LAST`, `WITH ROLLUP`, named windows, parenthesized UNION parts, `FOR UPDATE`, `RETURNING` or a SELECT without FROM, are refused with their location. Comments aren't kept, PostgreSQL parameter names can't be recovered from `$1`, and a CASE or window column the builder can't write the same way stays a plain expression.

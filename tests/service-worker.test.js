@@ -75,6 +75,20 @@ describe('service worker', () => {
         expect([...sw.store.keys()]).toEqual([`${ORIGIN}/`, `${ORIGIN}/style.css?v=aaa`, `${ORIGIN}/dist/sqlbuilder.js?v=bbb`]);
     });
 
+    test('the real page: the SQL Lab engine (worker and wasm) is cached for offline use', async () => {
+        const html = readFileSync(join(import.meta.dirname, '..', 'index.html'), 'utf8');
+        const paths = [...html.matchAll(/(?:href|src)="([^"]+\?v=[0-9a-f]+)"/g)].map(m => `/${m[1]}`);
+        expect(paths.map(p => p.split('?')[0]).sort()).toEqual(['/dist/db-worker.js', '/dist/sqlbuilder.js', '/dist/sqlite3.wasm', '/style.css']);
+        const real = { offline: false, files: Object.fromEntries([['/', html], ...paths.map(p => [p, `body of ${p}`])]) };
+        const worker = setup(real);
+        await worker.dispatch('install');
+        real.offline = true;
+        for (const p of paths) {
+            const { response } = await worker.dispatch('fetch', { request: request(p) });
+            expect(await response.text()).toBe(`body of ${p}`);
+        }
+    });
+
     test('activate removes caches from older versions', async () => {
         await sw.dispatch('activate');
         expect(sw.context.caches.delete).toHaveBeenCalledWith('old-cache');

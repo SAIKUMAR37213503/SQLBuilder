@@ -33,7 +33,10 @@ describe('www/ (content packaged into the app)', () => {
 
     test('contains the app, the native entry point and a strict CSP', () => {
         const html = read('www/index.html');
-        expect(html).toMatch(/<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self';/);
+        expect(html).toMatch(/<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval';/);
+        // The SQL Lab's engine is packaged too, never loaded from elsewhere
+        expect(html).toContain(`href="dist/db-worker.js?v=${hashOf('dist/db-worker.js', join(root, 'www'))}"`);
+        expect(html).toContain(`href="dist/sqlite3.wasm?v=${hashOf('dist/sqlite3.wasm', join(root, 'www'))}"`);
         expect(html).toContain(`src="dist/sqlbuilder.js?v=${hashOf('dist/sqlbuilder.js', join(root, 'www'))}"`);
         expect(html).toContain(`href="style.css?v=${hashOf('style.css', join(root, 'www'))}"`);
         expect(html).not.toMatch(/rel="manifest"|serviceWorker/);

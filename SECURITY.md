@@ -1,11 +1,12 @@
 # Security model
 
-SQL Query Builder Pro Lite is a **text generator**. It runs entirely in the browser as a static page.
+SQL Query Builder Pro Lite is a **text generator** with an optional local database (SQL Lab). It runs entirely in the browser as a static page.
 
 ## What the app never does
 
-- Connect to a database or execute SQL
-- Send queries, inputs, history or templates over the network. The app code makes no network requests at all. The only files loaded are its own `index.html`, `style.css` and `dist/sqlbuilder.js`, plus, on the website, the PWA manifest, the icons and the same-origin service worker (`sw.js`), which caches only those files.
+- Connect to a database server, cloud database or any remote service
+- Execute SQL without being asked: only SQL Lab runs SQL, in a SQLite database on the device, and only SQL the user chose to run
+- Send queries, inputs, history or templates over the network. The app code makes no network requests at all. The only files loaded are its own `index.html`, `style.css` and `dist/sqlbuilder.js` (and, when SQL Lab is opened, `dist/db-worker.js` and `dist/sqlite3.wasm`), plus, on the website, the PWA manifest, the icons and the same-origin service worker (`sw.js`), which caches only those files.
 - Collect analytics or telemetry
 - Evaluate imported data or generated SQL (there is no `eval`, `new Function` or dynamic `import()` in the app code)
 
@@ -17,9 +18,11 @@ SQL Query Builder Pro Lite is a **text generator**. It runs entirely in the brow
 ## Content Security Policy (production headers, `vercel.json`)
 
 ```
-default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;
+default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:;
 object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 ```
+
+`'wasm-unsafe-eval'` lets the page compile WebAssembly, which SQL Lab's engine (SQLite) is. It does not allow `eval()`, `new Function` or inline scripts. The engine runs in a same-origin worker, its files are served by the app itself, and the bundle test checks the worker contains no remote URLs.
 
 `index.html` contains no inline scripts, inline styles or inline event handlers; a test checks this too. The deployment also sends:
 - `X-Content-Type-Options: nosniff`

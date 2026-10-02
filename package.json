@@ -1,7 +1,7 @@
 {
   "name": "sql-query-builder-pro-lite",
   "version": "1.0.0",
-  "description": "Browser-only visual SQL query builder: SELECT with joins, subqueries, CTEs and UNION, plus INSERT/UPDATE/DELETE. Never connects to a database.",
+  "description": "Browser-only visual SQL query builder: SELECT with joins, subqueries, CTEs and UNION, plus INSERT/UPDATE/DELETE, with an optional SQL Lab that runs SQL in an embedded SQLite database stored in your browser. Never connects to a database server.",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,7 @@
     "lint": "eslint .",
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
     "typecheck": "tsc -p jsconfig.json",
-    "build": "esbuild src/main.js --bundle --minify --sourcemap --format=iife --target=es2022 --legal-comments=none --outfile=dist/sqlbuilder.js && node scripts/stamp-assets.mjs",
+    "build": "esbuild src/main.js --bundle --minify --sourcemap --format=iife --target=es2022 --legal-comments=none --outfile=dist/sqlbuilder.js && node scripts/build-worker.mjs && node scripts/stamp-assets.mjs",
     "build:mobile": "node scripts/build-mobile.mjs",
     "cap:sync": "npm run build:mobile && cap sync android",
     "android:open": "cap open android",
@@ -50,6 +50,7 @@
     "@capacitor/core": "^8.5.2",
     "@capacitor/filesystem": "^8.1.3",
     "@capacitor/share": "^8.0.2",
-    "@capacitor/splash-screen": "^8.0.2"
+    "@capacitor/splash-screen": "^8.0.2",
+    "@sqlite.org/sqlite-wasm": "3.53.4-build1"
   }
 }

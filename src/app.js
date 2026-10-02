@@ -54,6 +54,8 @@ import { renderProjectList } from './ui/projects.js';
 import { previewSqlImport, guessDialect } from './sql-import.js';
 import { renderSqlImportPreview } from './ui/sql-import.js';
 import { createWebPlatform } from './platform/web.js';
+import { createLab } from './ui/lab.js';
+import { createWorkerClient } from './db/client.js';
 
 const DRAFT_KEY = 'draft';
 // The saved template the current query was loaded from (restored with the draft)
@@ -93,7 +95,26 @@ const ITEM_FACTORIES = {
  * @param {{ doc?: Document, storage?: ReturnType<typeof createStorage>, platform?: import('./platform/types.js').Platform }} [options]
  *   platform: browser behaviour by default; the Android/iOS app passes the Capacitor adapter
  */
-export function startApp({ doc = document, storage = createStorage(), platform = createWebPlatform(doc) } = {}) {
+/**
+ * The SQL Lab's database engine: SQLite in a worker, loaded from the URLs
+ * index.html lists (content-hashed, and cached for offline use).
+ * @param {Document} doc
+ */
+function createEngineClient(doc) {
+    const url = (/** @type {string} */ id) => {
+        const link = doc.getElementById(id);
+        return link ? new URL(link.getAttribute('href'), doc.baseURI).href : '';
+    };
+    return createWorkerClient({
+        createWorker: () => {
+            if (typeof Worker === 'undefined') throw new Error('This browser can\'t run background workers.');
+            return new Worker(url('asset-db-worker'));
+        },
+        wasmUrl: url('asset-sqlite-wasm')
+    });
+}
+
+export function startApp({ doc = document, storage = createStorage(), platform = createWebPlatform(doc), dbClient = null } = {}) {
     const $ = (id) => /** @type {any} */ (doc.getElementById(id));
     const $$ = (selector) => /** @type {NodeListOf<any>} */ (doc.querySelectorAll(selector));
     const el = {
@@ -112,6 +133,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         output: $('sql-output'),
         code: $('sql-code'),
         copy: $('copy-btn'),
+        openInLab: $('open-in-lab-btn'),
         share: $('share-btn'),
         download: $('download-btn'),
         selectAll: $('select-all-btn'),
@@ -186,6 +208,14 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         backupDialog: $('backup-dialog'),
         clearData: $('clear-data-btn'),
         viewSql: $('view-sql-btn'),
+        workspace: $('workspace'),
+        lab: $('lab'),
+        viewBuilder: $('view-builder-btn'),
+        viewLab: $('view-lab-btn'),
+        skipLink: /** @type {any} */ (doc.querySelector('.skip-link')),
+        schemaDb: $('schema-db-btn'),
+        labTablesDialog: $('lab-tables-dialog'),
+        labImportDialog: $('lab-import-dialog'),
         statusBadge: $('status-badge')
     };
 
@@ -845,6 +875,25 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         } else {
             toast('Copy failed — use Select all, then copy with your keyboard.', 'error');
         }
+    }
+
+    /** Puts the generated SQL in SQL Lab's editor, as generated (it isn't run). */
+    function openInLab() {
+        commitSoon.flush();
+        scheduleRefresh.flush();
+        if (!state.sql) {
+            toast(hasErrors(state.issues) ? 'Nothing to open yet — resolve the checks first.' : 'Nothing to open yet — generate a query first.', 'error');
+            return;
+        }
+        let generic = '';
+        if (state.settings.dialect !== 'generic') {
+            try {
+                generic = generateSQL(state.workspace, { ...generationOptions(), dialect: 'generic' });
+            } catch {
+                // offered only when it can be generated
+            }
+        }
+        lab.openSql({ sql: state.sql, dialect: state.settings.dialect, generic });
     }
 
     /**
@@ -1911,6 +1960,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             : '';
         el.schemaExport.disabled = all.length === 0;
         el.schemaClear.disabled = all.length === 0;
+        el.schemaDb.disabled = all.length === 0;
+        if (!el.lab.hidden) lab.render();
     }
 
     // Why a table definition can't be saved, or '' when it can
@@ -2173,7 +2224,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             suggester.close();
             return true;
         }
-        const dialogs = [el.confirmDialog, el.versionsDialog, el.projectsDialog, el.moveDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
+        const dialogs = [el.confirmDialog, el.labTablesDialog, el.labImportDialog, el.versionsDialog, el.projectsDialog, el.moveDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
         const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
         if (open) {
             closeDialog(open, 'cancel');
@@ -2183,7 +2234,45 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             el.fileMenu.open = false;
             return true;
         }
+        if (!el.lab.hidden) {
+            setView('builder');
+            return true;
+        }
         return false;
+    }
+
+    // ---------------------------------------------------------------- SQL Lab
+
+    const lab = createLab({
+        doc,
+        storage,
+        client: dbClient || createEngineClient(doc),
+        dialogs: { prompt: el.promptDialog, confirm: el.confirmDialog, tables: el.labTablesDialog, import: el.labImportDialog },
+        toast,
+        schemaTables: () => schema.list(),
+        isNative: platform.isNative,
+        onShow: () => setView('lab', { focus: false })
+    });
+
+    /**
+     * Shows the builder or the SQL Lab.
+     * @param {'builder' | 'lab'} view
+     */
+    function setView(view, { focus = true } = {}) {
+        const showLab = view === 'lab';
+        const changed = el.lab.hidden === showLab;
+        el.workspace.hidden = showLab;
+        el.lab.hidden = !showLab;
+        el.viewBuilder.setAttribute('aria-pressed', String(!showLab));
+        el.viewLab.setAttribute('aria-pressed', String(showLab));
+        // Undo, Redo and the phone action bar belong to the builder
+        el.undo.hidden = showLab;
+        el.redo.hidden = showLab;
+        doc.body.classList.toggle('view-lab', showLab);
+        el.skipLink.setAttribute('href', showLab ? '#lab-heading' : '#builder');
+        el.skipLink.textContent = showLab ? 'Skip to SQL Lab' : 'Skip to query builder';
+        if (showLab && changed) lab.show();
+        if (focus && changed) (showLab ? doc.getElementById('lab-heading') : el.builder).focus({ preventScroll: false });
     }
 
     function renderModeButtons() {
@@ -2244,7 +2333,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     async function clearAllData() {
         const ok = await confirmDialog(el.confirmDialog, {
             title: 'Delete all saved data?',
-            message: 'This removes your projects, history, templates, schema, practice progress and settings from this browser and clears the builder. It cannot be undone.',
+            message: `This removes your projects, history, templates, schema, SQL Lab databases, practice progress and settings ${platform.isNative ? 'from this device' : 'from this browser'} and clears the builder. It cannot be undone.`,
             confirmText: 'Delete everything'
         });
         if (!ok) return;
@@ -2280,7 +2369,11 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         renderPracticeList();
         renderPractice();
         renderProjectBar();
-        toast('All saved data was deleted from this browser.', 'success');
+        const databasesDeleted = await lab.clearAll();
+        toast(databasesDeleted
+            ? 'All saved data was deleted from this browser.'
+            : 'Saved data was deleted, but SQL Lab databases open in another tab or window weren\'t. Close SQL Lab there and delete them again.',
+        databasesDeleted ? 'success' : 'error');
     }
 
     // ------------------------------------------------------- command palette
@@ -2336,6 +2429,12 @@ export function startApp({ doc = document, storage = createStorage(), platform =
                 id: 'theme', group: 'View', label: `Switch theme to ${THEME_LABELS[nextTheme(settings.theme)]}`, keywords: 'dark light appearance',
                 run: () => updateSettings({ theme: nextTheme(settings.theme) })
             },
+            el.lab.hidden
+                ? { id: 'open-lab', group: 'SQL Lab', label: 'Open SQL Lab', keywords: 'database run execute sqlite tables data', run: () => setView('lab') }
+                : { id: 'open-builder', group: 'SQL Lab', label: 'Back to the query builder', keywords: 'builder', run: () => setView('builder') },
+            { id: 'open-in-lab', group: 'SQL Lab', label: 'Open the SQL in SQL Lab', keywords: 'run execute database sqlite test query', run: openInLab },
+            { id: 'lab-import', group: 'SQL Lab', label: 'Import into SQL Lab…', keywords: 'database sqlite csv json sql file load data', run: () => { setView('lab', { focus: false }); lab.importData(); } },
+            schema.size > 0 && { id: 'schema-to-lab', group: 'SQL Lab', label: 'Create schema tables in SQL Lab…', keywords: 'database sqlite create table run', run: () => lab.createTablesFromSchema() },
             { id: 'open-history', group: 'Library', label: 'Open history', run: () => openLibraryTab('history') },
             { id: 'open-templates', group: 'Library', label: 'Open templates', run: () => openLibraryTab('templates') },
             { id: 'open-examples', group: 'Library', label: 'Open examples', run: () => openLibraryTab('examples') },
@@ -2415,6 +2514,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.undo.addEventListener('click', undo);
     el.redo.addEventListener('click', redo);
     el.copy.addEventListener('click', copySql);
+    el.openInLab.addEventListener('click', openInLab);
     el.save.addEventListener('click', saveQuery);
     el.share.hidden = !platform.canShare;
     el.share.addEventListener('click', shareSql);
@@ -2538,22 +2638,31 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     el.schemaImport.addEventListener('click', importSchema);
     el.schemaExport.addEventListener('click', () => exportSchema('json'));
     el.schemaClear.addEventListener('click', clearSchema);
+    el.schemaDb.addEventListener('click', () => lab.createTablesFromSchema());
+    el.viewBuilder.addEventListener('click', () => setView('builder'));
+    el.viewLab.addEventListener('click', () => setView('lab'));
     el.schemaSearch.addEventListener('input', debounce(() => {
         state.schemaSearch = el.schemaSearch.value;
         renderSchema();
     }, 150));
 
     [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog, el.paletteDialog, el.backupDialog,
-        el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.versionsDialog, el.projectsDialog, el.moveDialog].forEach(enhanceDialog);
+        el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.versionsDialog, el.projectsDialog, el.moveDialog,
+        el.labTablesDialog, el.labImportDialog].forEach(enhanceDialog);
 
     bindShortcuts(doc, signal, {
-        generate,
+        // In SQL Lab, Ctrl+Enter runs the SQL instead
+        generate: () => {
+            if (el.lab.hidden) generate();
+            else if (!doc.querySelector('dialog[open]')) lab.run();
+        },
         copy: copySql,
         // Not over another dialog: saving can open the template dialog
         save: () => { if (!doc.querySelector('dialog[open]')) saveQuery(); },
         palette: showPalette,
-        undo,
-        redo,
+        // Undo and Redo belong to the builder
+        undo: () => { if (el.lab.hidden) undo(); },
+        redo: () => { if (el.lab.hidden) redo(); },
         help: () => showDialog(el.shortcutsDialog),
         escape: () => {
             if (el.fileMenu.open) {
@@ -2577,7 +2686,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
     renderShortcuts();
     const where = platform.isNative ? 'on this device' : 'in this browser';
     el.storageNote.textContent = storage.available
-        ? `history, templates, schema and settings are stored only ${where}`
+        ? `history, templates, schema, databases and settings are stored only ${where}`
         : 'browser storage is unavailable, so history and templates won\'t be kept';
     el.dialectSelect.replaceChildren(...dialectOptions(false));
     el.dialectSelect.value = state.settings.dialect;
@@ -2604,6 +2713,8 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         get templates() { return templates; },
         get schema() { return schema; },
         projects,
+        lab,
+        setView,
         generate,
         undo,
         redo,
