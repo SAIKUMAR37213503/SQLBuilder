@@ -16,9 +16,14 @@ It comes in four forms, all built from the same code:
 
 ## Features
 
-**SQL Lab (embedded database):** create databases that live on your device and see what they contain.
+**SQL Lab (embedded database):** create databases that live on your device, import data into them and see what they contain.
 - Databases are kept in the browser's private storage for this site (the Origin Private File System), so they survive reloads and work offline. They are shared by all projects.
 - Create, open, rename, duplicate, close and delete databases; browse their tables and views, with columns, types, keys, foreign keys, the real row count and the `CREATE` statement.
+- **Import…** brings data into a database: a SQL script, CSV (any delimiter, detected or chosen; with or without a header row), JSON (a list of objects, JSON Lines, or an object holding one list), or a whole SQLite database file (.sqlite / .db), up to 50 MB. Files are read on your device, never uploaded.
+  - Nothing runs until you confirm. The preview lists a script's statements (for example `CREATE TABLE Employees`, `INSERT INTO Employees` with 120 rows of values) and marks, with line and column, what SQLite is likely to reject (`TOP`, `OFFSET … FETCH`, `ON DUPLICATE KEY`, `AUTO_INCREMENT`, `dbo.` schemas, `SET`, `GO`…). For CSV and JSON it shows the real row count, each column's suggested type (INTEGER, REAL, TEXT, DATE, DATETIME, BOOLEAN; changeable, with a count of values that don't fit), the first 50 rows and the exact SQL that will run.
+  - Rows go into a new table or are added to an existing one (columns matched by name). They are inserted with one prepared `INSERT` and bound values, never by writing values into SQL. Leading zeros (`007`) stay text; dates are stored as text, as SQLite has no date type.
+  - Everything runs in one transaction, with foreign keys checked at the end: if any statement or row fails, nothing is kept, the database made for the import is removed, and the dialog says which line or row failed and why. A script's own `BEGIN`/`COMMIT` lines are left out (and `GO` lines end a statement); the preview says so.
+  - Malformed input is refused with the row and line (an unclosed quote, a row with too many values, invalid JSON). A database file is checked (`PRAGMA quick_check`) before it is added.
 - **Create in SQL Lab…** (Schema tab) creates your schema's tables in a new or existing database. It shows the exact SQL first, lists anything changed for SQLite (for example `NVARCHAR(MAX)` is written as `NVARCHAR`, and `dbo.Employees` becomes `Employees` because SQLite has no schemas), skips tables the database already has, and runs it all as one transaction.
 - The engine is [SQLite](https://sqlite.org) compiled to WebAssembly (`@sqlite.org/sqlite-wasm`, pinned). It runs in a background worker, starts only when SQL Lab is first opened, and is served from the app itself (never a CDN).
 - SQLite's SQL is close to standard SQL but not the same as SQL Server, PostgreSQL or MySQL. SQL Lab says so on screen and never rewrites your SQL to pretend otherwise.
@@ -271,7 +276,12 @@ src/
 │   ├── dispatch.js       The operations a client may call, and errors as plain data
 │   ├── client.js         Worker client (lazy start, restart, failure state) and an in-page client for tests
 │   ├── databases.js      The SQL Lab's database list (names, dates), app-wide
-│   └── schema-sql.js     Schema tab tables as SQLite CREATE TABLE, with notes on what was adapted
+│   ├── schema-sql.js     Schema tab tables as SQLite CREATE TABLE, with notes on what was adapted
+│   ├── importer.js       Imports: preview (changes nothing) and run (one transaction), in the worker
+│   ├── import-sql.js     Reads a SQL script: statements, rows of values, what SQLite can't run
+│   ├── import-csv.js     RFC 4180 CSV reader and delimiter detection
+│   ├── import-json.js    Rows from JSON (with error positions) and JSON Lines
+│   └── import-types.js   Column type suggestions and the CREATE TABLE / INSERT for imported rows
 ├── section-help.js   The explanations shown by each section's info button
 ├── settings.js / history.js / templates.js / undo.js / examples.js
 ├── app.js            Controller: state, events, rendering pipeline
@@ -293,6 +303,7 @@ src/
     ├── help-popover.js  The info buttons' shared popover and its placement
     ├── projects.js   The Projects dialog's list
     ├── lab.js        The SQL Lab view: databases, tables, structure, Create in SQL Lab dialog
+    ├── lab-import.js The SQL Lab's Import dialog (file or paste, preview, confirm)
     ├── theme.js, shortcuts.js, dom.js (safe element builder)
 ```
 
@@ -317,7 +328,7 @@ Design decisions:
 See [SECURITY.md](SECURITY.md). In short:
 - No network requests are made with your data.
 - User input is rendered as text only.
-- Imported JSON and pasted SQL are validated and never executed. SQL Lab only runs SQL you choose to run, in the embedded database on your device.
+- Imported JSON and pasted SQL are validated and never executed. SQL Lab only runs SQL you choose to run, in the embedded database on your device: an imported script runs only after you confirm its preview, and imported CSV/JSON values are bound to a prepared statement, never written into SQL.
 - Storage is limited to this browser, and you can delete it from Settings.
 - The deployment sends a strict Content-Security-Policy. The Android app embeds an equivalent CSP. Both allow `'wasm-unsafe-eval'`, which lets the page compile SQLite's WebAssembly; it does not allow `eval()`.
 - The Android app requests no permissions, has no analytics or ads, and never loads remote content. See [PRIVACY.md](PRIVACY.md).

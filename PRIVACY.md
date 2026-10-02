@@ -6,7 +6,7 @@ This policy covers the **SQL Builder Pro Lite** Android app (package `com.saikum
 
 SQL Builder Pro Lite is a tool that **writes SQL text**. It has no accounts, server or backend, and it does not connect to any database server.
 
-Its optional **SQL Lab** lets you create databases and run SQL in them. These databases are created and kept **on your device** by a database engine (SQLite) that is part of the app; SQL Lab only runs SQL you choose to run, and neither your SQL nor your data leaves your device.
+Its optional **SQL Lab** lets you create databases, import files into them (SQL, CSV, JSON or SQLite files you choose) and run SQL in them. These databases are created and kept **on your device** by a database engine (SQLite) that is part of the app; files you import are read on your device and never uploaded, SQL Lab only runs SQL you choose to run, and neither your SQL nor your data leaves your device.
 
 ## What the app stores, and where
 
@@ -18,7 +18,7 @@ Everything you enter stays **on your device**:
 | Query history | Lets you reopen recent queries (can be turned off in Settings) | Same |
 | Saved templates | Queries you chose to save | Same |
 | Settings (theme, dialect, formatting options) | Remembers your preferences | Same |
-| SQL Lab databases (tables and data you create) and their names | Lets you work with data in SQL Lab | App storage on your device (the browser's private file storage for the app); names in localStorage |
+| SQL Lab databases (tables and data you create or import) and their names | Lets you work with data in SQL Lab | App storage on your device (the browser's private file storage for the app); names in localStorage |
 
 - This data is never sent to the developer or anyone else.
 - On Android, the app opts out of Android backup (`allowBackup="false"`), so it is not copied to Google Drive or other backups. It is deleted when you uninstall the app or clear its storage.
