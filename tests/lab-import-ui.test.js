@@ -488,3 +488,55 @@ describe('importing a SQLite database file', () => {
         expect($('#lab-import-paste-field').hidden).toBe(false);
     });
 });
+
+describe('importing a large file', () => {
+    test('a file over 50 MB is read in parts by the engine, with progress, and imported in one go', async () => {
+        boot();
+        await openLab();
+        await openImport();
+        // Just over 50 MB: more than a file read at once
+        const row = (i) => `${i},Person ${i},${i % 2 ? 'Engineering' : 'Sales'},${50000 + (i % 1000)},2024-01-${String((i % 28) + 1).padStart(2, '0')},${'x'.repeat(60)}\n`;
+        const lines = ['id,name,department,salary,hired,notes\n'];
+        let size = lines[0].length;
+        let count = 0;
+        while (size < 51 * 1024 * 1024) {
+            const line = row(++count);
+            lines.push(line);
+            size += line.length;
+        }
+        const seen = [];
+        const call = client.call;
+        client.call = (op, args, options) => {
+            if (op === 'previewImport' || op === 'runImport') seen.push({ op, source: args.source instanceof Blob, text: typeof args.text });
+            return call(op, args, options && { onProgress: (p) => {
+                seen.push({ op, progress: p });
+                options.onProgress(p);
+            } });
+        };
+        await choose(new File(lines, 'big.csv', { type: 'text/csv' }));
+        for (let i = 0; i < 100 && !text('#lab-import-preview').includes('rows and 6 columns'); i++) await settle();
+        expect(text('#lab-import-preview')).toContain(`${count.toLocaleString()} rows and 6 columns.`);
+        $('#lab-import-run').click();
+        for (let i = 0; i < 200 && (await client.call('schema').catch(() => [])).every(o => o.name !== 'big'); i++) await settle();
+        for (let i = 0; i < 100 && $('#lab-import-run').textContent.startsWith('Importing'); i++) await settle();
+        expect(text('#lab-import-error')).toBe('');
+        expect(await query('SELECT count(*), sum(salary) FROM big')).toEqual([[count, expect.any(Number)]]);
+        // The file itself went to the engine, never its text
+        expect(seen.filter(s => s.source !== undefined)).toEqual([
+            { op: 'previewImport', source: true, text: 'undefined' },
+            { op: 'runImport', source: true, text: 'undefined' }]);
+        const progress = seen.filter(s => s.op === 'runImport' && s.progress).map(s => s.progress);
+        expect(progress.length).toBeGreaterThan(0);
+        expect(progress.at(-1).done).toBe(progress.at(-1).total);
+    }, 120000);
+
+    test('a file over 1 GB is refused before it is read', async () => {
+        boot();
+        await openLab();
+        await openImport();
+        const huge = new File(['id,name\n1,Ada\n'], 'huge.csv', { type: 'text/csv' });
+        Object.defineProperty(huge, 'size', { value: 1.5 * 1024 * 1024 * 1024 });
+        await choose(huge);
+        expect(text('#lab-import-error')).toBe('huge.csv is 1.5 GB; files up to 1 GB can be imported.');
+    });
+});

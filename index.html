@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <!-- The SQL Lab's database engine (SQLite). Listed so the offline cache keeps it and the app finds its current URL. -->
-    <link rel="prefetch" href="dist/db-worker.js?v=340e9eb1c971" id="asset-db-worker">
+    <link rel="prefetch" href="dist/db-worker.js?v=f0ea5620ad7e" id="asset-db-worker">
     <link rel="prefetch" href="dist/sqlite3.wasm?v=2ee8f3dab694" id="asset-sqlite-wasm">
     <link rel="stylesheet" href="style.css?v=36bf14883c48">
 </head>
@@ -566,7 +566,7 @@
                 <span class="field-label" id="lab-import-file-label">File</span>
                 <div class="lab-import-source">
                     <button type="button" class="btn btn-secondary btn-sm" id="lab-import-file-btn" aria-describedby="lab-import-file-name">Choose a file…</button>
-                    <span class="lab-import-file-name" id="lab-import-file-name">No file chosen (.sql, .csv, .json, .html, .sqlite, .bak; up to 50 MB)</span>
+                    <span class="lab-import-file-name" id="lab-import-file-name">No file chosen (.sql, .csv, .json, .html, .sqlite, .bak; up to 1 GB)</span>
                     <button type="button" class="btn btn-ghost btn-sm" id="lab-import-clear" hidden>Remove file</button>
                     <input type="file" id="lab-import-file" class="visually-hidden" tabindex="-1" aria-hidden="true" accept=".sql,.csv,.tsv,.txt,.json,.jsonl,.ndjson,.html,.htm,.sqlite,.sqlite3,.db,.db3,.bak">
                 </div>
@@ -685,6 +685,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=8c29adc6ceb8" defer></script>
+    <script src="dist/sqlbuilder.js?v=92532030b42b" defer></script>
 </body>
 </html>

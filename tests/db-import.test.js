@@ -263,9 +263,8 @@ describe('format and names', () => {
         expect(decodeText(utf8)).toBe(script);
         expect(decodeText(new TextEncoder().encode(script))).toBe(script);
 
-        // The limit is on characters, so a UTF-16 file may be twice as many bytes
-        expect(maxFileBytes(utf8)).toBe(MAX_IMPORT_BYTES);
-        expect(maxFileBytes(le)).toBe(MAX_IMPORT_BYTES * 2);
+        // A file is read in parts, so UTF-8 and UTF-16 files can both be up to 1 GB
+        expect(maxFileBytes()).toBe(1024 * 1024 * 1024);
     });
 });
 

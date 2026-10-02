@@ -70,30 +70,57 @@ export function fitsType(value, type) {
 }
 
 /**
+ * Counts, column by column, how many values there are and how many fit each
+ * type, as rows arrive (an import can be read in parts).
+ * @param {number} count number of columns
+ */
+export function createColumnStats(count) {
+    const column = () => ({
+        nonEmpty: 0,
+        fits: /** @type {Record<string, number>} */ (Object.fromEntries(COLUMN_TYPES.map(t => [t, 0])))
+    });
+    const columns = Array.from({ length: count }, column);
+    return {
+        /** More columns, found later in the data (JSON keys, HTML cells). */
+        grow(to) {
+            while (count < to) {
+                columns.push(column());
+                count++;
+            }
+        },
+        /** @param {unknown[][]} rows */
+        add(rows) {
+            for (const row of rows) {
+                for (let c = 0; c < count; c++) {
+                    const value = row[c];
+                    if (isEmpty(value)) continue;
+                    const column = columns[c];
+                    column.nonEmpty++;
+                    for (const type of COLUMN_TYPES) if (fitsType(value, type)) column.fits[type]++;
+                }
+            }
+        },
+        /** Each column's counts, and the narrowest type all its values fit (TEXT when there are none). */
+        result() {
+            return columns.map(column => {
+                const all = (/** @type {string} */ t) => column.nonEmpty > 0 && column.fits[t] === column.nonEmpty;
+                const type = ['BOOLEAN', 'INTEGER', 'REAL', 'DATE', 'DATETIME'].find(all) || 'TEXT';
+                return { ...column, type };
+            });
+        }
+    };
+}
+
+/**
  * For each column: how many values it has and how many fit each type, and
  * the narrowest type they all fit (TEXT when there are none).
  * @param {unknown[][]} rows
  * @param {number} count number of columns
  */
 export function describeColumns(rows, count) {
-    const columns = Array.from({ length: count }, () => ({
-        nonEmpty: 0,
-        fits: /** @type {Record<string, number>} */ (Object.fromEntries(COLUMN_TYPES.map(t => [t, 0])))
-    }));
-    for (const row of rows) {
-        for (let c = 0; c < count; c++) {
-            const value = row[c];
-            if (isEmpty(value)) continue;
-            const column = columns[c];
-            column.nonEmpty++;
-            for (const type of COLUMN_TYPES) if (fitsType(value, type)) column.fits[type]++;
-        }
-    }
-    return columns.map(column => {
-        const all = (/** @type {string} */ t) => column.nonEmpty > 0 && column.fits[t] === column.nonEmpty;
-        const type = ['BOOLEAN', 'INTEGER', 'REAL', 'DATE', 'DATETIME'].find(all) || 'TEXT';
-        return { ...column, type };
-    });
+    const stats = createColumnStats(count);
+    stats.add(rows);
+    return stats.result();
 }
 
 /**

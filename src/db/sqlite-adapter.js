@@ -14,6 +14,9 @@ const MAX_PAGE_SIZE = 1000;
 const MAX_CURSORS = 4;
 // Results returned for one script; later ones are counted, and the last is always kept
 const MAX_RESULTS = 200;
+/** The largest database file that can be added. */
+const MAX_DATABASE_FILE_BYTES = 1024 * 1024 * 1024;
+
 // Statements that would start or end the import's own transaction (ROLLBACK TO a savepoint is fine)
 const ENDS_TRANSACTION = /^(?:BEGIN|COMMIT|END|START\s+TRANSACTION)\b|^ROLLBACK\b(?!\s+(?:TRANSACTION\s+)?TO\b)/i;
 
@@ -52,6 +55,8 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
     /** @type {Map<number, { stmt: any, columns: string[], pending: unknown[] | null }>} */
     const cursors = new Map();
     let nextCursor = 1;
+    /** @type {{ started: number, changesBefore: number } | null} an import's transaction, while it runs */
+    let importing = null;
 
     function checkId(id) {
         if (!isDatabaseId(id)) throw new DatabaseError('That database id isn\'t valid.', { code: 'BAD_ID' });
@@ -97,6 +102,7 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
     function closeCurrent() {
         if (!current) return;
         closeCursors();
+        importing = null;
         const { db } = current;
         try {
             // An unfinished transaction is rolled back, as when a server connection closes
@@ -306,21 +312,41 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
             return files.read(requireFile(id));
         },
 
-        /** Creates a database from a .sqlite file's bytes. */
+        /**
+         * Creates a database from a .sqlite file: its bytes, or the file itself
+         * (a Blob, up to 1 GB, copied a few MB at a time). writeFrom opens a
+         * file saved in WAL mode in the standard journal mode, as below.
+         * @param {string} id
+         * @param {Uint8Array | Blob} bytes
+         */
         async importFile(id, bytes) {
             const name = checkId(id);
-            if (!isSqliteFile(bytes)) throw new DatabaseError('This isn\'t a SQLite database file.', { code: 'NOT_A_DATABASE' });
-            if (files.exists(name)) throw new DatabaseError('A database with this id already exists.', { code: 'EXISTS' });
-            let data = bytes;
-            // A file saved in WAL mode is opened in the standard journal mode
-            // (bytes 18 and 19 of the header), which this storage needs
-            if (data[18] === 2 || data[19] === 2) {
-                data = new Uint8Array(bytes);
-                data[18] = 1;
-                data[19] = 1;
+            const blob = !ArrayBuffer.isView(bytes) && bytes && typeof bytes === 'object' && typeof (/** @type {any} */ (bytes)).slice === 'function' && typeof (/** @type {any} */ (bytes)).size === 'number';
+            if (blob && /** @type {Blob} */ (bytes).size > MAX_DATABASE_FILE_BYTES) {
+                throw new DatabaseError(`This file is too large to import (the limit is ${MAX_DATABASE_FILE_BYTES / 1024 / 1024 / 1024} GB).`, { code: 'TOO_LARGE' });
             }
+            const head = blob ? new Uint8Array(await /** @type {Blob} */ (bytes).slice(0, 100).arrayBuffer()) : /** @type {Uint8Array} */ (bytes);
+            if (!isSqliteFile(head)) throw new DatabaseError('This isn\'t a SQLite database file.', { code: 'NOT_A_DATABASE' });
+            if (files.exists(name)) throw new DatabaseError('A database with this id already exists.', { code: 'EXISTS' });
             await files.reserve(2);
-            files.write(name, data);
+            if (blob) {
+                try {
+                    await files.writeFrom(name, /** @type {Blob} */ (bytes));
+                } catch (error) {
+                    if (files.exists(name)) files.remove(name);
+                    throw new DatabaseError(`This database file can't be used: ${cleanMessage(error instanceof Error ? error.message : error).message}.`, { code: 'NOT_A_DATABASE' });
+                }
+            } else {
+                let data = /** @type {Uint8Array} */ (bytes);
+                // A file saved in WAL mode is opened in the standard journal mode
+                // (bytes 18 and 19 of the header), which this storage needs
+                if (data[18] === 2 || data[19] === 2) {
+                    data = new Uint8Array(data);
+                    data[18] = 1;
+                    data[19] = 1;
+                }
+                files.write(name, data);
+            }
             // A damaged or encrypted file is refused before it reaches the list
             let check;
             let db = null;
@@ -347,20 +373,65 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
          * @param {string} sql
          */
         runScript(sql) {
+            adapter.beginImport();
+            let statements;
+            try {
+                ({ statements } = adapter.importScript(sql));
+            } catch (error) {
+                adapter.endImport(false);
+                throw error;
+            }
+            return { statements, ...adapter.endImport(true) };
+        },
+
+        /**
+         * Inserts rows with one prepared statement, in one transaction: all of
+         * them, or (when a row fails) none. `setup` runs first (CREATE TABLE).
+         * @param {{ setup?: string[], sql: string, rows: unknown[][] }} work
+         */
+        insertRows({ setup = [], sql, rows }) {
+            adapter.beginImport();
+            let rowsInserted;
+            try {
+                ({ rowsInserted } = adapter.importRows({ setup, sql, rows }));
+            } catch (error) {
+                adapter.endImport(false);
+                throw error;
+            }
+            const { durationMs } = adapter.endImport(true);
+            return { rowsInserted, durationMs };
+        },
+
+        /**
+         * Starts an import's transaction. An import can then run in parts
+         * (importScript, importRows) and ends with endImport: committed, or
+         * (when anything failed) rolled back, so nothing of it is kept.
+         * Foreign keys are checked at the end.
+         */
+        beginImport() {
             const { db } = requireOpen();
             requireNoTransaction();
             closeCursors();
+            importing = { started: now(), changesBefore: capi.sqlite3_total_changes(db.pointer) };
+            db.exec('BEGIN; PRAGMA defer_foreign_keys = ON;');
+        },
+
+        /**
+         * Runs a part of an imported script inside the import's transaction.
+         * An error says the line and column in `sql`.
+         * @param {string} sql
+         */
+        importScript(sql) {
+            const { db } = requireOpen();
+            if (!importing) throw new DatabaseError('No import is running.', { code: 'BAD_INPUT' });
             const bytes = new TextEncoder().encode(String(sql ?? ''));
             const pDb = db.pointer;
-            const started = now();
             let statements = 0;
-            const changesBefore = capi.sqlite3_total_changes(pDb);
             /** @type {{ message: string, code: string, offset: number, statement: number } | null} */
             let failure = null;
             const pSql = wasm.alloc(bytes.length + 1);
             const ppStmt = wasm.alloc(2 * wasm.ptr.size);
             const pzTail = wasm.ptr.add(ppStmt, wasm.ptr.size);
-            db.exec('BEGIN; PRAGMA defer_foreign_keys = ON;');
             try {
                 wasm.heap8u().set(bytes, Number(pSql));
                 wasm.poke8(wasm.ptr.add(pSql, bytes.length), 0);
@@ -399,62 +470,73 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
                     if (next <= at) break;
                     at = next;
                 }
-                if (!failure) {
-                    try {
-                        db.exec('COMMIT;');
-                    } catch (error) {
-                        // A foreign key that points nowhere is found here
-                        failure = { ...cleanMessage(error instanceof Error ? error.message : error), offset: -1, statement: -1 };
-                    }
-                }
             } finally {
-                if (capi.sqlite3_get_autocommit(pDb) === 0) db.exec('ROLLBACK;');
                 wasm.dealloc(ppStmt);
                 wasm.dealloc(pSql);
-                saveCurrent();
             }
             if (failure) {
                 const where = failure.offset >= 0 ? positionAt(bytes, failure.offset) : {};
-                throw new DatabaseError(failure.message, { code: failure.code, ...where, ...(failure.statement >= 0 ? { statement: failure.statement } : {}) });
+                throw new DatabaseError(failure.message, { code: failure.code, ...where, statement: failure.statement });
             }
-            // Rows inserted, updated or deleted, as SQLite counts them (triggers included)
-            return { statements, rowsAffected: capi.sqlite3_total_changes(pDb) - changesBefore, durationMs: Math.max(0, now() - started) };
+            return { statements };
         },
 
         /**
-         * Inserts rows with one prepared statement, in one transaction: all of
-         * them, or (when a row fails) none. `setup` runs first (CREATE TABLE).
-         * @param {{ setup?: string[], sql: string, rows: unknown[][] }} work
+         * Inserts rows with one prepared statement inside the import's
+         * transaction. `setup` runs first (CREATE TABLE). An error names the
+         * row (counted from `firstRow`).
+         * @param {{ setup?: string[], sql: string, rows: unknown[][], firstRow?: number }} work
          */
-        insertRows({ setup = [], sql, rows }) {
+        importRows({ setup = [], sql, rows, firstRow = 1 }) {
             const { db } = requireOpen();
-            requireNoTransaction();
-            closeCursors();
-            const started = now();
+            if (!importing) throw new DatabaseError('No import is running.', { code: 'BAD_INPUT' });
             let inserted = 0;
-            let row = 0;
-            db.exec('BEGIN; PRAGMA defer_foreign_keys = ON;');
+            let row = -1;
             try {
                 for (const statement of setup) db.exec(statement);
                 const stmt = db.prepare(sql);
                 try {
-                    for (; row < rows.length; row++) {
+                    for (row = 0; row < rows.length; row++) {
                         stmt.bind(rows[row]).stepReset();
                         inserted += capi.sqlite3_changes(db.pointer);
                     }
                 } finally {
                     stmt.finalize();
                 }
-                row = -1;
-                db.exec('COMMIT;');
             } catch (error) {
                 const reason = cleanMessage(error instanceof Error ? error.message : error);
-                throw new DatabaseError(reason.message, { code: reason.code, ...(row >= 0 && row < rows.length ? { row: row + 1 } : {}) });
+                throw new DatabaseError(reason.message, { code: reason.code, ...(row >= 0 && row < rows.length ? { row: row + firstRow } : {}) });
+            }
+            return { rowsInserted: inserted };
+        },
+
+        /**
+         * Ends the import: commits it (when `commit`), or rolls it back. A
+         * foreign key that points nowhere fails the commit, and nothing is kept.
+         * @param {boolean} commit
+         */
+        endImport(commit) {
+            const { db } = requireOpen();
+            const pDb = db.pointer;
+            const started = importing ? importing.started : now();
+            const changesBefore = importing ? importing.changesBefore : capi.sqlite3_total_changes(pDb);
+            importing = null;
+            let failure = null;
+            try {
+                if (commit) {
+                    try {
+                        db.exec('COMMIT;');
+                    } catch (error) {
+                        failure = cleanMessage(error instanceof Error ? error.message : error);
+                    }
+                }
             } finally {
-                if (capi.sqlite3_get_autocommit(db.pointer) === 0) db.exec('ROLLBACK;');
+                if (capi.sqlite3_get_autocommit(pDb) === 0) db.exec('ROLLBACK;');
                 saveCurrent();
             }
-            return { rowsInserted: inserted, durationMs: Math.max(0, now() - started) };
+            if (failure) throw new DatabaseError(failure.message, { code: failure.code });
+            // Rows inserted, updated or deleted, as SQLite counts them (triggers included)
+            return { rowsAffected: capi.sqlite3_total_changes(pDb) - changesBefore, durationMs: Math.max(0, now() - started) };
         },
 
         /**

@@ -48,21 +48,44 @@ const attribute = (tag, name) => {
 };
 
 /**
+ * @typedef {{ cells: { text: string, header: boolean, span: number }[], head: boolean, line: number }} HtmlRow
+ */
+
+/**
  * Every table in the page, in the order they start.
  * @param {string} text
- * @returns {{ label: string, rows: { cells: { text: string, header: boolean, span: number }[], head: boolean, line: number }[] }[]}
+ * @returns {{ label: string, rows: HtmlRow[] }[]}
  */
 export function readHtmlTables(text) {
+    /** @type {HtmlRow[][]} */
+    const rows = [];
+    const reader = createHtmlTableReader((table, row) => {
+        (rows[table] ||= []).push(row);
+    });
+    reader.push(text);
+    return reader.end().map((t, i) => ({ label: t.label, rows: rows[i] || [] }));
+}
+
+const TAG = /<!--[\s\S]*?-->|<(script|style|template|textarea|title)\b[^>]*>[\s\S]*?<\/\1\s*>|<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
+// Elements whose content is never data, read whole
+const RAW = new Set(['script', 'style', 'template', 'textarea', 'title']);
+
+/**
+ * Reads the tables of a page that arrives in parts (a large file is read a
+ * few MB at a time). Each row is handed to onRow when it ends, with the
+ * number of its table (from 0, in the order tables start). A tag, comment or
+ * script cut at the end of a part waits for the next part.
+ * @param {(table: number, row: HtmlRow) => void} onRow
+ */
+export function createHtmlTableReader(onRow) {
     /** @type {any[]} */
     const tables = [];
     /** @type {any[]} open tables, innermost last */
     const open = [];
-    let line = 1;
-    let lineAt = 0;
-    const lineOf = at => {
-        for (; lineAt < at; lineAt++) if (text.charCodeAt(lineAt) === 10) line++;
-        return line;
-    };
+    let buffer = '';
+    // The line the buffer starts on
+    let baseLine = 1;
+
     const current = () => open[open.length - 1];
     const addText = s => {
         const t = current();
@@ -74,72 +97,113 @@ export function readHtmlTables(text) {
     };
     const closeRow = t => {
         closeCell(t);
+        if (t.row && t.row.cells.length > 0) {
+            t.rows++;
+            onRow(t.index, { head: t.row.head, line: t.row.line, cells: t.row.cells.map(c => ({ header: c.header, span: c.span, text: clean(c.text) })) });
+        }
         t.row = null;
     };
 
-    const tag = /<!--[\s\S]*?-->|<(script|style|template|textarea|title)\b[^>]*>[\s\S]*?<\/\1\s*>|<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
-    let last = 0;
-    let m;
-    while ((m = tag.exec(text))) {
-        if (m.index > last) addText(text.slice(last, m.index).replaceAll(BREAK, ''));
-        last = tag.lastIndex;
-        if (!m[3]) continue; // a comment, or a script, style or similar element: no data
-        const closing = m[2] === '/';
-        const name = m[3].toLowerCase();
-        const t = current();
-        if (name === 'table') {
-            if (closing) {
-                if (t) {
-                    closeRow(t);
-                    open.pop();
-                }
-            } else {
-                const table = { label: '', caption: '', id: attribute(m[0], 'id'), rows: [], row: null, cell: null, inHead: false, inCaption: false };
-                tables.push(table);
-                open.push(table);
-            }
-        } else if (!t) {
-            continue;
-        } else if (name === 'caption') {
-            t.inCaption = !closing;
-        } else if (name === 'thead') {
-            t.inHead = !closing;
-        } else if (name === 'tbody' || name === 'tfoot') {
-            if (!closing) t.inHead = false;
-        } else if (name === 'tr') {
-            closeRow(t);
-            if (!closing) {
-                t.row = { cells: [], head: t.inHead, line: lineOf(m.index) };
-                t.rows.push(t.row);
-            }
-        } else if (name === 'td' || name === 'th') {
-            closeCell(t);
-            if (!closing) {
-                if (!t.row) {
-                    t.row = { cells: [], head: t.inHead, line: lineOf(m.index) };
-                    t.rows.push(t.row);
-                }
-                const span = Math.min(Math.max(parseInt(attribute(m[0], 'colspan') || '1', 10) || 1, 1), 1000);
-                t.cell = { text: '', header: name === 'th', span };
-                t.row.cells.push(t.cell);
-            }
-        } else if (name === 'br') {
-            addText(BREAK);
-        } else if (/^(?:p|div|li|h[1-6])$/.test(name)) {
-            addText(' ');
-        }
-    }
-    if (last < text.length) addText(text.slice(last).replaceAll(BREAK, ''));
-
-    return tables.map((t, i) => {
-        const caption = clean(t.caption);
-        return {
-            label: caption || (t.id ? `#${t.id}` : `Table ${i + 1}`),
-            rows: t.rows
-                .filter(r => r.cells.length > 0)
-                .map(r => ({ head: r.head, line: r.line, cells: r.cells.map(c => ({ header: c.header, span: c.span, text: clean(c.text) })) }))
+    /** Reads the buffer up to what may continue in the next part (all of it when final). */
+    function read(final) {
+        const text = buffer;
+        let line = baseLine;
+        let lineAt = 0;
+        const lineOf = at => {
+            for (; lineAt < at; lineAt++) if (text.charCodeAt(lineAt) === 10) line++;
+            return line;
         };
-    });
+        TAG.lastIndex = 0;
+        let last = 0;
+        // Where an unfinished comment, script or tag starts, when more text may follow
+        let stop = -1;
+        let m;
+        while ((m = TAG.exec(text))) {
+            if (m.index > last) {
+                const gap = text.slice(last, m.index);
+                const comment = final ? -1 : gap.indexOf('<!--');
+                if (comment >= 0 && text.indexOf('-->', last + comment + 4) < 0) {
+                    stop = last + comment;
+                    addText(gap.slice(0, comment).replaceAll(BREAK, ''));
+                    break;
+                }
+                addText(gap.replaceAll(BREAK, ''));
+            }
+            if (!final && m[3] && m[2] !== '/' && RAW.has(m[3].toLowerCase())) {
+                // <script> without its </script> yet
+                stop = m.index;
+                break;
+            }
+            last = TAG.lastIndex;
+            if (!m[3]) continue; // a comment, or a script, style or similar element: no data
+            const closing = m[2] === '/';
+            const name = m[3].toLowerCase();
+            const t = current();
+            if (name === 'table') {
+                if (closing) {
+                    if (t) {
+                        closeRow(t);
+                        open.pop();
+                    }
+                } else {
+                    const table = { index: tables.length, caption: '', id: attribute(m[0], 'id'), rows: 0, row: null, cell: null, inHead: false, inCaption: false };
+                    tables.push(table);
+                    open.push(table);
+                }
+            } else if (!t) {
+                continue;
+            } else if (name === 'caption') {
+                t.inCaption = !closing;
+            } else if (name === 'thead') {
+                t.inHead = !closing;
+            } else if (name === 'tbody' || name === 'tfoot') {
+                if (!closing) t.inHead = false;
+            } else if (name === 'tr') {
+                closeRow(t);
+                if (!closing) t.row = { cells: [], head: t.inHead, line: lineOf(m.index) };
+            } else if (name === 'td' || name === 'th') {
+                closeCell(t);
+                if (!closing) {
+                    if (!t.row) t.row = { cells: [], head: t.inHead, line: lineOf(m.index) };
+                    const span = Math.min(Math.max(parseInt(attribute(m[0], 'colspan') || '1', 10) || 1, 1), 1000);
+                    t.cell = { text: '', header: name === 'th', span };
+                    t.row.cells.push(t.cell);
+                }
+            } else if (name === 'br') {
+                addText(BREAK);
+            } else if (/^(?:p|div|li|h[1-6])$/.test(name)) {
+                addText(' ');
+            }
+        }
+        if (stop < 0) {
+            const rest = text.slice(last);
+            // A comment not closed yet, or a tag cut at the end of this part
+            const comment = final ? -1 : rest.indexOf('<!--');
+            const open = final ? -1 : comment >= 0 ? comment : rest.lastIndexOf('<');
+            stop = open >= 0 ? last + open : text.length;
+            addText(rest.slice(0, open >= 0 ? open : rest.length).replaceAll(BREAK, ''));
+        }
+        lineOf(stop);
+        baseLine = line;
+        buffer = text.slice(stop);
+    }
+
+    return {
+        /** @param {string} text the next part of the page */
+        push(text) {
+            buffer += text;
+            read(false);
+        },
+        /** Reads what is left; returns each table's name and number of rows. */
+        end() {
+            read(true);
+            while (open.length) {
+                closeRow(current());
+                open.pop();
+            }
+            return tables.map((t, i) => ({ label: clean(t.caption) || (t.id ? `#${t.id}` : `Table ${i + 1}`), rows: t.rows }));
+        }
+    };
 }
 
 /** Cell text: entities decoded, spaces collapsed, line breaks from <br> kept. */
