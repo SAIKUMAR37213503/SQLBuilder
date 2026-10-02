@@ -356,6 +356,35 @@ async function main() {
         return { ok: heading === 'E2E DB' && builderShown && foregroundPackage().includes(PKG), detail: JSON.stringify({ heading, builderShown }) };
     });
 
+    await check('SQL Lab: import a CSV (preview, then Import) into the database', async () => {
+        await page.eval(JS.click('#view-lab-btn'));
+        await sleep(600);
+        await page.eval(JS.click('#lab-import-btn'));
+        await sleep(400);
+        await page.eval(`(() => {
+            const area = document.getElementById('lab-import-text');
+            area.value = 'EmployeeID,Name,Department,Salary\\n1,Ada,Engineering,120000\\n2,Grace,Engineering,100000\\n3,Linus,Sales,70000\\n4,Margaret,Sales,90000\\n';
+            area.dispatchEvent(new Event('input', { bubbles: true }));
+            const table = document.getElementById('lab-import-table');
+            table.value = 'Employees';
+            table.dispatchEvent(new Event('input', { bubbles: true }));
+            return true;
+        })()`);
+        const label = await waitFor(async () => {
+            const t = await page.eval(`(() => { const b = document.getElementById('lab-import-run'); return b.disabled ? '' : b.textContent; })()`);
+            return t === 'Import 4 rows' && t;
+        }, { timeout: 15000, message: 'the import preview' });
+        screenshot('09-sql-lab-import');
+        await page.eval(JS.click('#lab-import-run'));
+        const rows = await waitFor(async () => {
+            const t = await page.eval(`document.querySelector('.lab-structure-rows')?.textContent || ''`);
+            return t === 'Rows: 4' && t;
+        }, { timeout: 15000, message: 'the imported table' });
+        const toast = await page.eval(`document.getElementById('toast').textContent`);
+        await page.eval(JS.click('#view-builder-btn'));
+        return { ok: label === 'Import 4 rows' && rows === 'Rows: 4' && toast.includes('Imported 4 rows into Employees'), detail: JSON.stringify({ label, rows, toast }) };
+    });
+
     await check('history, templates and settings persist across an app restart', async () => {
         await page.eval(JS.click('#generate-btn'));
         await sleep(400);
@@ -382,8 +411,12 @@ async function main() {
             return t === 'E2E DB' && t;
         }, { timeout: 30000, message: 'the database to reopen' });
         const listed = await page.eval(`Array.from(document.querySelectorAll('#lab-db-list .lab-db-name'), e => e.textContent)`);
+        const tables = await waitFor(async () => {
+            const t = await page.eval(`Array.from(document.querySelectorAll('.lab-object-name'), e => e.textContent)`);
+            return t.length > 0 && t;
+        }, { timeout: 15000, message: 'the database\'s tables' }).catch(() => []);
         await page.eval(JS.click('#view-builder-btn'));
-        return { ok: heading === 'E2E DB' && listed.includes('E2E DB'), detail: JSON.stringify({ heading, listed }) };
+        return { ok: heading === 'E2E DB' && listed.includes('E2E DB') && tables.includes('Employees'), detail: JSON.stringify({ heading, listed, tables }) };
     });
 
     await check('Back with nothing open leaves the app (to the background)', async () => {

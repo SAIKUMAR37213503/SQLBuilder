@@ -214,6 +214,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         skipLink: /** @type {any} */ (doc.querySelector('.skip-link')),
         schemaDb: $('schema-db-btn'),
         labTablesDialog: $('lab-tables-dialog'),
+        labImportDialog: $('lab-import-dialog'),
         statusBadge: $('status-badge')
     };
 
@@ -2203,7 +2204,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             suggester.close();
             return true;
         }
-        const dialogs = [el.confirmDialog, el.labTablesDialog, el.versionsDialog, el.projectsDialog, el.moveDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
+        const dialogs = [el.confirmDialog, el.labTablesDialog, el.labImportDialog, el.versionsDialog, el.projectsDialog, el.moveDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
         const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
         if (open) {
             closeDialog(open, 'cancel');
@@ -2226,7 +2227,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         doc,
         storage,
         client: dbClient || createEngineClient(doc),
-        dialogs: { prompt: el.promptDialog, confirm: el.confirmDialog, tables: el.labTablesDialog },
+        dialogs: { prompt: el.promptDialog, confirm: el.confirmDialog, tables: el.labTablesDialog, import: el.labImportDialog },
         toast,
         schemaTables: () => schema.list(),
         isNative: platform.isNative,
@@ -2411,6 +2412,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             el.lab.hidden
                 ? { id: 'open-lab', group: 'SQL Lab', label: 'Open SQL Lab', keywords: 'database run execute sqlite tables data', run: () => setView('lab') }
                 : { id: 'open-builder', group: 'SQL Lab', label: 'Back to the query builder', keywords: 'builder', run: () => setView('builder') },
+            { id: 'lab-import', group: 'SQL Lab', label: 'Import into SQL Lab…', keywords: 'database sqlite csv json sql file load data', run: () => { setView('lab', { focus: false }); lab.importData(); } },
             schema.size > 0 && { id: 'schema-to-lab', group: 'SQL Lab', label: 'Create schema tables in SQL Lab…', keywords: 'database sqlite create table run', run: () => lab.createTablesFromSchema() },
             { id: 'open-history', group: 'Library', label: 'Open history', run: () => openLibraryTab('history') },
             { id: 'open-templates', group: 'Library', label: 'Open templates', run: () => openLibraryTab('templates') },
@@ -2624,7 +2626,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
 
     [el.settingsDialog, el.promptDialog, el.templateDialog, el.confirmDialog, el.shortcutsDialog, el.paletteDialog, el.backupDialog,
         el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.versionsDialog, el.projectsDialog, el.moveDialog,
-        el.labTablesDialog].forEach(enhanceDialog);
+        el.labTablesDialog, el.labImportDialog].forEach(enhanceDialog);
 
     bindShortcuts(doc, signal, {
         generate,

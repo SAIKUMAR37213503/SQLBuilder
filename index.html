@@ -11,9 +11,9 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <!-- The SQL Lab's database engine (SQLite). Listed so the offline cache keeps it and the app finds its current URL. -->
-    <link rel="prefetch" href="dist/db-worker.js?v=d94cfe1334dd" id="asset-db-worker">
+    <link rel="prefetch" href="dist/db-worker.js?v=387db0c8a79e" id="asset-db-worker">
     <link rel="prefetch" href="dist/sqlite3.wasm?v=2ee8f3dab694" id="asset-sqlite-wasm">
-    <link rel="stylesheet" href="style.css?v=66200efcb23f">
+    <link rel="stylesheet" href="style.css?v=b1d0b9c4786a">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -250,7 +250,10 @@
                     <nav class="lab-explorer" aria-labelledby="lab-explorer-heading">
                         <div class="lab-explorer-head">
                             <h3 id="lab-explorer-heading" class="lab-subheading">Databases</h3>
-                            <button type="button" class="btn btn-secondary btn-sm" id="lab-new-btn">New database…</button>
+                            <div class="lab-explorer-actions">
+                                <button type="button" class="btn btn-secondary btn-sm" id="lab-new-btn">New database…</button>
+                                <button type="button" class="btn btn-ghost btn-sm" id="lab-import-btn">Import…</button>
+                            </div>
                         </div>
                         <ul class="lab-db-list" id="lab-db-list" aria-label="Databases"></ul>
                         <div class="lab-objects" id="lab-objects"></div>
@@ -554,6 +557,84 @@
         </form>
     </dialog>
 
+    <dialog id="lab-import-dialog" class="dialog dialog-wide" aria-labelledby="lab-import-title" aria-describedby="lab-import-intro">
+        <form method="dialog" class="dialog-body">
+            <h2 id="lab-import-title" class="dialog-title">Import into SQL Lab</h2>
+            <p class="dialog-message" id="lab-import-intro">Import a SQL script, CSV or JSON into a database, or add a SQLite database file. You see what will happen first. Nothing changes until you select Import, and it all runs as one step: if anything fails, nothing is kept.</p>
+            <div class="field">
+                <span class="field-label" id="lab-import-file-label">File</span>
+                <div class="lab-import-source">
+                    <button type="button" class="btn btn-secondary btn-sm" id="lab-import-file-btn" aria-describedby="lab-import-file-name">Choose a file…</button>
+                    <span class="lab-import-file-name" id="lab-import-file-name">No file chosen (.sql, .csv, .json, .sqlite; up to 50 MB)</span>
+                    <button type="button" class="btn btn-ghost btn-sm" id="lab-import-clear" hidden>Remove file</button>
+                    <input type="file" id="lab-import-file" class="visually-hidden" tabindex="-1" aria-hidden="true" accept=".sql,.csv,.tsv,.txt,.json,.jsonl,.ndjson,.sqlite,.sqlite3,.db,.db3">
+                </div>
+            </div>
+            <div class="field" id="lab-import-paste-field">
+                <label class="field-label" for="lab-import-text">Or paste SQL, CSV or JSON</label>
+                <textarea id="lab-import-text" class="input textarea code-input" rows="5" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+            </div>
+            <div class="field-row">
+                <div class="field">
+                    <label class="field-label" for="lab-import-format">Format</label>
+                    <select id="lab-import-format" class="select" aria-describedby="lab-import-format-hint">
+                        <option value="sql">SQL script</option>
+                        <option value="csv">CSV or delimited text</option>
+                        <option value="json">JSON</option>
+                        <option value="sqlite">SQLite database file</option>
+                    </select>
+                    <p class="field-hint" id="lab-import-format-hint"></p>
+                </div>
+                <div class="field" id="lab-import-db-field">
+                    <label class="field-label" for="lab-import-db">Database</label>
+                    <select id="lab-import-db" class="select"></select>
+                </div>
+                <div class="field" id="lab-import-new-field">
+                    <label class="field-label" for="lab-import-new-name">New database name</label>
+                    <input type="text" id="lab-import-new-name" class="input" maxlength="60" autocomplete="off" spellcheck="false">
+                </div>
+            </div>
+            <fieldset class="fieldset" id="lab-import-csv-options">
+                <legend>CSV</legend>
+                <div class="field-row">
+                    <div class="field">
+                        <label class="field-label" for="lab-import-delimiter">Values separated by</label>
+                        <select id="lab-import-delimiter" class="select">
+                            <option value="auto">Detect automatically</option>
+                            <option value=",">Comma (,)</option>
+                            <option value=";">Semicolon (;)</option>
+                            <option value="&#9;">Tab</option>
+                            <option value="|">Pipe (|)</option>
+                        </select>
+                    </div>
+                    <label class="check lab-import-header"><input type="checkbox" id="lab-import-header" checked> <span>First row has the column names</span></label>
+                </div>
+            </fieldset>
+            <fieldset class="fieldset" id="lab-import-table-options">
+                <legend>Table</legend>
+                <div class="field-row">
+                    <div class="field">
+                        <label class="check"><input type="radio" name="lab-import-mode" value="new" checked> <span>Create a new table</span></label>
+                        <label class="field-label visually-hidden" for="lab-import-table">New table name</label>
+                        <input type="text" id="lab-import-table" class="input" maxlength="128" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div class="field">
+                        <label class="check"><input type="radio" name="lab-import-mode" value="append" id="lab-import-append"> <span>Add the rows to a table</span></label>
+                        <label class="field-label visually-hidden" for="lab-import-append-table">Table to add the rows to</label>
+                        <select id="lab-import-append-table" class="select"></select>
+                    </div>
+                </div>
+            </fieldset>
+            <div class="lab-import-preview" id="lab-import-preview" aria-live="polite"></div>
+            <ul class="lab-tables-notes" id="lab-import-notes" aria-label="About this import"></ul>
+            <p class="dialog-error field-error" id="lab-import-error" role="alert"></p>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary" id="lab-import-run">Import</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="confirm-dialog" class="dialog dialog-sm" aria-labelledby="confirm-title" aria-describedby="confirm-message">
         <form method="dialog" class="dialog-body">
             <h2 id="confirm-title" class="dialog-title">Are you sure?</h2>
@@ -590,6 +671,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=d30cef051254" defer></script>
+    <script src="dist/sqlbuilder.js?v=70a777164cc7" defer></script>
 </body>
 </html>

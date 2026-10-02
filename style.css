@@ -1305,6 +1305,39 @@ kbd {
 .lab-sql-preview { max-height: 16rem; }
 #lab-tables-new-field[hidden] { display: none; }
 
+/* Import into SQL Lab */
+.lab-explorer-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.lab-explorer-actions [hidden] { display: none; }
+.lab-import-source { display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; }
+.lab-import-file-name { color: var(--text-muted); font-size: 0.85rem; overflow-wrap: anywhere; min-width: 0; }
+#lab-import-dialog .field[hidden], #lab-import-dialog .fieldset[hidden] { display: none; }
+#lab-import-dialog .field-row { align-items: start; }
+#lab-import-dialog .field-row .select, #lab-import-dialog .field-row .input { width: 100%; min-width: 0; }
+.lab-import-header { align-self: end; min-height: 2.5rem; }
+.lab-import-preview { display: grid; gap: 0.5rem; min-width: 0; }
+.lab-import-preview:empty { display: none; }
+.lab-import-status { font-size: 0.875rem; color: var(--text-2); }
+.lab-import-problem { color: var(--danger); }
+.lab-import-preview .lab-import-status.lab-import-problem { padding: 0.5rem 0.75rem; border-left: 4px solid var(--danger); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--text); }
+.lab-import-warning { color: var(--warning); }
+.lab-import-preview .lab-import-status.lab-import-warning { padding: 0.5rem 0.75rem; border-left: 4px solid var(--warning); border-radius: var(--radius-sm); background: var(--warning-soft); }
+.lab-import-scroll { max-height: 16rem; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.lab-import-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.lab-import-statements { display: grid; margin: 0; padding: 0; list-style: none; font-size: 0.85rem; }
+.lab-import-statements > li { display: flex; flex-wrap: wrap; gap: 0.1rem 0.6rem; align-items: baseline; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+.lab-import-statements > li:last-child { border-bottom: 0; }
+.lab-import-statement { font-family: var(--font-mono); font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.lab-import-meta { color: var(--text-muted); font-size: 0.8rem; }
+.lab-import-statements > li.is-skipped .lab-import-statement { color: var(--text-muted); font-weight: 400; text-decoration: line-through; }
+.lab-import-statements > li.has-issues { box-shadow: inset 3px 0 0 var(--warning); }
+.lab-import-issues { flex-basis: 100%; display: grid; gap: 0.15rem; margin: 0.15rem 0 0; padding-left: 1.1rem; color: var(--warning); font-size: 0.8rem; }
+.lab-import-sample { max-height: 18rem; overflow: auto; }
+.lab-data td { font-family: var(--font-mono); font-size: 0.8rem; max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
+.lab-data .lab-null { color: var(--text-muted); font-style: italic; }
+.lab-data thead th { position: sticky; top: 0; font-family: var(--font-mono); }
+.select-sm { min-height: 2rem; padding-top: 0.2rem; padding-bottom: 0.2rem; font-size: 0.85rem; }
+.lab-columns td .select-sm { min-width: 7.5rem; }
+
 /* The phone action bar is for the builder */
 body.view-lab .mobile-bar { display: none; }
 @media (max-width: 759px) {

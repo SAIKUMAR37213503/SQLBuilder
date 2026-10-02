@@ -1,6 +1,7 @@
 // The SQL Lab view: the databases kept in this browser (create, open,
 // rename, duplicate, delete), what each contains (tables, views and their
-// columns), and creating the Schema tab's tables in a database.
+// columns), creating the Schema tab's tables in a database, and importing
+// SQL, CSV, JSON or SQLite files (lab-import.js).
 //
 // The engine runs in a worker (see db/client.js) and starts the first time
 // the SQL Lab is shown, so the builder never pays for it.
@@ -11,6 +12,7 @@ import { formDialog, confirmDialog, promptDialog } from './dialogs.js';
 import { createDatabaseList, DatabaseListError } from '../db/databases.js';
 import { sqliteCreateTables, sqliteName, sqliteTableName } from '../db/schema-sql.js';
 import { createStorage, createMemoryBackend } from '../storage.js';
+import { createImportDialog } from './lab-import.js';
 
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -26,7 +28,7 @@ export function describeError(error) {
  *   doc: Document,
  *   storage: any,
  *   client: any,
- *   dialogs: { prompt: any, confirm: any, tables: any },
+ *   dialogs: { prompt: any, confirm: any, tables: any, import?: any },
  *   toast: (message: string, kind?: string) => void,
  *   schemaTables: () => any[],
  *   isNative?: boolean,
@@ -41,6 +43,7 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         engine: $('lab-engine'),
         notice: $('lab-notice'),
         newBtn: $('lab-new-btn'),
+        importBtn: $('lab-import-btn'),
         list: $('lab-db-list'),
         objects: $('lab-objects'),
         main: $('lab-main')
@@ -105,21 +108,29 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         if (usable() && databases.lastOpen) await task(() => openDatabase(databases.lastOpen, { quiet: true }));
     }
 
-    /** Runs one database action at a time; errors become a message. */
-    async function task(work) {
-        if (state.busy) return undefined;
+    /** Runs one database action at a time (errors are the caller's to show). */
+    async function exclusive(work) {
+        if (state.busy) throw new Error('Another database action is still running.');
         state.busy = true;
         el.view.setAttribute('aria-busy', 'true');
         render();
         try {
             return await work();
-        } catch (error) {
-            toast(error instanceof DatabaseListError ? error.message : describeError(error), 'error');
-            return undefined;
         } finally {
             state.busy = false;
             el.view.removeAttribute('aria-busy');
             render();
+        }
+    }
+
+    /** Runs one database action at a time; errors become a message. */
+    async function task(work) {
+        if (state.busy) return undefined;
+        try {
+            return await exclusive(work);
+        } catch (error) {
+            toast(error instanceof DatabaseListError ? error.message : describeError(error), 'error');
+            return undefined;
         }
     }
 
@@ -254,6 +265,49 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         }
     }
 
+    /** Whether the engine can take an action now; says why not. */
+    async function ready() {
+        if (!(await start()) || !usable()) {
+            toast(engineState().info?.storageReason === 'busy'
+                ? 'SQL Lab is open in another tab or window. Close it there, then try again.'
+                : 'The database engine isn\'t available in this browser.', 'error');
+            return false;
+        }
+        return true;
+    }
+
+    // ------------------------------------------------------------ import
+
+    const importer = dialogs.import ? createImportDialog({
+        dialog: dialogs.import,
+        client,
+        toast,
+        lab: {
+            databases: () => databases,
+            state,
+            ready,
+            openDatabase,
+            loadObjects,
+            exclusive,
+            freeName,
+            async select(name) {
+                state.selected = name;
+                await countSelected();
+            },
+            render: () => render(),
+            where
+        }
+    }) : null;
+
+    async function importData() {
+        if (!importer) return;
+        const imported = await importer.open();
+        if (imported) {
+            show();
+            doc.getElementById(state.selected ? 'lab-structure-title' : 'lab-main-heading')?.focus();
+        }
+    }
+
     // ------------------------------------------- Schema tables -> database
 
     /** The Create tables dialog: choose a database and tables, see the SQL, confirm. */
@@ -263,13 +317,7 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
             toast('The schema has no tables yet. Add or import tables in the Schema tab first.');
             return;
         }
-        if (state.busy) return;
-        if (!(await start()) || !usable()) {
-            toast(engineState().info?.storageReason === 'busy'
-                ? 'SQL Lab is open in another tab or window. Close it there, then try again.'
-                : 'The database engine isn\'t available in this browser.', 'error');
-            return;
-        }
+        if (state.busy || !(await ready())) return;
         const dialog = dialogs.tables;
         const $d = (id) => /** @type {any} */ (dialog.querySelector(`#${id}`));
         const select = $d('lab-tables-db');
@@ -444,6 +492,10 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
     function renderList() {
         const ready = usable();
         el.newBtn.disabled = !ready || state.busy;
+        if (el.importBtn) {
+            el.importBtn.disabled = !ready || state.busy;
+            el.importBtn.hidden = !importer;
+        }
         const items = databases.list();
         if (!ready) {
             el.list.replaceChildren();
@@ -504,16 +556,18 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
             el.main.replaceChildren(h('div', { class: 'empty-state lab-empty' },
                 h('h3', { class: 'empty-title', id: 'lab-main-heading', tabindex: '-1' }, none ? 'No databases yet' : 'No database open'),
                 h('p', {}, none
-                    ? `Create a database to keep tables and data ${where}.`
+                    ? `Create a database, or import a SQL, CSV, JSON or SQLite file, to keep tables and data ${where}.`
                     : 'Open a database from the list, or create a new one.'),
                 h('div', { class: 'empty-actions' },
                     h('button', { type: 'button', class: 'btn btn-primary btn-sm', dataset: { labAction: 'new' }, disabled: state.busy }, 'New database…'),
+                    importer ? h('button', { type: 'button', class: 'btn btn-secondary btn-sm', dataset: { labAction: 'import' }, disabled: state.busy }, 'Import a file…') : null,
                     hasSchema ? h('button', { type: 'button', class: 'btn btn-secondary btn-sm', dataset: { labAction: 'from-schema' }, disabled: state.busy }, 'Create your schema\'s tables…') : null)));
             return;
         }
         const header = h('div', { class: 'lab-main-head' },
             h('h3', { id: 'lab-main-heading', class: 'lab-db-title', tabindex: '-1' }, entry.name),
             h('div', { class: 'lab-main-actions' },
+                importer ? actionButton('Import…', 'import', `Import SQL, CSV or JSON into ${entry.name}`, 'secondary') : null,
                 hasSchema ? actionButton('Add schema tables…', 'from-schema', `Create tables from your schema in ${entry.name}`, 'secondary') : null,
                 actionButton('Rename…', 'rename', `Rename ${entry.name}`, 'ghost', { id: entry.id }),
                 actionButton('Duplicate', 'duplicate', `Duplicate ${entry.name}`, 'ghost', { id: entry.id }),
@@ -526,8 +580,12 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
                 ? h('p', { class: 'lab-empty-hint' }, `${plural(state.objects.filter(o => o.type === 'table').length, 'table')}${state.objects.some(o => o.type === 'view') ? ` and ${plural(state.objects.filter(o => o.type === 'view').length, 'view')}` : ''}. Select one to see its columns.`)
                 : h('div', { class: 'empty-state' },
                     h('p', { class: 'empty-title' }, 'This database is empty'),
-                    h('p', {}, hasSchema ? 'Create the tables from your schema, or start from scratch.' : 'Add tables in the Schema tab, then create them here.'),
-                    hasSchema ? h('div', { class: 'empty-actions' }, h('button', { type: 'button', class: 'btn btn-primary btn-sm', dataset: { labAction: 'from-schema' }, disabled: state.busy }, 'Create your schema\'s tables…')) : null));
+                    h('p', {}, hasSchema
+                        ? 'Import a SQL script, CSV or JSON file, or create the tables from your schema.'
+                        : 'Import a SQL script, CSV or JSON file, or add tables in the Schema tab and create them here.'),
+                    h('div', { class: 'empty-actions' },
+                        importer ? h('button', { type: 'button', class: 'btn btn-primary btn-sm', dataset: { labAction: 'import' }, disabled: state.busy }, 'Import data…') : null,
+                        hasSchema ? h('button', { type: 'button', class: `btn ${importer ? 'btn-secondary' : 'btn-primary'} btn-sm`, dataset: { labAction: 'from-schema' }, disabled: state.busy }, 'Create your schema\'s tables…') : null)));
             return;
         }
         el.main.replaceChildren(header, renderStructure(object));
@@ -587,9 +645,11 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         else if (action === 'close') closeDatabase();
         else if (action === 'select') selectObject(name);
         else if (action === 'from-schema') createTablesFromSchema();
+        else if (action === 'import') importData();
         else if (action === 'retry') retry();
     });
     el.newBtn.addEventListener('click', newDatabase);
+    el.importBtn?.addEventListener('click', importData);
 
     function show() {
         const first = !state.started;
@@ -607,6 +667,7 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         show,
         render,
         createTablesFromSchema,
+        importData,
         get databases() { return databases; },
         get state() { return { ...state }; },
 
