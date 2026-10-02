@@ -15,6 +15,7 @@ import { sqliteCreateTables, sqliteTableName } from '../db/schema-sql.js';
 import { createStorage, createMemoryBackend } from '../storage.js';
 import { createImportDialog } from './lab-import.js';
 import { createConsole } from './lab-console.js';
+import { icon, twisty, folderNode, objectChildren } from './lab-tree.js';
 
 const TABS = [
     { id: 'results', label: 'Results' },
@@ -72,8 +73,11 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         busy: false,
         started: false,
         /** which of TABS is showing */
-        tab: 'table'
+        tab: 'table',
+        /** @type {Map<string, boolean>} explorer folders opened or closed by hand (the rest keep their default) */
+        expanded: new Map()
     };
+    const isOpen = (/** @type {string} */ key, /** @type {boolean} */ fallback) => state.expanded.get(key) ?? fallback;
 
     // ------------------------------------------------------------ engine
 
@@ -511,45 +515,85 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
             el.importBtn.hidden = !importer;
         }
         const items = databases.list();
+        // The open database's tables go under it in the tree
+        const park = () => el.list.after(el.objects);
         if (!ready) {
             el.list.replaceChildren();
+            park();
             return;
         }
         if (items.length === 0) {
             el.list.replaceChildren(h('li', { class: 'lab-empty-hint' }, 'No databases yet.'));
+            park();
             return;
         }
+        /** @type {any} */
+        let holder = null;
         el.list.replaceChildren(...items.map(d => {
             const current = d.id === state.open;
-            return h('li', { class: `lab-db${current ? ' is-open' : ''}` },
-                h('button', {
-                    type: 'button', class: 'lab-db-btn', dataset: { labAction: 'open', id: d.id },
-                    'aria-current': current ? 'true' : null, disabled: state.busy
-                },
-                h('span', { class: 'lab-db-name' }, d.name),
-                h('span', { class: 'lab-db-meta' }, current ? 'Open' : (d.updatedAt ? `Changed ${formatTime(d.updatedAt)}` : ''))));
+            const open = current && isOpen('db', true);
+            const li = h('li', { class: `lab-node lab-db${current ? ' is-open' : ''}` },
+                h('div', { class: 'lab-row' },
+                    current
+                        ? twisty('db', open, `Tables and views of ${d.name}`, { disabled: state.busy })
+                        // Opening a closed database's arrow opens the database, as SSMS connects on expand
+                        : h('button', { type: 'button', class: 'lab-twisty', 'aria-expanded': 'false', 'aria-label': `Open ${d.name}`, dataset: { labAction: 'open', id: d.id }, disabled: state.busy }),
+                    h('button', {
+                        type: 'button', class: 'lab-db-btn', dataset: { labAction: 'open', id: d.id },
+                        'aria-current': current ? 'true' : null, disabled: state.busy
+                    },
+                    icon('database'),
+                    h('span', { class: 'lab-db-name' }, d.name),
+                    h('span', { class: 'lab-db-meta' }, current ? 'Open' : (d.updatedAt ? `Changed ${formatTime(d.updatedAt)}` : '')))));
+            if (open) holder = li;
+            return li;
         }));
+        if (holder) holder.append(el.objects);
+        else park();
     }
 
     function renderObjects() {
-        if (!usable() || !state.open || !state.objects) {
+        if (!usable() || !state.open || !state.objects || !isOpen('db', true)) {
             el.objects.replaceChildren();
             return;
         }
-        const group = (type, title) => {
+        const folder = (type, title) => {
             const items = state.objects.filter(o => o.type === type);
-            if (items.length === 0) return null;
-            return h('div', { class: 'lab-object-group' },
-                h('h4', { class: 'lab-subheading' }, `${title} (${items.length})`),
-                h('ul', { class: 'lab-object-list' }, items.map(o => h('li', {},
-                    h('button', {
-                        type: 'button', class: 'lab-object-btn', dataset: { labAction: 'select', name: o.name },
-                        'aria-current': o.name === state.selected ? 'true' : null, disabled: state.busy
-                    }, h('span', { class: 'lab-object-name' }, o.name), h('span', { class: 'lab-object-meta' }, plural(o.columns.length, 'column')))))));
+            return folderNode({
+                key: `${type}s`,
+                title,
+                count: items.length,
+                open: isOpen(`${type}s`, true),
+                label: title,
+                children: () => items.map(o => {
+                    const key = `${o.type}:${o.name}`;
+                    const open = isOpen(key, false);
+                    return h('li', { class: 'lab-node' },
+                        h('div', { class: 'lab-row' },
+                            twisty(key, open, `Columns${o.type === 'table' ? ' and keys' : ''} of ${o.name}`),
+                            h('button', {
+                                type: 'button', class: 'lab-object-btn', dataset: { labAction: 'select', name: o.name },
+                                'aria-current': o.name === state.selected ? 'true' : null, disabled: state.busy
+                            }, icon(o.type === 'view' ? 'view' : 'table'), h('span', { class: 'lab-object-name' }, o.name))),
+                        open ? h('ul', { class: 'lab-children' }, objectChildren(o, isOpen)) : null);
+                })
+            });
         };
-        const tables = group('table', 'Tables');
-        const views = group('view', 'Views');
-        el.objects.replaceChildren(...(tables || views ? [tables, views].filter(Boolean) : [h('p', { class: 'lab-empty-hint' }, 'No tables yet.')]));
+        el.objects.replaceChildren(folder('table', 'Tables'), folder('view', 'Views'));
+    }
+
+    // Open until closed: the database, its Tables and Views, and a table's Columns
+    const openByDefault = (/** @type {string} */ key) => ['db', 'tables', 'views'].includes(key) || key.endsWith(':columns');
+
+    /** Opens or closes a folder of the explorer; returns whether it changed. */
+    function toggleNode(key, open = !isOpen(key, openByDefault(key))) {
+        if (isOpen(key, openByDefault(key)) === open) return false;
+        state.expanded.set(key, open);
+        renderList();
+        renderObjects();
+        // Focus stays on the arrow that was used (the tree was drawn again)
+        el.view.querySelector(`[data-lab-toggle="${CSS.escape(key)}"]`)?.focus();
+        return true;
     }
 
     function actionButton(text, action, label, variant = 'ghost', extra = {}) {
@@ -726,6 +770,11 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
     // ------------------------------------------------------------ wiring
 
     el.view.addEventListener('click', (event) => {
+        const toggle = /** @type {any} */ (event.target).closest('[data-lab-toggle], [data-lab-toggle-by]');
+        if (toggle && !toggle.disabled) {
+            toggleNode(toggle.dataset.labToggle || toggle.dataset.labToggleBy);
+            return;
+        }
         const button = /** @type {any} */ (event.target).closest('[data-lab-action]');
         if (!button || button.disabled) return;
         const { labAction: action, id, name } = button.dataset;
@@ -741,6 +790,27 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         else if (action === 'from-schema') createTablesFromSchema();
         else if (action === 'import') importData();
         else if (action === 'retry') retry();
+    });
+    // In the explorer, Right opens a node and Left closes it (or moves to its parent), as in SSMS
+    el.view.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
+        if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+        const target = /** @type {any} */ (event.target);
+        const row = target.closest?.('.lab-explorer .lab-row');
+        if (!row) return;
+        const arrow = row.querySelector('.lab-twisty:not(.is-leaf)');
+        event.preventDefault();
+        if (event.key === 'ArrowRight') {
+            if (arrow?.dataset.labToggle) toggleNode(arrow.dataset.labToggle, true);
+            else if (arrow?.dataset.labAction === 'open') arrow.click();
+            return;
+        }
+        if (arrow?.dataset.labToggle && arrow.getAttribute('aria-expanded') === 'true') {
+            toggleNode(arrow.dataset.labToggle, false);
+            return;
+        }
+        // Up to the parent node's arrow
+        const parent = row.closest('.lab-children')?.closest('.lab-node');
+        parent?.querySelector(':scope > .lab-row button')?.focus();
     });
     el.newBtn.addEventListener('click', newDatabase);
     el.importBtn?.addEventListener('click', importData);
