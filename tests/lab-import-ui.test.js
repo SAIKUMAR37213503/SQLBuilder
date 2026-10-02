@@ -319,6 +319,38 @@ describe('importing a SQLite database file', () => {
         expect(await query('SELECT x FROM t')).toEqual([['kept']]);
     });
 
+    test('a .bak file imports by what it holds; a SQL Server backup is explained', async () => {
+        boot();
+        await openLab();
+        await newDatabase('Source');
+        await query("CREATE TABLE t (x TEXT); INSERT INTO t VALUES ('kept');");
+        const bytes = await client.call('exportFile', { id: app.lab.databases.list()[0].id });
+        await openImport();
+
+        // A copy of a SQLite database
+        await choose(new File([bytes], 'shop.bak'));
+        expect(text('#lab-import-error')).toBe('');
+        expect($('#lab-import-format').value).toBe('sqlite');
+        expect($('#lab-import-new-name').value).toBe('shop');
+        $('#lab-import-clear').click();
+        await settle();
+
+        // A SQL script
+        await choose(new File(['CREATE TABLE seed (a INTEGER);\nINSERT INTO seed VALUES (1);\n'], 'seed.bak'));
+        expect($('#lab-import-format').value).toBe('sql');
+        expect(text('#lab-import-preview')).toContain('CREATE TABLE seed');
+
+        // A SQL Server backup can't be read here: the script before it is let go, nothing is loaded, and the message says what to do
+        const mtf = new Uint8Array(2048);
+        mtf.set([0x54, 0x41, 0x50, 0x45]);
+        await choose(new File([mtf], 'Company.bak'));
+        expect(text('#lab-import-error')).toContain('Company.bak is a SQL Server backup.');
+        expect(text('#lab-import-error')).toContain('Generate Scripts');
+        expect(text('#lab-import-file-name')).toContain('No file chosen');
+        expect(text('#lab-import-preview')).not.toContain('CREATE TABLE seed');
+        expect($('#lab-import-run').disabled).toBe(true);
+    });
+
     test('a file that isn\'t a database is refused', async () => {
         boot();
         await openLab();

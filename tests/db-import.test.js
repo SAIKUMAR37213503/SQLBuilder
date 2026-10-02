@@ -8,7 +8,7 @@ import { parseCsv, detectDelimiter } from '../src/db/import-csv.js';
 import { parseJsonRows } from '../src/db/import-json.js';
 import { fitsType, describeColumns, uniqueNames, createTableSql, insertSql } from '../src/db/import-types.js';
 import { readScript, runnableScript, groupStatements } from '../src/db/import-sql.js';
-import { detectFormat, previewImport, runImport, tableNameFor, MAX_IMPORT_BYTES } from '../src/db/importer.js';
+import { detectFormat, previewImport, runImport, tableNameFor, unreadableFile, MAX_IMPORT_BYTES } from '../src/db/importer.js';
 import { dispatch } from '../src/db/dispatch.js';
 
 let sqlite3;
@@ -226,6 +226,25 @@ describe('format and names', () => {
     test('a table is named after its file', () => {
         expect(tableNameFor('Employees.csv')).toBe('Employees');
         expect(tableNameFor('')).toBe('imported_data');
+        expect(tableNameFor('Employees.bak')).toBe('Employees');
+        expect(tableNameFor('Employees.csv.bak')).toBe('Employees');
+    });
+
+    test('a .bak file is read by what it holds', () => {
+        const bytes = (s) => new Uint8Array([...s].map(c => c.charCodeAt(0)));
+        expect(detectFormat({ name: 'staff.csv.bak' })).toBe('csv');
+        expect(detectFormat({ name: 'shop.db.bak' })).toBe('sqlite');
+        expect(detectFormat({ name: 'seed.bak', text: 'CREATE TABLE t (a);' })).toBe('sql');
+        expect(detectFormat({ name: 'rows.bak', text: 'id,name\n1,Ada' })).toBe('csv');
+        expect(detectFormat({ name: 'shop.bak', bytes: bytes('SQLite format 3\0' + ' '.repeat(100)) })).toBe('sqlite');
+
+        expect(unreadableFile(bytes('SQLite format 3\0\0\0'), 'shop.bak')).toBe(null);
+        expect(unreadableFile(bytes('CREATE TABLE t (a);'), 'seed.bak')).toBe(null);
+        expect(unreadableFile(new Uint8Array([0xff, 0xfe, 0x43, 0x00]), 'utf16.sql')).toBe(null);
+        expect(unreadableFile(bytes('TAPE\0\0\0\0\x01\0'), 'Company.bak')).toMatch(/^Company\.bak is a SQL Server backup\. SQL Lab can't restore SQL Server backups.*Generate Scripts/);
+        expect(unreadableFile(bytes('MSSQLBAK\0\0'), 'Company.bak')).toMatch(/is a SQL Server backup/);
+        expect(unreadableFile(bytes('PGDMP\x01\x0e\0'), 'shop.bak')).toMatch(/PostgreSQL backup.*pg_restore -f backup\.sql "shop\.bak"/);
+        expect(unreadableFile(bytes('PK\x03\x04\0\0'), 'archive.bak')).toBe('archive.bak isn\'t a file SQL Lab can import. Import a SQL script, a CSV or JSON file, or a SQLite database file.');
     });
 });
 
