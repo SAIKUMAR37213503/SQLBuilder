@@ -362,6 +362,54 @@ describe('importing a SQL Server script', () => {
     });
 });
 
+describe('importing an HTML table', () => {
+    const REPORT = `<!DOCTYPE html><html><head><title>Report</title><style>table { border: 1px; }</style></head><body>
+<table><caption>Summary</caption><tr><th>Server</th><td>localhost</td></tr></table>
+<table><caption>Results</caption>
+<tr><th>Action</th><th>Result</th></tr>
+<tr><td>Preparing dbo.DimDate</td><td>Success</td></tr>
+<tr><td>Save to file</td><td>Success</td></tr>
+</table></body></html>`;
+
+    test('an HTML file is read as a table; with several tables, one is chosen', async () => {
+        boot();
+        await openLab();
+        await openImport();
+        await choose(new File([REPORT], 'GenerateScriptReport.html', { type: 'text/html' }));
+        expect($('#lab-import-format').value).toBe('html');
+        expect($('#lab-import-csv-options').hidden).toBe(true);
+        expect($('#lab-import-html-options').hidden).toBe(false);
+        expect($$('#lab-import-html-table option').map(o => o.textContent)).toEqual(['Summary (1 row, 2 columns)', 'Results (2 rows, 2 columns)']);
+        // The first table with rows: no header row, so the columns are numbered
+        expect(text('#lab-import-preview')).toContain('1 row and 2 columns. Read from Summary; no header row, so the columns are numbered.');
+
+        $('#lab-import-html-table').value = '1';
+        $('#lab-import-html-table').dispatchEvent(new Event('change'));
+        await settle();
+        expect(text('#lab-import-preview')).toContain('2 rows and 2 columns. Read from Results; the first row has the column names.');
+        expect($('#lab-import-table').value).toBe('GenerateScriptReport');
+        expect($('#lab-import-run').textContent).toBe('Import 2 rows');
+        $('#lab-import-run').click();
+        await settle();
+        expect(text('#lab-import-error')).toBe('');
+        expect(await query('SELECT Action, Result FROM GenerateScriptReport ORDER BY rowid')).toEqual([['Preparing dbo.DimDate', 'Success'], ['Save to file', 'Success']]);
+    });
+
+    test('pasted HTML with one table is detected and needs no choice', async () => {
+        boot();
+        await openLab();
+        await openImport();
+        $('#lab-import-text').value = '<table><tr><th>id</th><th>name</th></tr><tr><td>1</td><td>Ada</td></tr></table>';
+        $('#lab-import-text').dispatchEvent(new Event('input'));
+        await settle();
+        await new Promise(r => setTimeout(r, 350));
+        await settle();
+        expect($('#lab-import-format').value).toBe('html');
+        expect($('#lab-import-html-options').hidden).toBe(true);
+        expect(text('#lab-import-preview')).toContain('1 row and 2 columns.');
+    });
+});
+
 describe('importing a SQLite database file', () => {
     test('a .sqlite file becomes a new database, checked first', async () => {
         boot();

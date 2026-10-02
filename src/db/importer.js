@@ -11,6 +11,7 @@
 import { DatabaseError } from './engine.js';
 import { parseCsv, detectDelimiter, delimiterName } from './import-csv.js';
 import { parseJsonRows } from './import-json.js';
+import { parseHtmlRows, looksLikeHtml } from './import-html.js';
 import { readScript, runnableScript, groupStatements } from './import-sql.js';
 import { adaptSqlServerScript, looksLikeSqlServer } from './import-sqlserver.js';
 import { COLUMN_TYPES, describeColumns, uniqueNames, bindValue, createTableSql, insertSql } from './import-types.js';
@@ -26,7 +27,7 @@ const FIRST_SQL_WORD = /^(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTE
 /**
  * Which kind of import a file or pasted text is.
  * @param {{ name?: string, text?: string, bytes?: Uint8Array }} source
- * @returns {'sql' | 'csv' | 'json' | 'sqlite'}
+ * @returns {'sql' | 'csv' | 'json' | 'html' | 'sqlite'}
  */
 export function detectFormat({ name = '', text = '', bytes }) {
     if (bytes && bytes.length >= 16 && new TextDecoder().decode(bytes.subarray(0, 15)) === 'SQLite format 3') return 'sqlite';
@@ -36,6 +37,8 @@ export function detectFormat({ name = '', text = '', bytes }) {
     if (ext === 'sql') return 'sql';
     if (['json', 'jsonl', 'ndjson'].includes(ext)) return 'json';
     if (['csv', 'tsv', 'tab'].includes(ext)) return 'csv';
+    if (['html', 'htm', 'xhtml'].includes(ext)) return 'html';
+    if (looksLikeHtml(text)) return 'html';
     const start = text.replace(/^\ufeff/, '').replace(/^(?:\s+|--[^\n]*\n?|\/\*[\s\S]*?\*\/)*/, '');
     if (start[0] === '[' || start[0] === '{') return 'json';
     if (/^(?:--|\/\*)/.test(text.trim()) || FIRST_SQL_WORD.test(start)) return 'sql';
@@ -105,16 +108,25 @@ function checkSize(text) {
     if (text.length > MAX_IMPORT_BYTES) throw new DatabaseError(`This is too large to import (the limit is ${MAX_IMPORT_BYTES / 1024 / 1024} MB).`, { code: 'TOO_LARGE' });
 }
 
+const TABULAR = ['csv', 'json', 'html'];
+const NOT_TABULAR = 'Choose SQL, CSV, JSON or HTML.';
+
 /**
- * CSV or JSON as columns and rows.
- * @param {'csv' | 'json'} format
+ * CSV, JSON or an HTML table as columns and rows.
+ * @param {'csv' | 'json' | 'html'} format
  * @param {string} text
- * @param {{ delimiter?: string, header?: boolean }} options
+ * @param {{ delimiter?: string, header?: boolean, table?: number }} options
  */
-function readTable(format, text, { delimiter = 'auto', header = true } = {}) {
+function readTable(format, text, { delimiter = 'auto', header = true, table } = {}) {
+    if (format === 'html') {
+        const html = parseHtmlRows(text, { table });
+        if (html.columns.length > MAX_COLUMNS) throw new DatabaseError(`There are ${html.columns.length} columns; SQLite allows up to ${MAX_COLUMNS}.`, { code: 'BAD_INPUT' });
+        if (html.rows.length === 0) throw new DatabaseError('This table has only a header row, so there are no rows to import.', { code: 'BAD_INPUT' });
+        return { columns: uniqueNames(html.columns), rows: html.rows, lines: html.lines, nested: 0, from: null, delimiter: null, header: html.header, html };
+    }
     if (format === 'json') {
         const json = parseJsonRows(text);
-        return { columns: json.columns, rows: json.rows, lines: json.lines, nested: json.nested, from: json.from, delimiter: null, header: null };
+        return { columns: json.columns, rows: json.rows, lines: json.lines, nested: json.nested, from: json.from, delimiter: null, header: null, html: null };
     }
     const used = !delimiter || delimiter === 'auto' ? detectDelimiter(text) : delimiter;
     const { rows: all, lines: allLines } = parseCsv(text, { delimiter: used });
@@ -130,7 +142,7 @@ function readTable(format, text, { delimiter = 'auto', header = true } = {}) {
         }
     });
     if (rows.length === 0) throw new DatabaseError(header ? 'There is only a header row, so there are no rows to import.' : 'There are no rows to import.', { code: 'BAD_INPUT' });
-    return { columns: uniqueNames(names), rows, lines, nested: 0, from: null, delimiter: used, header };
+    return { columns: uniqueNames(names), rows, lines, nested: 0, from: null, delimiter: used, header, html: null };
 }
 
 const display = (/** @type {unknown} */ value) => (typeof value === 'boolean' ? String(value) : value ?? null);
@@ -138,7 +150,7 @@ const display = (/** @type {unknown} */ value) => (typeof value === 'boolean' ? 
 /**
  * What an import would do. Changes nothing.
  * `adapt` (SQL only): adapt a SQL Server script for SQLite first (import-sqlserver.js).
- * @param {{ format: 'sql' | 'csv' | 'json', text: string, options?: { delimiter?: string, header?: boolean }, adapt?: boolean }} args
+ * @param {{ format: 'sql' | 'csv' | 'json' | 'html', text: string, options?: { delimiter?: string, header?: boolean, table?: number }, adapt?: boolean }} args
  */
 export function previewImport({ format, text, options = {}, adapt = false }) {
     checkSize(text);
@@ -168,19 +180,25 @@ export function previewImport({ format, text, options = {}, adapt = false }) {
             changes: adapted ? adapted.changes : null
         };
     }
-    if (format !== 'csv' && format !== 'json') throw new DatabaseError('Choose SQL, CSV or JSON.', { code: 'BAD_INPUT' });
+    if (!TABULAR.includes(format)) throw new DatabaseError(NOT_TABULAR, { code: 'BAD_INPUT' });
     const table = readTable(format, text, options);
     const described = describeColumns(table.rows, table.columns.length);
     const notes = [];
     if (table.from) notes.push(`The rows are read from the "${table.from}" list.`);
     if (table.nested) notes.push(`${table.nested.toLocaleString()} ${table.nested === 1 ? 'value is a nested object or list; it is' : 'values are nested objects or lists; they are'} stored as JSON text.`);
-    if (format === 'csv') notes.push('Empty cells become NULL. A quoted empty value ("") becomes empty text.');
+    if (table.html) {
+        if (table.html.spanned) notes.push(`${table.html.spanned.toLocaleString()} ${table.html.spanned === 1 ? 'cell spans' : 'cells span'} several columns: the value goes in the first, and the others are NULL.`);
+        if (table.html.padded) notes.push(`${table.html.padded.toLocaleString()} ${table.html.padded === 1 ? 'row has' : 'rows have'} fewer cells than the widest row; the missing cells are NULL.`);
+        notes.push('Cells are read as plain text: tags and styles are dropped. Empty cells become NULL.');
+    } else if (format === 'csv') notes.push('Empty cells become NULL. A quoted empty value ("") becomes empty text.');
     else notes.push('Missing keys and null become NULL. true and false are stored as 1 and 0 (SQLite has no boolean type).');
     if (described.some(c => c.type === 'DATE' || c.type === 'DATETIME')) notes.push('SQLite has no date type: dates are stored as text, like 2024-01-31, which sorts and compares correctly.');
     return {
         format,
         delimiter: table.delimiter,
         header: table.header,
+        tables: table.html ? table.html.tables : null,
+        table: table.html ? table.html.table : null,
         rowCount: table.rows.length,
         columns: table.columns.map((name, i) => ({ name, type: described[i].type, nonEmpty: described[i].nonEmpty, fits: described[i].fits })),
         sample: table.rows.slice(0, PREVIEW_ROWS).map(row => row.map(display)),
@@ -192,8 +210,8 @@ export function previewImport({ format, text, options = {}, adapt = false }) {
  * Runs an import in the open database, in one transaction.
  * @param {any} adapter
  * @param {{
- *   format: 'sql' | 'csv' | 'json', text: string,
- *   options?: { delimiter?: string, header?: boolean },
+ *   format: 'sql' | 'csv' | 'json' | 'html', text: string,
+ *   options?: { delimiter?: string, header?: boolean, table?: number },
  *   target?: { mode: 'new' | 'append', table: string, types?: string[] },
  *   adapt?: boolean
  * }} args
@@ -207,7 +225,7 @@ export function runImport(adapter, { format, text, options = {}, target, adapt =
         if (!statements.some(s => !s.skip)) throw new DatabaseError('There are no SQL statements to run.', { code: 'BAD_INPUT' });
         return { format, ...adapter.runScript(runnableScript(text, statements)) };
     }
-    if (format !== 'csv' && format !== 'json') throw new DatabaseError('Choose SQL, CSV or JSON.', { code: 'BAD_INPUT' });
+    if (!TABULAR.includes(format)) throw new DatabaseError(NOT_TABULAR, { code: 'BAD_INPUT' });
     const table = readTable(format, text, options);
     const name = String(target?.table ?? '').trim();
     if (!name) throw new DatabaseError('Enter a table name.', { code: 'BAD_INPUT' });

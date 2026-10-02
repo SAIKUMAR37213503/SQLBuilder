@@ -65,6 +65,8 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         csvOptions: $('lab-import-csv-options'),
         delimiter: $('lab-import-delimiter'),
         header: $('lab-import-header'),
+        htmlOptions: $('lab-import-html-options'),
+        htmlTable: $('lab-import-html-table'),
         tableOptions: $('lab-import-table-options'),
         table: $('lab-import-table'),
         append: $('lab-import-append'),
@@ -96,7 +98,9 @@ export function createImportDialog({ dialog, client, lab, toast }) {
 
     const mode = () => (dialog.querySelector('input[name="lab-import-mode"]:checked')?.value === 'append' ? 'append' : 'new');
     const format = () => el.format.value;
-    const tabular = () => format() === 'csv' || format() === 'json';
+    const tabular = () => format() === 'csv' || format() === 'json' || format() === 'html';
+    // The chosen table of an HTML page (the first with rows until one is chosen)
+    const options = () => ({ delimiter: el.delimiter.value, header: el.header.checked, table: el.htmlTable.value === '' ? undefined : Number(el.htmlTable.value) });
     const sourceText = () => (file ? file.text : el.text.value);
     const objects = () => (el.db.value && lab.state.open === el.db.value ? lab.state.objects || [] : []);
     const tables = () => objects().filter(o => o.type === 'table');
@@ -143,6 +147,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         }
         formatPicked = false;
         tableEdited = false;
+        el.htmlTable.replaceChildren();
         el.format.value = detectFormat({ name: file.name, text: file.text || '', bytes: file.bytes || undefined });
         if (el.format.value === 'sqlite' && el.db.value) el.db.value = '';
         if (el.format.value === 'sqlite') el.newName.value = lab.freeName(tableNameFor(file.name));
@@ -154,6 +159,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
     function clearFile() {
         file = null;
         el.file.value = '';
+        el.htmlTable.replaceChildren();
         formatPicked = false;
         update();
         refresh();
@@ -178,10 +184,13 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         loading++;
         render();
         try {
-            const options = { delimiter: el.delimiter.value, header: el.header.checked };
-            const result = await client.call('previewImport', { format: format(), text, options, adapt: el.adapt.checked });
+            const result = await client.call('previewImport', { format: format(), text, options: options(), adapt: el.adapt.checked });
             if (id !== sequence) return;
             preview = result;
+            if (result.tables) {
+                el.htmlTable.replaceChildren(...result.tables.map(t => h('option', { value: String(t.index) }, t.label)));
+                el.htmlTable.value = String(result.table);
+            }
             if (tabular()) {
                 const names = result.columns.map(c => c.name);
                 // Keep types already chosen for the same columns
@@ -246,6 +255,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         el.dbField.hidden = sqlite;
         el.newField.hidden = !sqlite && el.db.value !== '';
         el.csvOptions.hidden = format() !== 'csv';
+        el.htmlOptions.hidden = !(format() === 'html' && preview?.tables?.length > 1);
         el.adaptField.hidden = !(format() === 'sql' && looksLikeSqlServer(sourceText() || ''));
         el.tableOptions.hidden = !tabular();
         const appendable = tables();
@@ -337,7 +347,9 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         const append = mode() === 'append' ? tables().find(t => t.name === el.appendTable.value) : null;
         const how = p.format === 'csv'
             ? `Separated by ${delimiterName(p.delimiter)}${el.delimiter.value === 'auto' ? ' (detected)' : ''}; ${p.header ? 'the first row has the column names' : 'no header row'}.`
-            : 'Read from JSON.';
+            : p.format === 'html'
+                ? `Read from ${p.tables.find(t => t.index === p.table)?.label.replace(/ \(.*\)$/, '') || 'the table'}; ${p.header ? 'the first row has the column names' : 'no header row, so the columns are numbered'}.`
+                : 'Read from JSON.';
         const head = h('p', { class: 'lab-import-status' }, `${plural(p.rowCount, 'row')} and ${plural(p.columns.length, 'column')}. ${how}`);
         const columnRows = p.columns.map((c, i) => {
             if (append) {
@@ -464,7 +476,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         let result;
         try {
             await lab.openDatabase(id);
-            result = await client.call('runImport', { format: format(), text: sourceText(), options: { delimiter: el.delimiter.value, header: el.header.checked }, target, adapt: el.adapt.checked });
+            result = await client.call('runImport', { format: format(), text: sourceText(), options: options(), target, adapt: el.adapt.checked });
         } catch (error) {
             if (prepared) {
                 // The database made for this import goes too
@@ -514,6 +526,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         }],
         [el.delimiter, 'change', refresh],
         [el.header, 'change', refresh],
+        [el.htmlTable, 'change', refresh],
         [el.adapt, 'change', refresh],
         [el.table, 'input', () => {
             tableEdited = true;
@@ -562,6 +575,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         el.format.value = 'csv';
         el.delimiter.value = 'auto';
         el.header.checked = true;
+        el.htmlTable.replaceChildren();
         dialog.querySelector('input[name="lab-import-mode"][value="new"]').checked = true;
         el.db.replaceChildren(
             ...databases.list().map(d => h('option', { value: d.id }, d.name)),

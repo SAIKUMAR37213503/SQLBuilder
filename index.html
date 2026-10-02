@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <!-- The SQL Lab's database engine (SQLite). Listed so the offline cache keeps it and the app finds its current URL. -->
-    <link rel="prefetch" href="dist/db-worker.js?v=2419c2a7f7a8" id="asset-db-worker">
+    <link rel="prefetch" href="dist/db-worker.js?v=340e9eb1c971" id="asset-db-worker">
     <link rel="prefetch" href="dist/sqlite3.wasm?v=2ee8f3dab694" id="asset-sqlite-wasm">
     <link rel="stylesheet" href="style.css?v=36bf14883c48">
 </head>
@@ -561,18 +561,18 @@
     <dialog id="lab-import-dialog" class="dialog dialog-wide" aria-labelledby="lab-import-title" aria-describedby="lab-import-intro">
         <form method="dialog" class="dialog-body">
             <h2 id="lab-import-title" class="dialog-title">Import into SQL Lab</h2>
-            <p class="dialog-message" id="lab-import-intro">Import a SQL script, CSV or JSON into a database, or add a SQLite database file. You see what will happen first. Nothing changes until you select Import, and it all runs as one step: if anything fails, nothing is kept.</p>
+            <p class="dialog-message" id="lab-import-intro">Import a SQL script, CSV, JSON or an HTML table into a database, or add a SQLite database file. You see what will happen first. Nothing changes until you select Import, and it all runs as one step: if anything fails, nothing is kept.</p>
             <div class="field">
                 <span class="field-label" id="lab-import-file-label">File</span>
                 <div class="lab-import-source">
                     <button type="button" class="btn btn-secondary btn-sm" id="lab-import-file-btn" aria-describedby="lab-import-file-name">Choose a file…</button>
-                    <span class="lab-import-file-name" id="lab-import-file-name">No file chosen (.sql, .csv, .json, .sqlite, .bak; up to 50 MB)</span>
+                    <span class="lab-import-file-name" id="lab-import-file-name">No file chosen (.sql, .csv, .json, .html, .sqlite, .bak; up to 50 MB)</span>
                     <button type="button" class="btn btn-ghost btn-sm" id="lab-import-clear" hidden>Remove file</button>
-                    <input type="file" id="lab-import-file" class="visually-hidden" tabindex="-1" aria-hidden="true" accept=".sql,.csv,.tsv,.txt,.json,.jsonl,.ndjson,.sqlite,.sqlite3,.db,.db3,.bak">
+                    <input type="file" id="lab-import-file" class="visually-hidden" tabindex="-1" aria-hidden="true" accept=".sql,.csv,.tsv,.txt,.json,.jsonl,.ndjson,.html,.htm,.sqlite,.sqlite3,.db,.db3,.bak">
                 </div>
             </div>
             <div class="field" id="lab-import-paste-field">
-                <label class="field-label" for="lab-import-text">Or paste SQL, CSV or JSON</label>
+                <label class="field-label" for="lab-import-text">Or paste SQL, CSV, JSON or HTML</label>
                 <textarea id="lab-import-text" class="input textarea code-input" rows="5" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
             </div>
             <div class="field-row">
@@ -582,6 +582,7 @@
                         <option value="sql">SQL script</option>
                         <option value="csv">CSV or delimited text</option>
                         <option value="json">JSON</option>
+                        <option value="html">HTML table</option>
                         <option value="sqlite">SQLite database file</option>
                     </select>
                     <p class="field-hint" id="lab-import-format-hint"></p>
@@ -613,6 +614,14 @@
                         </select>
                     </div>
                     <label class="check lab-import-header"><input type="checkbox" id="lab-import-header" checked> <span>First row has the column names</span></label>
+                </div>
+            </fieldset>
+            <fieldset class="fieldset" id="lab-import-html-options" hidden>
+                <legend>HTML</legend>
+                <div class="field">
+                    <label class="field-label" for="lab-import-html-table">Table in the page</label>
+                    <select id="lab-import-html-table" class="select" aria-describedby="lab-import-html-hint"></select>
+                    <p class="field-hint" id="lab-import-html-hint">The page has more than one table. Choose the one to import.</p>
                 </div>
             </fieldset>
             <fieldset class="fieldset" id="lab-import-table-options">
@@ -676,6 +685,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=cb96f3d6abed" defer></script>
+    <script src="dist/sqlbuilder.js?v=8c29adc6ceb8" defer></script>
 </body>
 </html>
