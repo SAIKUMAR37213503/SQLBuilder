@@ -295,6 +295,49 @@ COMMIT;`);
     });
 });
 
+describe('importing a SQL Server script', () => {
+    const SSMS = readFileSync(join(import.meta.dirname, 'fixtures', 'ssms-adventureworksdw.sql'), 'utf8');
+
+    test('an SSMS script is adapted for SQLite, with each change listed; clearing the box runs it as written', async () => {
+        boot();
+        await openLab();
+        await openImport();
+        await choose(new File([SSMS], 'AdventureWorksDW2025.sql'));
+        expect($('#lab-import-format').value).toBe('sql');
+        expect($('#lab-import-adapt-field').hidden).toBe(false);
+        expect($('#lab-import-adapt').checked).toBe(true);
+        expect(text('#lab-import-preview')).toContain('Adapted for SQLite:');
+        expect(text('.lab-import-changes')).toContain('Schema names are removed (dbo.Employees becomes Employees)');
+        expect(text('.lab-import-changes')).toContain('Foreign keys added with ALTER TABLE aren\'t created');
+        expect(text('#lab-import-preview')).not.toContain('likely to fail');
+
+        // As written: nothing adapted, and the preview says SQLite will reject parts
+        $('#lab-import-adapt').click();
+        await settle();
+        expect($('#lab-import-adapt-field').hidden).toBe(false);
+        expect(text('#lab-import-preview')).not.toContain('Adapted for SQLite:');
+        expect(text('#lab-import-preview')).toContain('likely to fail in SQLite');
+
+        $('#lab-import-adapt').click();
+        await settle();
+        $('#lab-import-run').click();
+        await settle();
+        expect(text('#lab-import-error')).toBe('');
+        expect(isOpen()).toBe(false);
+        expect(await tableNames()).toEqual(['DimCurrency', 'DimCustomer', 'FactInternetSales']);
+        expect(await query('SELECT count(*) FROM FactInternetSales')).toEqual([[3]]);
+    });
+
+    test('the box isn\'t offered for a plain script', async () => {
+        boot();
+        await openLab();
+        await openImport();
+        await paste('CREATE TABLE t (a INTEGER);\nINSERT INTO t VALUES (1);');
+        expect($('#lab-import-format').value).toBe('sql');
+        expect($('#lab-import-adapt-field').hidden).toBe(true);
+    });
+});
+
 describe('importing a SQLite database file', () => {
     test('a .sqlite file becomes a new database, checked first', async () => {
         boot();

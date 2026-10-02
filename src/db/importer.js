@@ -12,6 +12,7 @@ import { DatabaseError } from './engine.js';
 import { parseCsv, detectDelimiter, delimiterName } from './import-csv.js';
 import { parseJsonRows } from './import-json.js';
 import { readScript, runnableScript, groupStatements } from './import-sql.js';
+import { adaptSqlServerScript, looksLikeSqlServer } from './import-sqlserver.js';
 import { COLUMN_TYPES, describeColumns, uniqueNames, bindValue, createTableSql, insertSql } from './import-types.js';
 
 /** Files larger than this aren't imported. */
@@ -54,7 +55,7 @@ export function unreadableFile(head, name) {
     const start = new TextDecoder('latin1').decode(head.subarray(0, 16));
     if (start.startsWith('SQLite format 3')) return null;
     if (start.startsWith('TAPE') || start.startsWith('MSSQLBAK')) {
-        return `${name} is a SQL Server backup. SQL Lab can't restore SQL Server backups, as only SQL Server can read them. In SQL Server Management Studio, right-click the database and choose Tasks, then Generate Scripts…; under Advanced, set "Types of data to script" to "Schema and data", save the script as a .sql file and import that.`;
+        return `${name} is a SQL Server backup. SQL Lab can't restore SQL Server backups, as only SQL Server can read them. In SQL Server Management Studio, right-click the database and choose Tasks, then Generate Scripts…; under Advanced, set "Types of data to script" to "Schema and data", save the script as a .sql file and import that. SQL Lab adapts it for SQLite and lists every change first.`;
     }
     if (start.startsWith('PGDMP')) {
         return `${name} is a PostgreSQL backup in pg_dump's custom format, which only PostgreSQL can read. Turn it into a SQL script with pg_restore -f backup.sql "${name}" (or make one with pg_dump --format=plain) and import the .sql file.`;
@@ -110,11 +111,16 @@ const display = (/** @type {unknown} */ value) => (typeof value === 'boolean' ? 
 
 /**
  * What an import would do. Changes nothing.
- * @param {{ format: 'sql' | 'csv' | 'json', text: string, options?: { delimiter?: string, header?: boolean } }} args
+ * `adapt` (SQL only): adapt a SQL Server script for SQLite first (import-sqlserver.js).
+ * @param {{ format: 'sql' | 'csv' | 'json', text: string, options?: { delimiter?: string, header?: boolean }, adapt?: boolean }} args
  */
-export function previewImport({ format, text, options = {} }) {
+export function previewImport({ format, text, options = {}, adapt = false }) {
     checkSize(text);
     if (format === 'sql') {
+        const sqlServer = looksLikeSqlServer(text);
+        // Only a script that looks like SQL Server's is adapted
+        const adapted = adapt && sqlServer ? adaptSqlServerScript(text) : null;
+        if (adapted) text = adapted.text;
         const { statements, problem, notes } = readScript(text);
         if (problem) throw new DatabaseError(problem.message, { code: 'BAD_INPUT', line: problem.line, column: problem.column });
         const run = statements.filter(s => !s.skip);
@@ -131,7 +137,9 @@ export function previewImport({ format, text, options = {} }) {
             groups,
             more,
             creates: run.filter(s => /^CREATE (?:TABLE|VIEW)\b/.test(s.label) && s.object).map(s => ({ name: s.object, ifNotExists: s.ifNotExists, line: s.line })),
-            notes
+            notes,
+            sqlServer,
+            changes: adapted ? adapted.changes : null
         };
     }
     if (format !== 'csv' && format !== 'json') throw new DatabaseError('Choose SQL, CSV or JSON.', { code: 'BAD_INPUT' });
@@ -160,12 +168,14 @@ export function previewImport({ format, text, options = {} }) {
  * @param {{
  *   format: 'sql' | 'csv' | 'json', text: string,
  *   options?: { delimiter?: string, header?: boolean },
- *   target?: { mode: 'new' | 'append', table: string, types?: string[] }
+ *   target?: { mode: 'new' | 'append', table: string, types?: string[] },
+ *   adapt?: boolean
  * }} args
  */
-export function runImport(adapter, { format, text, options = {}, target }) {
+export function runImport(adapter, { format, text, options = {}, target, adapt = false }) {
     checkSize(text);
     if (format === 'sql') {
+        if (adapt && looksLikeSqlServer(text)) text = adaptSqlServerScript(text).text;
         const { statements, problem } = readScript(text);
         if (problem) throw new DatabaseError(problem.message, { code: 'BAD_INPUT', line: problem.line, column: problem.column });
         if (!statements.some(s => !s.skip)) throw new DatabaseError('There are no SQL statements to run.', { code: 'BAD_INPUT' });

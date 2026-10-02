@@ -8,6 +8,7 @@ import { h, debounce } from './dom.js';
 import { showDialog, closeDialog } from './dialogs.js';
 import { renderSqlCode } from './output.js';
 import { detectFormat, tableNameFor, unreadableFile, MAX_IMPORT_BYTES } from '../db/importer.js';
+import { looksLikeSqlServer } from '../db/import-sqlserver.js';
 import { COLUMN_TYPES, TYPE_LABELS, createTableSql, insertSql } from '../db/import-types.js';
 import { delimiterName } from '../db/import-csv.js';
 import { isSqliteFile } from '../db/files.js';
@@ -70,6 +71,8 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         appendTable: $('lab-import-append-table'),
         preview: $('lab-import-preview'),
         notes: $('lab-import-notes'),
+        adaptField: $('lab-import-adapt-field'),
+        adapt: $('lab-import-adapt'),
         error: $('lab-import-error'),
         run: $('lab-import-run')
     };
@@ -169,7 +172,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         render();
         try {
             const options = { delimiter: el.delimiter.value, header: el.header.checked };
-            const result = await client.call('previewImport', { format: format(), text, options });
+            const result = await client.call('previewImport', { format: format(), text, options, adapt: el.adapt.checked });
             if (id !== sequence) return;
             preview = result;
             if (tabular()) {
@@ -236,6 +239,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         el.dbField.hidden = sqlite;
         el.newField.hidden = !sqlite && el.db.value !== '';
         el.csvOptions.hidden = format() !== 'csv';
+        el.adaptField.hidden = !(format() === 'sql' && looksLikeSqlServer(sourceText() || ''));
         el.tableOptions.hidden = !tabular();
         const appendable = tables();
         el.append.disabled = appendable.length === 0;
@@ -305,7 +309,15 @@ export function createImportDialog({ dialog, client, lab, toast }) {
                 g.skip ? 'left out' : null
             ].filter(Boolean).join(' · ')),
             g.issues.length ? h('ul', { class: 'lab-import-issues' }, g.issues.map(i => h('li', {}, `Line ${i.line}, column ${i.column}: ${i.message}`))) : null)));
+        const changes = p.changes && p.changes.length ? [
+            h('p', { class: 'lab-import-status' }, `Adapted for SQLite: ${plural(p.changes.length, 'kind')} of change, listed here. Line numbers are lines of your file.`),
+            h('div', { class: 'lab-import-scroll', tabindex: '0', role: 'region', 'aria-label': 'Changes made for SQLite' },
+                h('ul', { class: 'lab-import-statements lab-import-changes' }, p.changes.map(c => h('li', {},
+                    h('span', { class: 'lab-import-change' }, c.message),
+                    h('span', { class: 'lab-import-meta' }, `${c.count > 1 ? `${c.count.toLocaleString()} times, first on` : 'on'} line ${c.line.toLocaleString()}`)))))
+        ] : [];
         return [
+            ...changes,
             h('p', { class: 'lab-import-status' }, `${summary}.`),
             p.issues ? h('p', { class: 'lab-import-status lab-import-warning' }, `${plural(p.issues, 'part')} of this script ${p.issues === 1 ? 'is' : 'are'} likely to fail in SQLite (marked below). If a statement fails, nothing is kept and you'll see which one.`) : null,
             conflicts.length ? h('p', { class: 'lab-import-status lab-import-warning' }, `This database already has ${conflicts.map(c => c.name).join(', ')}, so ${conflicts.length === 1 ? 'its CREATE statement' : 'their CREATE statements'} will fail. Import into a new database, or remove ${conflicts.length === 1 ? 'that table' : 'those tables'} first.`) : null,
@@ -445,7 +457,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         let result;
         try {
             await lab.openDatabase(id);
-            result = await client.call('runImport', { format: format(), text: sourceText(), options: { delimiter: el.delimiter.value, header: el.header.checked }, target });
+            result = await client.call('runImport', { format: format(), text: sourceText(), options: { delimiter: el.delimiter.value, header: el.header.checked }, target, adapt: el.adapt.checked });
         } catch (error) {
             if (prepared) {
                 // The database made for this import goes too
@@ -495,6 +507,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
         }],
         [el.delimiter, 'change', refresh],
         [el.header, 'change', refresh],
+        [el.adapt, 'change', refresh],
         [el.table, 'input', () => {
             tableEdited = true;
             render();
@@ -582,6 +595,7 @@ export function createImportDialog({ dialog, client, lab, toast }) {
             sequence++;
             file = null;
             el.text.value = '';
+            el.adapt.checked = true;
         }
         return imported;
     }

@@ -1624,3 +1624,5 @@ body.view-lab .mobile-bar { display: none; }
 .lab-history-meta { display: flex; flex-wrap: wrap; gap: 0.1rem 0.75rem; color: var(--text-muted); font-size: 0.8rem; }
 .lab-history-error { color: var(--danger); }
 .lab-history-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.lab-import-change { flex: 1 1 20rem; min-width: 0; }
+#lab-import-adapt-field[hidden] { display: none; }
