@@ -13,7 +13,7 @@
     <!-- The SQL Lab's database engine (SQLite). Listed so the offline cache keeps it and the app finds its current URL. -->
     <link rel="prefetch" href="dist/db-worker.js?v=f0ea5620ad7e" id="asset-db-worker">
     <link rel="prefetch" href="dist/sqlite3.wasm?v=2ee8f3dab694" id="asset-sqlite-wasm">
-    <link rel="stylesheet" href="style.css?v=36bf14883c48">
+    <link rel="stylesheet" href="style.css?v=3190c074f5b2">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -256,8 +256,10 @@
                                 <button type="button" class="btn btn-ghost btn-sm" id="lab-import-btn">Import…</button>
                             </div>
                         </div>
-                        <ul class="lab-db-list" id="lab-db-list" aria-label="Databases"></ul>
-                        <div class="lab-objects" id="lab-objects"></div>
+                        <div class="lab-tree" id="lab-tree" role="region" aria-label="Databases, tables and columns">
+                            <ul class="lab-db-list" id="lab-db-list" aria-label="Databases"></ul>
+                            <ul class="lab-objects lab-children" id="lab-objects" aria-label="Tables and views"></ul>
+                        </div>
                     </nav>
                     <section class="lab-main" id="lab-main" aria-live="polite" aria-labelledby="lab-main-heading"></section>
                 </div>
@@ -685,6 +687,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=92532030b42b" defer></script>
+    <script src="dist/sqlbuilder.js?v=c4605df43f6f" defer></script>
 </body>
 </html>

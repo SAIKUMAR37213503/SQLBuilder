@@ -372,6 +372,61 @@ describe('creating schema tables in a database', () => {
         expect(text('.lab-structure-rows')).toBe('Rows: 2');
     });
 
+    test('the explorer is a tree like SSMS: database, Tables and Views, then a table\'s Columns and Keys', async () => {
+        boot({ schema: SCHEMA });
+        $('#schema-db-btn').click();
+        await settle();
+        $('#lab-tables-create').click();
+        await settle();
+        // Each row's words, as they read on screen
+        const labels = () => $$('#lab-tree .lab-row').map(r => Array.from(r.querySelectorAll('span')).filter(e => e.children.length === 0 && e.textContent).map(e => e.textContent).join(' '));
+        const arrow = (label) => $$('#lab-tree .lab-twisty').find(b => b.getAttribute('aria-label') === label);
+        // The open database holds its folders; tables start closed
+        expect(labels()).toEqual(['Company DB Open', 'Tables (2)', 'Departments', 'Employees', 'Views (0)']);
+        expect($('#lab-db-list .lab-db #lab-objects')).not.toBeNull();
+        expect(arrow('Tables and views of Company DB').getAttribute('aria-expanded')).toBe('true');
+
+        // A table opens to its columns (as SSMS writes them) and keys
+        arrow('Columns and keys of Employees').click();
+        await settle();
+        expect(arrow('Columns and keys of Employees').getAttribute('aria-expanded')).toBe('true');
+        expect(document.activeElement).toBe(arrow('Columns and keys of Employees'));
+        const shown = labels();
+        expect(shown).toContain('Columns (5)');
+        expect(shown).toContain('EmployeeID (PK, INT, not null)');
+        expect(shown).toContain('DepartmentID (FK, INT, null)');
+        expect(shown).toContain('Keys (2)');
+        arrow('Keys of Employees').click();
+        await settle();
+        expect(labels()).toContain('PK_Employees (EmployeeID)');
+        expect(labels()).toContain('FK_Employees_Departments (DepartmentID) → Departments (DepartmentID)');
+
+        // The keyboard: Left closes a node, Right opens it, Left on a name goes up to its parent
+        const press = (target, key) => target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+        press(arrow('Columns and keys of Employees'), 'ArrowLeft');
+        await settle();
+        expect(labels()).not.toContain('Columns (5)');
+        press($$('.lab-object-btn').find(b => b.textContent === 'Employees'), 'ArrowRight');
+        await settle();
+        expect(labels()).toContain('Columns (5)');
+        press($$('.lab-object-btn').find(b => b.textContent === 'Departments'), 'ArrowLeft');
+        expect(document.activeElement).toBe(arrow('Tables'));
+
+        // Closing the database's node hides its tables; the folder label also toggles
+        arrow('Tables and views of Company DB').click();
+        await settle();
+        expect(labels()).toEqual(['Company DB Open']);
+        arrow('Tables and views of Company DB').click();
+        await settle();
+        $$('#lab-tree .lab-folder-label').find(l => l.textContent === 'Tables (2)').click();
+        await settle();
+        expect(labels()).toEqual(['Company DB Open', 'Tables (2)', 'Views (0)']);
+
+        // The tree scrolls on its own (the page's stylesheet isn't loaded here, so read it)
+        const css = readFileSync(join(import.meta.dirname, '..', 'style.css'), 'utf8');
+        expect(css).toMatch(/\.lab-tree \{[^}]*overflow: auto;/);
+    });
+
     test('tables the database already has are skipped', async () => {
         boot({ schema: SCHEMA });
         await openLab();
