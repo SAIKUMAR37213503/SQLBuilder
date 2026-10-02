@@ -350,9 +350,13 @@ async function main() {
             return t === 'E2E DB' && t;
         }, { timeout: 15000, message: 'the new database to open' });
         screenshot('08-sql-lab-database');
+        // The name prompt focused a text field, so the soft keyboard may still be
+        // up; Android spends the first Back on hiding it. Wait for it to go.
+        await page.eval(`(() => { document.activeElement?.blur?.(); return true; })()`);
+        await waitFor(() => !/mInputShown=true/.test(shell('dumpsys input_method')), { timeout: 5000, message: 'the soft keyboard to hide' }).catch(() => {});
         shell('input keyevent KEYCODE_BACK');
-        await sleep(600);
-        const builderShown = await page.eval(`!document.getElementById('workspace').hidden && document.getElementById('lab').hidden`);
+        const isBuilderShown = `!document.getElementById('workspace').hidden && document.getElementById('lab').hidden`;
+        const builderShown = await waitFor(() => page.eval(isBuilderShown), { timeout: 3000, message: 'the builder' }).catch(() => false);
         return { ok: heading === 'E2E DB' && builderShown && foregroundPackage().includes(PKG), detail: JSON.stringify({ heading, builderShown }) };
     });
 
