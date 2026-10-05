@@ -1564,7 +1564,8 @@ body.view-lab .mobile-bar { display: none; }
 .lab-head-slot { display: grid; gap: 0.5rem; min-width: 0; }
 .lab-console { display: grid; gap: 0.5rem; min-width: 0; }
 .lab-console[hidden], .lab-tabs[hidden], .lab-panel[hidden] { display: none; }
-.lab-console-head { display: flex; gap: 0.5rem; align-items: center; justify-content: space-between; }
+.lab-console-head { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; justify-content: space-between; }
+.lab-console-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; justify-content: flex-end; }
 .lab-editor {
     position: relative;
     min-width: 0;

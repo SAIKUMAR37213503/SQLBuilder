@@ -42,10 +42,11 @@ export function describeError(error) {
  *   toast: (message: string, kind?: string) => void,
  *   schemaTables: () => any[],
  *   isNative?: boolean,
+ *   saveFile?: ((filename: string, text: string, mimeType: string, done: string) => Promise<boolean>) | null,
  *   onShow?: () => void
  * }} options
  */
-export function createLab({ doc, storage, client, dialogs, toast, schemaTables, isNative = false, onShow = () => {} }) {
+export function createLab({ doc, storage, client, dialogs, toast, schemaTables, isNative = false, saveFile = null, onShow = () => {} }) {
     const $ = (id) => /** @type {any} */ (doc.getElementById(id));
     const el = {
         view: $('lab'),
@@ -607,6 +608,8 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         client,
         toast,
         confirm: (options) => confirmDialog(dialogs.confirm, options),
+        askName: (options) => promptDialog(dialogs.prompt, options),
+        saveFile,
         lab: {
             open: () => {
                 const entry = usable() && state.open ? databases.get(state.open) : null;
@@ -843,6 +846,8 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         },
         /** Runs the editor's SQL (Ctrl+Enter anywhere in SQL Lab). */
         run: () => sqlConsole.run(),
+        /** Saves the editor's SQL as a .sql or .txt file (Ctrl+S anywhere in SQL Lab saves .sql). */
+        save: (/** @type {'sql' | 'txt'} */ format) => sqlConsole.save(format),
         get console() { return sqlConsole; },
         get databases() { return databases; },
         get state() { return { ...state }; },

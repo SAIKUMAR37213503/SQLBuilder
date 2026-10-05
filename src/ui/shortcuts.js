@@ -6,7 +6,7 @@ import { isTextEntry } from './dom.js';
 export const SHORTCUTS = [
     { keys: ['Mod', 'Enter'], description: 'Generate SQL (and save it to history); in SQL Lab, run the SQL' },
     { keys: ['Mod', 'Shift', 'C'], description: 'Copy SQL' },
-    { keys: ['Mod', 'S'], description: 'Save the query (updates the template it was loaded from)' },
+    { keys: ['Mod', 'S'], description: 'Save the query (updates the template it was loaded from); in SQL Lab, save the SQL as a .sql file' },
     { keys: ['Mod', 'K'], description: 'Open the command palette' },
     { keys: ['Mod', 'Z'], description: 'Undo (in the builder, outside text fields)' },
     { keys: ['Mod', 'Shift', 'Z'], description: 'Redo (in the builder, outside text fields)' },

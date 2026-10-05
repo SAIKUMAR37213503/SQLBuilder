@@ -10,6 +10,7 @@ import { createStorage, createMemoryBackend, STORAGE_PREFIX } from '../src/stora
 import { createSqliteAdapter } from '../src/db/sqlite-adapter.js';
 import { createMemoryFiles } from '../src/db/files.js';
 import { createDirectClient } from '../src/db/client.js';
+import { createWebPlatform } from '../src/platform/web.js';
 
 const html = readFileSync(join(import.meta.dirname, '..', 'index.html'), 'utf8');
 const bodyHtml = html.replace(/^[\s\S]*?<html[^>]*>/i, '').replace(/<\/html>\s*$/i, '');
@@ -33,7 +34,7 @@ afterEach(() => {
  * Starts the app. `persistent` makes the in-memory files report themselves as
  * stored (as OPFS does), so the page behaves as in a supporting browser.
  */
-function boot({ storageBackend = createMemoryBackend(), keepFiles = false, persistent = true, schema = null, engine = null } = {}) {
+function boot({ storageBackend = createMemoryBackend(), keepFiles = false, persistent = true, schema = null, engine = null, platform = undefined } = {}) {
     app?.destroy();
     document.documentElement.innerHTML = bodyHtml;
     backend = storageBackend;
@@ -41,7 +42,7 @@ function boot({ storageBackend = createMemoryBackend(), keepFiles = false, persi
     if (!keepFiles || !files) files = createMemoryFiles(sqlite3);
     const stored = { ...files, persistent };
     client = engine || createDirectClient(() => createSqliteAdapter(sqlite3, stored));
-    app = startApp({ doc: document, storage: createStorage(backend), dbClient: client });
+    app = startApp({ doc: document, storage: createStorage(backend), dbClient: client, platform });
     return app;
 }
 
@@ -247,6 +248,79 @@ describe('running SQL', () => {
         $('#lab-tab-history').click();
         await settle();
         expect($$('.lab-history-item').length).toBe(1);
+    });
+});
+
+describe('saving SQL as a file', () => {
+    /** A browser platform that records saved files instead of downloading them. */
+    function recordingPlatform() {
+        const saved = [];
+        const platform = createWebPlatform(document);
+        platform.saveFile = async (file) => {
+            saved.push(file);
+            return { status: 'saved' };
+        };
+        return { platform, saved };
+    }
+
+    test('Save as .sql and Save as .txt save the editor\'s SQL, exactly as typed, under the chosen name', async () => {
+        const { platform, saved } = recordingPlatform();
+        boot({ platform });
+        await openLab();
+        await newDatabase('Adventure Works');
+        expect($('#lab-save-sql-btn').disabled).toBe(true);
+        expect($('#lab-save-txt-btn').disabled).toBe(true);
+
+        await typeSql('Select * from DimAccount');
+        expect($('#lab-save-sql-btn').disabled).toBe(false);
+        $('#lab-save-sql-btn').click();
+        await settle();
+        expect($('#prompt-input').value).toBe('Adventure Works query.sql');
+        await answerPrompt('Accounts');
+        expect(saved).toEqual([{ filename: 'Accounts.sql', text: 'Select * from DimAccount\n', mimeType: 'application/sql' }]);
+        expect(text('#toast')).toBe('Saved Accounts.sql.');
+
+        // The whole editor is saved, even when part of it is selected
+        await typeSql('SELECT 1;\nSELECT 2;\n');
+        $('#lab-sql').setSelectionRange(0, 9);
+        $('#lab-save-txt-btn').click();
+        await settle();
+        expect($('#prompt-input').value).toBe('Adventure Works query.txt');
+        await answerPrompt('notes: q1/q2.sql');
+        expect(saved[1]).toEqual({ filename: 'notes q1 q2.txt', text: 'SELECT 1;\nSELECT 2;\n', mimeType: 'text/plain' });
+
+        // Cancelling saves nothing
+        $('#lab-save-sql-btn').click();
+        await settle();
+        $('#prompt-dialog').querySelector('[value="cancel"]').click();
+        await settle();
+        expect(saved).toHaveLength(2);
+    });
+
+    test('Ctrl+S saves a .sql file in SQL Lab and still saves the query in the builder', async () => {
+        const { platform, saved } = recordingPlatform();
+        boot({ platform });
+        await openLab();
+        await newDatabase('Keys');
+        await typeSql('SELECT 42 AS answer;');
+        $('#lab-sql').dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true }));
+        await answerPrompt('Keys query.sql');
+        expect(saved).toEqual([{ filename: 'Keys query.sql', text: 'SELECT 42 AS answer;\n', mimeType: 'application/sql' }]);
+
+        // Nothing to save says so
+        await typeSql('   ');
+        $('#lab-save-sql-btn').disabled = false;
+        $('#lab-save-sql-btn').click();
+        await settle();
+        expect($('#prompt-dialog').hasAttribute('open')).toBe(false);
+        expect(text('#toast')).toBe('Type some SQL to save first.');
+
+        // In the builder, Ctrl+S is the builder's Save query, not a file
+        $('#view-builder-btn').click();
+        await settle();
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true }));
+        await settle();
+        expect(saved).toHaveLength(1);
     });
 });
 

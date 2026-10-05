@@ -2251,6 +2251,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         toast,
         schemaTables: () => schema.list(),
         isNative: platform.isNative,
+        saveFile: downloadFile,
         onShow: () => setView('lab', { focus: false })
     });
 
@@ -2657,8 +2658,13 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             else if (!doc.querySelector('dialog[open]')) lab.run();
         },
         copy: copySql,
-        // Not over another dialog: saving can open the template dialog
-        save: () => { if (!doc.querySelector('dialog[open]')) saveQuery(); },
+        // Not over another dialog: saving can open the template dialog.
+        // In SQL Lab, Ctrl+S saves the editor's SQL as a .sql file instead
+        save: () => {
+            if (doc.querySelector('dialog[open]')) return;
+            if (el.lab.hidden) saveQuery();
+            else lab.save('sql');
+        },
         palette: showPalette,
         // Undo and Redo belong to the builder
         undo: () => { if (el.lab.hidden) undo(); },
