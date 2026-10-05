@@ -5,6 +5,7 @@ import { createStorage, createMemoryBackend } from '../src/storage.js';
 import { createLabHistory, LAB_HISTORY_LIMIT } from '../src/db/lab-history.js';
 import { describeResult, cellText, formatDuration, summary, renderGrid, renderMessages, MAX_SHOWN_ROWS } from '../src/ui/lab-results.js';
 import { createEditor } from '../src/ui/lab-editor.js';
+import { queryFilename } from '../src/ui/lab-console.js';
 
 describe('SQL Lab history', () => {
     const make = (options) => {
@@ -172,5 +173,19 @@ describe('editor', () => {
         editor.value = "SELECT '😀', bad";
         editor.goTo(1, 13);
         expect(editor.input.value.slice(editor.input.selectionStart, editor.input.selectionEnd)).toBe('bad');
+    });
+});
+
+describe('saved query file names', () => {
+    test('keep what was typed, drop characters file systems refuse, and end in the format', () => {
+        expect(queryFilename('Adventure Works query', 'sql')).toBe('Adventure Works query.sql');
+        expect(queryFilename('report.sql', 'sql')).toBe('report.sql');
+        expect(queryFilename('report.sql', 'txt')).toBe('report.txt');
+        expect(queryFilename('REPORT.TXT', 'sql')).toBe('REPORT.sql');
+        expect(queryFilename('a<b>:c"d/e\\f|g?h*', 'sql')).toBe('a b c d e f g h.sql');
+        expect(queryFilename('trailing dots...', 'txt')).toBe('trailing dots.txt');
+        expect(queryFilename('', 'sql')).toBe('query.sql');
+        expect(queryFilename('???', 'txt')).toBe('query.txt');
+        expect(queryFilename('x'.repeat(300), 'sql')).toBe(`${'x'.repeat(100)}.sql`);
     });
 });

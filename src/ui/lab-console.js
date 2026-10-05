@@ -17,12 +17,39 @@ const DRAFTS_KEY = 'lab-drafts';
 const MAX_DRAFT_CHARS = 200 * 1024;
 const MAX_NOTICE_CHARS = 200 * 1024;
 
+/** The ways the editor's SQL can be saved as a file. */
+export const SAVE_FORMATS = {
+    sql: { extension: 'sql', mimeType: 'application/sql', label: 'SQL file' },
+    txt: { extension: 'txt', mimeType: 'text/plain', label: 'text file' }
+};
+
+/**
+ * A file name for a saved query: what was typed, without characters Windows
+ * and Android refuse in names, ending in the format's extension.
+ * @param {string} name
+ * @param {'sql' | 'txt'} format
+ */
+export function queryFilename(name, format) {
+    const base = String(name ?? '')
+        .replace(/\.(sql|txt)$/i, '')
+        // eslint-disable-next-line no-control-regex
+        .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/[. ]+$/, '')
+        .slice(0, 100)
+        .trim();
+    return `${base || 'query'}.${SAVE_FORMATS[format].extension}`;
+}
+
 /**
  * @param {{
  *   storage: any,
  *   client: any,
  *   toast: (message: string, kind?: string) => void,
  *   confirm: (options: { title: string, message: string, confirmText: string }) => Promise<boolean>,
+ *   askName?: (options: { title: string, label: string, value: string, confirmText: string }) => Promise<string | null>,
+ *   saveFile?: (filename: string, text: string, mimeType: string, done: string) => Promise<boolean>,
  *   lab: {
  *     open: () => { id: string, name: string } | null,
  *     exclusive: (work: () => Promise<any>) => Promise<any>,
@@ -34,7 +61,7 @@ const MAX_NOTICE_CHARS = 200 * 1024;
  *   }
  * }} options
  */
-export function createConsole({ storage, client, toast, confirm, lab }) {
+export function createConsole({ storage, client, toast, confirm, askName = null, saveFile = null, lab }) {
     const history = createLabHistory(storage);
     const state = {
         running: false,
@@ -67,18 +94,25 @@ export function createConsole({ storage, client, toast, confirm, lab }) {
     const runBtn = h('button', { type: 'button', class: 'btn btn-primary', id: 'lab-run-btn', 'aria-keyshortcuts': 'Control+Enter Meta+Enter' }, 'Run');
     const stopBtn = h('button', { type: 'button', class: 'btn btn-danger', id: 'lab-stop-btn', hidden: true }, 'Stop');
     const clearBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', id: 'lab-clear-btn' }, 'Clear');
+    const saveSqlBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', id: 'lab-save-sql-btn', 'aria-keyshortcuts': 'Control+S Meta+S', title: 'Save the SQL as a .sql file (Ctrl+S)' }, 'Save as .sql');
+    const saveTxtBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', id: 'lab-save-txt-btn', title: 'Save the SQL as a .txt text file' }, 'Save as .txt');
     const transaction = h('span', { class: 'library-chip lab-transaction', id: 'lab-transaction', role: 'status', hidden: true }, 'Transaction open');
     const hint = h('p', { class: 'field-hint lab-run-hint', id: 'lab-run-hint' });
     const root = h('section', { class: 'lab-console', id: 'lab-console', 'aria-labelledby': 'lab-console-heading' },
         h('div', { class: 'lab-console-head' },
             h('h4', { class: 'lab-subheading', id: 'lab-console-heading' }, h('label', { for: 'lab-sql' }, 'SQL')),
-            clearBtn),
+            h('div', { class: 'lab-console-actions', role: 'group', 'aria-label': 'Editor' },
+                saveFile ? saveSqlBtn : null,
+                saveFile ? saveTxtBtn : null,
+                clearBtn)),
         fromNotice,
         editor.root,
         notices,
         h('div', { class: 'lab-run-bar' }, runBtn, stopBtn, transaction, hint));
 
     runBtn.addEventListener('click', () => run());
+    saveSqlBtn.addEventListener('click', () => save('sql'));
+    saveTxtBtn.addEventListener('click', () => save('txt'));
     stopBtn.addEventListener('click', () => stop());
     clearBtn.addEventListener('click', () => {
         editor.value = '';
@@ -133,6 +167,41 @@ export function createConsole({ storage, client, toast, confirm, lab }) {
             state.from = null;
         }
         check();
+    }
+
+    // ------------------------------------------------------------- save
+
+    let saving = false;
+
+    /**
+     * Saves all of the editor's SQL, exactly as typed, as a .sql or .txt file
+     * (a download, or the share sheet on Android). Nothing leaves the device
+     * any other way.
+     * @param {'sql' | 'txt'} format
+     */
+    async function save(format) {
+        if (!saveFile || saving) return;
+        const text = editor.value;
+        if (!text.trim()) {
+            toast('Type some SQL to save first.', 'error');
+            editor.focus();
+            return;
+        }
+        const { label } = SAVE_FORMATS[format];
+        const database = lab.open();
+        const suggested = queryFilename(database ? `${database.name} query` : 'query', format);
+        saving = true;
+        try {
+            const name = askName
+                ? await askName({ title: `Save as ${label}`, label: 'File name', value: suggested, confirmText: 'Save' })
+                : suggested;
+            if (name === null) return;
+            const filename = queryFilename(name, format);
+            await saveFile(filename, text.endsWith('\n') ? text : `${text}\n`, SAVE_FORMATS[format].mimeType, `Saved ${filename}.`);
+        } finally {
+            saving = false;
+            editor.focus();
+        }
     }
 
     // ---------------------------------------------------------- notices
@@ -330,6 +399,8 @@ export function createConsole({ storage, client, toast, confirm, lab }) {
         stopBtn.disabled = state.stopping;
         stopBtn.textContent = state.stopping ? 'Stopping…' : 'Stop';
         clearBtn.disabled = !has;
+        saveSqlBtn.disabled = !has;
+        saveTxtBtn.disabled = !has;
         transaction.hidden = !state.inTransaction;
         hint.textContent = !database && state.stopping
             ? 'Restarting the database engine…'
@@ -337,7 +408,7 @@ export function createConsole({ storage, client, toast, confirm, lab }) {
             ? 'Open or create a database to run SQL.'
             : state.running
                 ? 'Running. Stop restarts the engine: committed changes are kept, and an unfinished transaction is rolled back.'
-                : `Runs in “${database.name}”. Ctrl+Enter runs; select part of the SQL to run only that.`;
+                : `Runs in “${database.name}”. Ctrl+Enter runs; select part of the SQL to run only that.${saveFile ? ' Ctrl+S saves it as a .sql file.' : ''}`;
         if (state.from) {
             const label = getDialect(state.from.dialect).label;
             fromNotice.replaceChildren(
@@ -361,6 +432,7 @@ export function createConsole({ storage, client, toast, confirm, lab }) {
         state,
         history,
         run,
+        save,
         stop,
         setDatabase,
         resultsView,
