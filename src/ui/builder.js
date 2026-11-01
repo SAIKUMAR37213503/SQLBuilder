@@ -128,8 +128,11 @@ function button(text, action, path, { arg, variant = 'ghost', label, icon } = {}
         'aria-label': label,
         title: label,
         dataset: { action, path, arg }
-    }, icon ? h('span', { 'aria-hidden': 'true' }, icon) : text);
+    }, icon ? h('span', { class: `icon icon-${ICON_NAMES[icon] ?? 'glyph'}`, 'aria-hidden': 'true' }, ICON_NAMES[icon] ? '' : icon) : text);
 }
+
+/** Glyphs drawn as one consistent stroke icon set (see .icon in style.css) */
+const ICON_NAMES = { '✕': 'remove', '↑': 'up', '↓': 'down' };
 
 function rowTools(itemPath, index, count, noun) {
     return h('div', { class: 'row-tools' },
