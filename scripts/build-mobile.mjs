@@ -41,6 +41,7 @@ await build({
 
 await buildWorker(out);
 cpSync(join(root, 'style.css'), join(out, 'style.css'));
+cpSync(join(root, 'fonts'), join(out, 'fonts'), { recursive: true });
 
 let html = readFileSync(join(root, 'index.html'), 'utf8');
 // Website-only features (PWA manifest / service worker) are not used in the app
