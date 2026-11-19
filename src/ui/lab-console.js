@@ -2,9 +2,11 @@
 // a run produced (results, messages) plus SQL Lab's history. lab.js places
 // these in the view and owns the databases; this module owns running SQL.
 //
-// A run sends the editor's SQL (or the selected part) to the engine as it
-// is. Nothing is rewritten: notices only point out what SQLite is likely to
-// reject, before Run.
+// A run sends the editor's SQL (or the selected part) to the engine. With
+// the language set to SQLite it goes as it is; with SQL Server, PostgreSQL or
+// MySQL it is first translated for SQLite (dialect-translate.js), and
+// Messages lists every kind of change with the SQL that ran. Notices point
+// out what SQLite is likely to reject, before Run.
 
 import { h, debounce, formatTime } from './dom.js';
 import { createEditor } from './lab-editor.js';
@@ -12,8 +14,11 @@ import { renderGrid, renderMessages, summary, MAX_SHOWN_ROWS } from './lab-resul
 import { readScript } from '../db/import-sql.js';
 import { createLabHistory } from '../db/lab-history.js';
 import { getDialect } from '../dialects.js';
+import { LAB_DIALECTS, isLabDialect, translateForSqlite } from '../db/dialect-translate.js';
+import { COMPAT_FUNCTION_NAMES } from '../db/compat-functions.js';
 
 const DRAFTS_KEY = 'lab-drafts';
+const LANGUAGE_KEY = 'lab-language';
 const MAX_DRAFT_CHARS = 200 * 1024;
 const MAX_NOTICE_CHARS = 200 * 1024;
 
@@ -71,7 +76,9 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
         loadingMore: false,
         inTransaction: false,
         /** @type {{ dialect: string, generic: string } | null} SQL opened from the builder */
-        from: null
+        from: null,
+        /** @type {import('../db/dialect-translate.js').LabDialect} the language the editor's SQL is written in */
+        language: /** @type {any} */ (isLabDialect(storage.get(LANGUAGE_KEY, 'sqlite')) ? storage.get(LANGUAGE_KEY, 'sqlite') : 'sqlite')
     };
     let draftFor = '';
     /** SQL from the builder waits for a database to be opened */
@@ -98,9 +105,16 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
     const saveTxtBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', id: 'lab-save-txt-btn', title: 'Save the SQL as a .txt text file' }, 'Save as .txt');
     const transaction = h('span', { class: 'library-chip lab-transaction', id: 'lab-transaction', role: 'status', hidden: true }, 'Transaction open');
     const hint = h('p', { class: 'field-hint lab-run-hint', id: 'lab-run-hint' });
+    const languageSelect = h('select', { class: 'select select-sm lab-language-select', id: 'lab-language', 'aria-describedby': 'lab-language-note' },
+        LAB_DIALECTS.map(d => h('option', { value: d.id }, d.label)));
+    languageSelect.value = state.language;
+    const languageNote = h('span', { class: 'visually-hidden', id: 'lab-language-note' });
+    const language = h('label', { class: 'lab-language' }, h('span', { class: 'lab-language-label' }, 'Language'), languageSelect, languageNote);
     const root = h('section', { class: 'lab-console', id: 'lab-console', 'aria-labelledby': 'lab-console-heading' },
         h('div', { class: 'lab-console-head' },
-            h('h4', { class: 'lab-subheading', id: 'lab-console-heading' }, h('label', { for: 'lab-sql' }, 'SQL')),
+            h('div', { class: 'lab-console-title' },
+                h('h4', { class: 'lab-subheading', id: 'lab-console-heading' }, h('label', { for: 'lab-sql' }, 'SQL')),
+                language),
             h('div', { class: 'lab-console-actions', role: 'group', 'aria-label': 'Editor' },
                 saveFile ? saveSqlBtn : null,
                 saveFile ? saveTxtBtn : null,
@@ -111,6 +125,17 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
         h('div', { class: 'lab-run-bar' }, runBtn, stopBtn, transaction, hint));
 
     runBtn.addEventListener('click', () => run());
+    languageSelect.addEventListener('change', () => setLanguage(languageSelect.value));
+
+    /** Sets the language the SQL is written in (kept for next time). */
+    function setLanguage(id) {
+        if (!isLabDialect(id)) return;
+        state.language = /** @type {any} */ (id);
+        languageSelect.value = id;
+        storage.set(LANGUAGE_KEY, id);
+        check();
+        render();
+    }
     saveSqlBtn.addEventListener('click', () => save('sql'));
     saveTxtBtn.addEventListener('click', () => save('txt'));
     stopBtn.addEventListener('click', () => stop());
@@ -211,15 +236,21 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
         const text = editor.value;
         const items = [];
         if (text.trim() && text.length <= MAX_NOTICE_CHARS) {
-            const { statements, problem } = readScript(text);
+            const { statements, problem } = readScript(translateForSqlite(text, state.language).sql);
             if (problem) items.push(problem);
-            for (const s of statements) for (const issue of s.issues) items.push(issue);
+            for (const s of statements) {
+                for (const issue of s.issues) {
+                    // SQL Lab adds these functions to every database, so they do run
+                    const fn = /^SQLite has no ([A-Z_]+)\(\) function/.exec(issue.message)?.[1];
+                    if (!fn || !COMPAT_FUNCTION_NAMES.has(fn)) items.push(issue);
+                }
+            }
         }
         notices.replaceChildren(...(items.length ? [
-            h('p', { class: 'lab-sql-notice-title' }, items.length === 1 ? 'SQLite may not run this as written:' : `SQLite may not run this as written (${items.length} places):`),
+            h('p', { class: 'lab-sql-notice-title' }, `${state.language === 'sqlite' ? 'SQLite may not run this as written' : 'SQLite may not run this, even translated'}${items.length === 1 ? ':' : ` (${items.length} places):`}`),
             h('ul', {}, items.slice(0, 6).map(i => h('li', {}, h('button', { type: 'button', class: 'lab-link-btn', dataset: { line: String(i.line), column: String(i.column) } }, `Line ${i.line}, column ${i.column}`), `: ${i.message}`))),
             items.length > 6 ? h('p', {}, `And ${items.length - 6} more.`) : null
-        ] : []));
+        ].filter(Boolean) : []));
         notices.hidden = items.length === 0;
     }
     const checkSoon = debounce(check, 300);
@@ -237,6 +268,7 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
         checkSoon.flush();
         const selected = editor.selection();
         const sql = selected ? selected.text : editor.value;
+        const translation = translateForSqlite(sql, state.language);
         if (!sql.trim()) {
             toast('Type some SQL to run first.', 'error');
             editor.focus();
@@ -248,7 +280,7 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
         /** @type {any} */
         let result;
         try {
-            result = await lab.exclusive(() => client.call('execute', { sql, pageSize: 100 }));
+            result = await lab.exclusive(() => client.call('execute', { sql: translation.sql, pageSize: 100 }));
         } catch (error) {
             const e = /** @type {any} */ (error);
             result = e?.code === 'STOPPED' || state.stopping
@@ -261,7 +293,8 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
             result.error.line += selected.line - 1;
         }
         if (selected) for (const r of result.results) r.line += selected.line - 1;
-        state.run = { ...result, sql, selection: Boolean(selected), databaseId: database.id };
+        state.run = { ...result, sql, selection: Boolean(selected), databaseId: database.id,
+            translation: state.language === 'sqlite' ? null : { language: state.language, changes: translation.changes, sql: translation.sql } };
         state.inTransaction = Boolean(result.inTransaction);
         state.running = false;
         history.add({ sql, databaseId: database.id, databaseName: database.name, ok: !result.error && !result.stopped, summary: summary(result) });
@@ -334,7 +367,22 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
 
     function messagesView() {
         if (!state.run) return [h('p', { class: 'lab-empty-hint' }, 'Messages from the engine appear here after you run SQL.')];
-        return renderMessages(state.run);
+        return [...renderMessages(state.run), ...translationView(state.run.translation)];
+    }
+
+    /** What the translation changed, and the SQL that ran. */
+    function translationView(translation) {
+        if (!translation) return [];
+        const label = LAB_DIALECTS.find(d => d.id === translation.language)?.label || translation.language;
+        return [h('section', { class: 'lab-translation', 'aria-label': 'Translation' },
+            h('p', { class: 'lab-translation-title' }, translation.changes.length
+                ? `Written in ${label}, translated for SQLite:`
+                : `Written in ${label}: nothing needed translating for SQLite.`),
+            translation.changes.length ? h('ul', { class: 'lab-translation-list' },
+                translation.changes.map(c => h('li', {}, c.count > 1 ? `${c.message} (${c.count} times)` : c.message))) : null,
+            h('details', { class: 'lab-translation-sql' },
+                h('summary', {}, 'SQL that ran'),
+                h('pre', { translate: 'no' }, translation.sql)))];
     }
 
     function historyView() {
@@ -408,11 +456,15 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
             ? 'Open or create a database to run SQL.'
             : state.running
                 ? 'Running. Stop restarts the engine: committed changes are kept, and an unfinished transaction is rolled back.'
-                : `Runs in “${database.name}”. Ctrl+Enter runs; select part of the SQL to run only that.${saveFile ? ' Ctrl+S saves it as a .sql file.' : ''}`;
+                : `Runs in “${database.name}”${state.language === 'sqlite' ? '' : `, translated from ${LAB_DIALECTS.find(d => d.id === state.language)?.label} for SQLite`}. Ctrl+Enter runs; select part of the SQL to run only that.${saveFile ? ' Ctrl+S saves it as a .sql file.' : ''}`;
+        languageNote.textContent = LAB_DIALECTS.find(d => d.id === state.language)?.note || '';
+        languageSelect.disabled = state.running;
         if (state.from) {
             const label = getDialect(state.from.dialect).label;
             fromNotice.replaceChildren(
-                h('p', {}, `This SQL was generated for ${label}. SQL Lab runs it in SQLite as written, and SQLite may not support all of it.`),
+                h('p', {}, state.language === state.from.dialect
+                    ? `This SQL was generated for ${label}. Language is set to ${label}, so SQL Lab translates it for SQLite when it runs.`
+                    : `This SQL was generated for ${label}. SQL Lab runs it in SQLite as written, and SQLite may not support all of it.`),
                 h('button', { type: 'button', class: 'btn btn-secondary btn-sm', dataset: { consoleAction: 'generic' } }, 'Use the Generic SQL version instead'));
         } else {
             fromNotice.replaceChildren();
@@ -448,6 +500,8 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
             editor.value = sql;
             carry = !draftFor;
             state.from = dialect !== 'generic' && generic && generic !== sql ? { dialect, generic } : null;
+            // SQL written for SQL Server, PostgreSQL or MySQL is translated when it runs
+            if (isLabDialect(dialect)) setLanguage(dialect);
             saveDraft();
             check();
             render();
@@ -458,6 +512,7 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
             state.inTransaction = false;
             render();
         },
+        setLanguage,
         clearHistory() {
             history.clear();
             storage.remove(DRAFTS_KEY);

@@ -33,10 +33,24 @@ export function createEditor({ label, describedBy = '', onInput = () => {}, onRu
         sync();
     }
 
+    // The highlight sits under the textarea's text area only: its scroll bars
+    // take space from the textarea, so the highlight leaves the same space
+    // free. Otherwise a long script scrolled to the end shows the highlighted
+    // text a scroll bar's height away from where the cursor is.
+    function fit() {
+        const right = Math.max(0, input.offsetWidth - input.clientWidth - borders('Left') - borders('Right'));
+        const bottom = Math.max(0, input.offsetHeight - input.clientHeight - borders('Top') - borders('Bottom'));
+        highlight.style.right = right ? `${right}px` : '';
+        highlight.style.bottom = bottom ? `${bottom}px` : '';
+    }
+    const borders = (/** @type {string} */ side) => parseFloat(getComputedStyle(input)[/** @type {any} */ (`border${side}Width`)]) || 0;
+
     function sync() {
+        fit();
         highlight.scrollTop = input.scrollTop;
         highlight.scrollLeft = input.scrollLeft;
     }
+    if (typeof ResizeObserver === 'function') new ResizeObserver(() => sync()).observe(input);
 
     input.addEventListener('input', () => {
         paint();
