@@ -8,6 +8,8 @@
 
 import { DatabaseError, databaseFileName, isDatabaseId, positionAt } from './engine.js';
 import { isSqliteFile } from './files.js';
+import { isStatementStartAt, replaceBatchSeparators } from './script-split.js';
+import { registerCompatFunctions } from './compat-functions.js';
 
 export const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 1000;
@@ -119,6 +121,8 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
         try {
             // Foreign keys are enforced, as on the database servers the app writes SQL for
             db.exec('PRAGMA foreign_keys = ON;');
+            // SQL Server, PostgreSQL and MySQL functions SQLite lacks (GETDATE, DATEADD, NOW, …)
+            registerCompatFunctions(db);
         } catch (error) {
             db.close();
             throw error;
@@ -201,8 +205,13 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
         const pStmt = wasm.peekPtr(ppStmt);
         if (rc !== capi.SQLITE_OK) {
             const at = capi.sqlite3_error_offset(pDb);
-            const failure = { message: capi.sqlite3_errmsg(pDb), code: capi.sqlite3_js_rc_str(rc) || 'SQLITE_ERROR', offset: at >= 0 ? offset + at : startOf(bytes, offset) };
             if (pStmt) capi.sqlite3_finalize(pStmt);
+            // No semicolon before the next statement (as SSMS allows): end this one before that line
+            if (at > 0 && isStatementStartAt(bytes, startOf(bytes, offset), offset + at)) {
+                const implicit = prepareRange(bytes, mem, offset, at);
+                if (implicit) return implicit;
+            }
+            const failure = { message: capi.sqlite3_errmsg(pDb), code: capi.sqlite3_js_rc_str(rc) || 'SQLITE_ERROR', offset: at >= 0 ? offset + at : startOf(bytes, offset) };
             return { error: failure };
         }
         const tail = Number(wasm.peekPtr(pzTail));
@@ -211,6 +220,29 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
         const text = capi.sqlite3_sql(pStmt);
         capi.sqlite3_finalize(pStmt);
         return { text, start: offset, end };
+    }
+
+    /**
+     * Prepares only `length` bytes from `offset`: a statement whose semicolon
+     * was left out. Returns it as nextStatement does, or null if those bytes
+     * aren't one complete statement either (the caller reports the first error).
+     */
+    function prepareRange(bytes, mem, offset, length) {
+        const pDb = current.db.pointer;
+        const { pSql, ppStmt, pzTail } = mem;
+        wasm.pokePtr([ppStmt, pzTail], 0);
+        const rc = capi.sqlite3_prepare_v3(pDb, wasm.ptr.add(pSql, offset), length, 0, ppStmt, pzTail);
+        const pStmt = wasm.peekPtr(ppStmt);
+        if (rc !== capi.SQLITE_OK || !pStmt) {
+            if (pStmt) capi.sqlite3_finalize(pStmt);
+            return null;
+        }
+        const tail = Number(wasm.peekPtr(pzTail)) - Number(pSql);
+        const text = capi.sqlite3_sql(pStmt);
+        capi.sqlite3_finalize(pStmt);
+        // Something other than whitespace or comments was left over: not one statement
+        if (startOf(bytes.subarray(0, offset + length), tail) < offset + length) return null;
+        return { text, start: offset, end: offset + length };
     }
 
     /** Copies a script into wasm memory (freed with freeScript). */
@@ -549,7 +581,7 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
             requireOpen();
             closeCursors();
             const size = clampPage(pageSize);
-            const bytes = new TextEncoder().encode(String(sql ?? ''));
+            const bytes = new TextEncoder().encode(replaceBatchSeparators(String(sql ?? '')));
             const results = [];
             /** @type {any} */
             let error = null;

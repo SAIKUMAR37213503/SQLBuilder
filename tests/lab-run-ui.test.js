@@ -229,10 +229,28 @@ describe('running SQL', () => {
         const sql = 'SELECT TOP 5 GETDATE() FROM t;';
         await typeSql(sql);
         expect($('#lab-sql-notices').hidden).toBe(false);
-        expect(text('#lab-sql-notices')).toContain('SQLite has no GETDATE() function');
+        expect(text('#lab-sql-notices')).toContain('SQLite has no TOP');
+        // SQL Lab adds GETDATE() to every database, so it isn't flagged
+        expect(text('#lab-sql-notices')).not.toContain('GETDATE');
         expect($('#lab-sql').value).toBe(sql);
         await typeSql('SELECT 1;');
         expect($('#lab-sql-notices').hidden).toBe(true);
+    });
+
+    test('with the language set to SQL Server, the same SQL is translated and runs', async () => {
+        boot();
+        await openLab();
+        await newDatabase('Languages');
+        await typeSql('CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1), (2), (3);');
+        await run();
+        const select = /** @type {HTMLSelectElement} */ ($('#lab-language'));
+        select.value = 'sqlserver';
+        select.dispatchEvent(new Event('change'));
+        await typeSql('SELECT TOP 2 n FROM dbo.t ORDER BY n DESC\nSELECT COUNT(*) FROM t\nGO');
+        expect($('#lab-sql-notices').hidden).toBe(true);
+        await run();
+        expect(gridRows(0)).toEqual([['3'], ['2']]);
+        expect(gridRows(1)).toEqual([['3']]);
     });
 
     test('Ctrl+Enter runs in SQL Lab and generates in the builder', async () => {
@@ -361,7 +379,7 @@ describe('Open in SQL Lab', () => {
         expect(gridRows().map(r => r[0])).toEqual(['Ada', 'Grace', 'Linus', 'Margaret', 'Ken']);
     });
 
-    test('SQL for another dialect is opened as generated, with the Generic version offered', async () => {
+    test('SQL for another dialect is opened as generated, translated when it runs, with the Generic version offered', async () => {
         boot();
         await openLab();
         await newDatabase('Company DB');
@@ -378,10 +396,14 @@ describe('Open in SQL Lab', () => {
         const opened = $('#lab-sql').value;
         expect(opened).toContain('TOP');
         expect(text('#lab-sql-from')).toContain('generated for Microsoft SQL Server');
-        expect(text('#lab-sql-notices')).toContain('TOP');
+        expect($('#lab-language').value).toBe('sqlserver');
+        expect(text('#lab-sql-from')).toContain('translates it for SQLite');
+        expect($('#lab-sql-notices').hidden).toBe(true);
         await run();
-        expect(tab()).toBe('messages');
-        expect(text('.lab-message-error')).toMatch(/syntax error|no such column/);
+        expect(gridRows()).toEqual([['Ada'], ['Grace']]);
+        $('.lab-tab[data-tab="messages"]').click();
+        await settle();
+        expect(text('.lab-translation')).toContain('TOP n became LIMIT n.');
 
         $('[data-console-action="generic"]').click();
         await settle();

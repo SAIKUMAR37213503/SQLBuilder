@@ -1624,6 +1624,9 @@ body.view-lab .mobile-bar { display: none; }
     white-space: pre;
     overflow-wrap: normal;
     letter-spacing: normal;
+    font-weight: 400;
+    font-variant-ligatures: none;
+    font-kerning: none;
 }
 .lab-editor-highlight {
     position: absolute;
@@ -1633,6 +1636,18 @@ body.view-lab .mobile-bar { display: none; }
     pointer-events: none;
 }
 .lab-editor-highlight code { font-family: inherit; }
+.lab-console-title { display: flex; flex-wrap: wrap; gap: 0.35rem 0.75rem; align-items: center; }
+.lab-language { display: inline-flex; gap: 0.4rem; align-items: center; }
+.lab-language-label { color: var(--text-muted); font-size: 0.8rem; font-weight: 600; }
+.lab-language-select { width: auto; }
+.lab-translation { display: grid; gap: 0.35rem; margin-top: 0.75rem; padding: 0.6rem 0.75rem; border-left: 4px solid var(--accent); border-radius: var(--radius-sm); background: var(--info-soft); font-size: 0.85rem; }
+.lab-translation-title { font-weight: 600; }
+.lab-translation-list { margin: 0; padding-left: 1.2rem; }
+.lab-translation-sql summary { cursor: pointer; color: var(--text-2); }
+.lab-translation-sql pre { margin: 0.35rem 0 0; max-height: 16rem; overflow: auto; padding: 0.5rem; border: 1px solid var(--border); border-radius: 6px; background: var(--code-bg); font-family: var(--font-mono); font-size: 0.8rem; white-space: pre; }
+/* Same glyph widths as the textarea above it: no bold or italic, which some
+   fonts draw wider (or the browser fakes), moving the text away from the cursor */
+.lab-editor-highlight .tok { font-weight: inherit; font-style: normal; }
 .lab-editor-input {
     position: relative;
     display: block;
