@@ -7,13 +7,15 @@
     <meta name="color-scheme" content="light dark">
     <title>SQL Query Builder Pro Lite</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2'%3E%3Cellipse cx='12' cy='5' rx='9' ry='3'/%3E%3Cpath d='M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5'/%3E%3Cpath d='M3 12c0 1.66 4 3 9 3s9-1.34 9-3'/%3E%3C/svg%3E">
-    <meta name="theme-color" content="#1d5fd6">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0d0f13" media="(prefers-color-scheme: dark)">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <!-- The SQL Lab's database engine (SQLite). Listed so the offline cache keeps it and the app finds its current URL. -->
     <link rel="prefetch" href="dist/db-worker.js?v=f0ea5620ad7e" id="asset-db-worker">
     <link rel="prefetch" href="dist/sqlite3.wasm?v=2ee8f3dab694" id="asset-sqlite-wasm">
-    <link rel="stylesheet" href="style.css?v=48e26989e89b">
+    <link rel="preload" href="fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="style.css?v=96050df5b2ca">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -21,7 +23,7 @@
     <div class="app">
         <header class="app-header">
             <div class="brand">
-                <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+                <span class="brand-icon-tile" aria-hidden="true"><svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg></span>
                 <h1>SQL Query Builder <span class="brand-sub">Pro Lite</span></h1>
             </div>
             <div class="toolbar" role="toolbar" aria-label="Workspace">
@@ -104,7 +106,7 @@
                         <button type="button" class="btn btn-secondary btn-sm" id="save-btn" aria-keyshortcuts="Control+S Meta+S">Save…</button>
                     </div>
                     <div id="output-state" class="output-state" aria-live="polite"></div>
-                    <pre id="sql-output" class="sql-output" tabindex="0" aria-label="Generated SQL" aria-describedby="output-state"><code id="sql-code"></code></pre>
+                    <pre id="sql-output" class="sql-output" translate="no" tabindex="0" aria-label="Generated SQL" aria-describedby="output-state"><code id="sql-code"></code></pre>
                     <details class="structure" id="structure" hidden>
                         <summary class="structure-summary"><span class="structure-title">Query structure</span> <span class="complexity" id="complexity"></span></summary>
                         <p class="structure-sentence" id="structure-sentence"></p>
@@ -687,6 +689,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=b052ba49511b" defer></script>
+    <script src="dist/sqlbuilder.js?v=330eb2679063" defer></script>
 </body>
 </html>
