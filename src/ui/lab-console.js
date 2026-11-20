@@ -16,6 +16,20 @@ import { createLabHistory } from '../db/lab-history.js';
 import { getDialect } from '../dialects.js';
 import { LAB_DIALECTS, isLabDialect, translateForSqlite } from '../db/dialect-translate.js';
 import { COMPAT_FUNCTION_NAMES } from '../db/compat-functions.js';
+import { parseBatch, splitBatches, TsqlSyntaxError } from '../db/tsql/parse.js';
+
+/** The first thing the T-SQL engine can't read in a script (line, column, message), or null. */
+export function tsqlProblem(text) {
+    try {
+        for (const batch of splitBatches(text)) parseBatch(batch.text, batch.start);
+        return null;
+    } catch (e) {
+        if (!(e instanceof TsqlSyntaxError)) return null;
+        const before = text.slice(0, e.offset);
+        const line = (before.match(/\n/g) || []).length + 1;
+        return { line, column: e.offset - (before.lastIndexOf('\n') + 1) + 1, message: e.message };
+    }
+}
 
 const DRAFTS_KEY = 'lab-drafts';
 const LANGUAGE_KEY = 'lab-language';
@@ -235,7 +249,11 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
     function check() {
         const text = editor.value;
         const items = [];
-        if (text.trim() && text.length <= MAX_NOTICE_CHARS) {
+        if (text.trim() && text.length <= MAX_NOTICE_CHARS && state.language === 'sqlserver') {
+            // The T-SQL engine reads the script itself: report what it can't read
+            const problem = tsqlProblem(text);
+            if (problem) items.push(problem);
+        } else if (text.trim() && text.length <= MAX_NOTICE_CHARS) {
             const { statements, problem } = readScript(translateForSqlite(text, state.language).sql);
             if (problem) items.push(problem);
             for (const s of statements) {
@@ -247,7 +265,7 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
             }
         }
         notices.replaceChildren(...(items.length ? [
-            h('p', { class: 'lab-sql-notice-title' }, `${state.language === 'sqlite' ? 'SQLite may not run this as written' : 'SQLite may not run this, even translated'}${items.length === 1 ? ':' : ` (${items.length} places):`}`),
+            h('p', { class: 'lab-sql-notice-title' }, `${state.language === 'sqlite' ? 'SQLite may not run this as written' : state.language === 'sqlserver' ? 'SQL Lab can\'t read this T-SQL' : 'SQLite may not run this, even translated'}${items.length === 1 ? ':' : ` (${items.length} places):`}`),
             h('ul', {}, items.slice(0, 6).map(i => h('li', {}, h('button', { type: 'button', class: 'lab-link-btn', dataset: { line: String(i.line), column: String(i.column) } }, `Line ${i.line}, column ${i.column}`), `: ${i.message}`))),
             items.length > 6 ? h('p', {}, `And ${items.length - 6} more.`) : null
         ].filter(Boolean) : []));
@@ -268,7 +286,9 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
         checkSoon.flush();
         const selected = editor.selection();
         const sql = selected ? selected.text : editor.value;
-        const translation = translateForSqlite(sql, state.language);
+        // SQL Server scripts run in the T-SQL engine (variables, IF, WHILE, TRY … CATCH …), which translates as it goes
+        const engine = state.language === 'sqlserver';
+        const translation = engine ? null : translateForSqlite(sql, state.language);
         if (!sql.trim()) {
             toast('Type some SQL to run first.', 'error');
             editor.focus();
@@ -280,7 +300,9 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
         /** @type {any} */
         let result;
         try {
-            result = await lab.exclusive(() => client.call('execute', { sql: translation.sql, pageSize: 100 }));
+            result = await lab.exclusive(() => client.call('execute', engine
+                ? { sql, pageSize: 100, language: 'sqlserver', databaseName: database.name }
+                : { sql: /** @type {any} */ (translation).sql, pageSize: 100 }));
         } catch (error) {
             const e = /** @type {any} */ (error);
             result = e?.code === 'STOPPED' || state.stopping
@@ -294,7 +316,9 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
         }
         if (selected) for (const r of result.results) r.line += selected.line - 1;
         state.run = { ...result, sql, selection: Boolean(selected), databaseId: database.id,
-            translation: state.language === 'sqlite' ? null : { language: state.language, changes: translation.changes, sql: translation.sql } };
+            translation: state.language === 'sqlite' ? null
+                : engine ? (result.translation ? { language: state.language, changes: result.translation.changes, sql: result.translation.sql } : null)
+                    : { language: state.language, changes: /** @type {any} */ (translation).changes, sql: /** @type {any} */ (translation).sql } };
         state.inTransaction = Boolean(result.inTransaction);
         state.running = false;
         history.add({ sql, databaseId: database.id, databaseName: database.name, ok: !result.error && !result.stopped, summary: summary(result) });

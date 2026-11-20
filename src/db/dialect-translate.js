@@ -160,9 +160,10 @@ const SQLITE_SCHEMAS = new Set(['MAIN', 'TEMP']);
 /**
  * @param {string} sql
  * @param {LabDialect} dialect
+ * @param {{ tableVariables?: Set<string> }} [options] SQL Server: names (lower case) of the table variables declared so far
  * @returns {{ sql: string, changes: { message: string, count: number }[] }}
  */
-export function translateForSqlite(sql, dialect) {
+export function translateForSqlite(sql, dialect, options = {}) {
     const source = String(sql ?? '');
     if (dialect === 'sqlite' || !isLabDialect(dialect)) return { sql: source, changes: [] };
     const list = tokens(dialect === 'sqlserver' ? replaceBatchSeparators(source) : source);
@@ -170,7 +171,7 @@ export function translateForSqlite(sql, dialect) {
     const counts = new Map();
     const note = (/** @type {string} */ message) => counts.set(message, (counts.get(message) || 0) + 1);
 
-    if (dialect === 'sqlserver') sqlServer(list, note);
+    if (dialect === 'sqlserver') sqlServer(list, note, options);
     else if (dialect === 'postgresql') postgres(list, note);
     else mysql(list, note);
     common(list, note, dialect);
@@ -228,7 +229,15 @@ function findOffset(list, at) {
     return { start: off, end: j + 1, value: list[value].v };
 }
 
-function sqlServer(list, note) {
+function sqlServer(list, note, options = {}) {
+    tsqlNames(list, note, options);
+    compoundAssignments(list, note);
+    /** Tokens [a, b) translated on their own (the inside of CAST(…), CONVERT(…) …), as text */
+    const sub = (/** @type {number} */ a, /** @type {number} */ b) => {
+        const inner = tokens(textOf(list, a, b));
+        sqlServer(inner, note, options);
+        return inner.map(x => x.v).join('');
+    };
     /** @type {{ depth: number, limit: string }[]} TOP values waiting for the end of their query */
     const pending = [];
     let depth = 0;
@@ -284,7 +293,13 @@ function sqlServer(list, note) {
                     end = n + 1;
                 } else continue;
                 const percent = upper(list[nextSig(list, end)]) === 'PERCENT';
-                if (percent) continue; // left for SQLite to report
+                if (percent && Number(limit) >= 100) {
+                    // TOP 100 PERCENT (often in views) keeps every row
+                    replace(list, i, nextSig(list, end) + 1, '');
+                    note('TOP 100 PERCENT was dropped: it keeps every row.');
+                    continue;
+                }
+                if (percent) continue; // the T-SQL engine keeps the first n percent itself
                 const ties = nextSig(list, end);
                 if (upper(list[ties]) === 'WITH' && upper(list[nextSig(list, ties + 1)]) === 'TIES') continue;
                 replace(list, i, end, '');
@@ -306,9 +321,11 @@ function sqlServer(list, note) {
             const args = argsOf(list, open, close);
             if (args.length < 2) continue;
             const type = textOf(list, args[0][0], args[0][1]).trim();
-            const expr = textOf(list, args[1][0], args[1][1]).trim();
-            const style = args[2] ? textOf(list, args[2][0], args[2][1]).trim() : '';
-            const value = style && /^(VAR)?CHAR|^N(VAR)?CHAR/i.test(type) ? `CONVERT_STYLE(${expr}, ${style})` : castFor(expr, type);
+            const expr = sub(args[1][0], args[1][1]).trim();
+            const style = args[2] ? sub(args[2][0], args[2][1]).trim() : '';
+            const value = w === 'TRY_CONVERT'
+                ? `TSQL_TRY_CAST(${expr}, ${quote(type.toUpperCase())})`
+                : style && /^(VAR)?CHAR|^N(VAR)?CHAR/i.test(type) ? `CONVERT_STYLE(${expr}, ${style})` : (tsqlCast(expr, type) ?? castFor(expr, type));
             replace(list, i, close + 1, value);
             note('CONVERT(type, value) became CAST(value AS type); a date style such as 103 still formats the date.');
         } else if (w === 'WITH' && list[nextSig(list, i + 1)]?.v === '(') {
@@ -327,17 +344,336 @@ function sqlServer(list, note) {
         } else if (w === 'PRINT' && lineStartsAt(list, i)) {
             list[i] = { t: 'word', v: 'SELECT' };
             note('PRINT became SELECT, so the text shows as a result.');
-        } else if (t.t === 'p' && t.v === '+') {
-            // 'a' + b: string concatenation is || in SQLite
-            const a = list[prevSig(list, i - 1)];
-            const b = list[nextSig(list, i + 1)];
-            if (a?.t === 'str' || b?.t === 'str') {
-                t.v = '||';
-                note("+ between text became || ('a' + 'b').");
+        } else if (w === 'CAST' && list[nextSig(list, i + 1)]?.v === '(') {
+            const open = nextSig(list, i + 1);
+            const close = closing(list, open);
+            if (close < 0) continue;
+            const as = lastWordAt(list, open + 1, close, 'AS');
+            if (as < 0) continue;
+            const type = textOf(list, as + 1, close).trim();
+            const value = tsqlCast(sub(open + 1, as).trim(), type);
+            if (value === null) continue;
+            replace(list, i, close + 1, value);
+            note('CAST(… AS type) uses the SQLite type that keeps the value (dates stay dates, text is cut to its length).');
+        } else if (w === 'TRY_CAST' && list[nextSig(list, i + 1)]?.v === '(') {
+            const open = nextSig(list, i + 1);
+            const close = closing(list, open);
+            const as = close > 0 ? lastWordAt(list, open + 1, close, 'AS') : -1;
+            if (as < 0) continue;
+            replace(list, i, close + 1, `TSQL_TRY_CAST(${sub(open + 1, as).trim()}, ${quote(textOf(list, as + 1, close).trim().toUpperCase())})`);
+            note('TRY_CAST and TRY_CONVERT give NULL when the value can\'t be converted, as in SQL Server.');
+        } else if (w === 'STRING_AGG' && list[nextSig(list, i + 1)]?.v === '(') {
+            // STRING_AGG(x, ', ') WITHIN GROUP (ORDER BY y) → string_agg(x, ', ' ORDER BY y)
+            const open = nextSig(list, i + 1);
+            const close = closing(list, open);
+            const within = close > 0 ? nextSig(list, close + 1) : -1;
+            if (within < 0 || upper(list[within]) !== 'WITHIN') continue;
+            const group = nextSig(list, within + 1);
+            const gOpen = nextSig(list, group + 1);
+            const gClose = list[gOpen]?.v === '(' ? closing(list, gOpen) : -1;
+            if (upper(list[group]) !== 'GROUP' || gClose < 0) continue;
+            const order = sub(gOpen + 1, gClose).trim();
+            replace(list, i, gClose + 1, `string_agg(${sub(open + 1, close).trim()} ${order})`);
+            note('STRING_AGG(…) WITHIN GROUP (ORDER BY …) became string_agg(… ORDER BY …).');
+        } else if ((w === 'STRING_SPLIT' || w === 'OPENJSON') && list[nextSig(list, i + 1)]?.v === '(') {
+            const open = nextSig(list, i + 1);
+            const close = closing(list, open);
+            if (close < 0) continue;
+            const args = argsOf(list, open, close).map(([a, b]) => sub(a, b).trim());
+            if (w === 'STRING_SPLIT') {
+                replace(list, i, close + 1, args[2] && args[2] !== '0'
+                    ? `(SELECT value, key + 1 AS ordinal FROM json_each(TSQL_SPLIT(${args[0]}, ${args[1]})))`
+                    : `json_each(TSQL_SPLIT(${args[0]}, ${args[1] ?? "' '"}))`);
+                note('STRING_SPLIT(text, separator) became a json_each list with a value column.');
+            } else {
+                replace(list, i, close + 1, `(SELECT key, value, CASE type WHEN 'null' THEN 0 WHEN 'text' THEN 1 WHEN 'integer' THEN 2 WHEN 'real' THEN 2 WHEN 'true' THEN 3 WHEN 'false' THEN 3 WHEN 'array' THEN 4 ELSE 5 END AS type FROM json_each(${args.join(', ')}))`);
+                note('OPENJSON(json) became a json_each list with key, value and type columns.');
             }
+            // APPLY over a list function is a join in SQLite
+            const p = prevSig(list, i - 1);
+            const q = prevSig(list, p - 1);
+            if (upper(list[p]) === 'APPLY' && (upper(list[q]) === 'CROSS' || upper(list[q]) === 'OUTER')) {
+                replace(list, q, p + 1, upper(list[q]) === 'CROSS' ? 'JOIN' : 'LEFT JOIN');
+            }
+        } else if (w === 'OPTION' && list[nextSig(list, i + 1)]?.v === '(') {
+            const open = nextSig(list, i + 1);
+            const close = closing(list, open);
+            if (close < 0) continue;
+            replace(list, i, close + 1, '');
+            note('Query hints OPTION (…) were dropped.');
+        } else if (w === 'COLLATE') {
+            const n = nextSig(list, i + 1);
+            if (n < 0 || (list[n].t !== 'word' && list[n].t !== 'ident')) continue;
+            const name = list[n].v.replace(/^[["]|[\]"]$/g, '');
+            if (/^(NOCASE|BINARY|RTRIM)$/i.test(name)) continue;
+            list[n] = { t: 'word', v: /_CI(_|$)/i.test(name) ? 'NOCASE' : 'BINARY' };
+            note('SQL Server collations became NOCASE (case-insensitive) or BINARY.');
+        } else if (FUNCTION_NAMES[w] && list[nextSig(list, i + 1)]?.v === '(') {
+            const target = FUNCTION_NAMES[w];
+            if (w === 'LOG') {
+                // LOG(x) is the natural log; LOG(x, base) has the base second
+                const open = nextSig(list, i + 1);
+                const close = closing(list, open);
+                if (close < 0) continue;
+                const args = argsOf(list, open, close).map(([a, b]) => sub(a, b).trim());
+                replace(list, i, close + 1, args.length > 1 ? `log(${args[1]}, ${args[0]})` : `ln(${args[0]})`);
+            } else t.v = target;
+        } else if (SESSION_WORDS[w] && list[nextSig(list, i + 1)]?.v !== '(' && list[prevSig(list, i - 1)]?.v !== '.') {
+            list[i] = { t: 'str', v: quote(SESSION_WORDS[w]) };
         }
     }
     flush(list.length, 0);
+    plusChains(list, note);
+}
+
+/** The last word `word` at depth 0 between from and to (exclusive), or -1. */
+function lastWordAt(list, from, to, word) {
+    let depth = 0;
+    let found = -1;
+    for (let k = from; k < to; k++) {
+        const v = list[k].t === 'p' ? list[k].v : '';
+        if (v === '(') depth++;
+        else if (v === ')') depth--;
+        else if (depth === 0 && upper(list[k]) === word) found = k;
+    }
+    return found;
+}
+
+/**
+ * CAST(expr AS type) as SQL Server means it, in SQLite, or null to leave it:
+ * dates stay text dates, (N)VARCHAR(n) is cut to n characters, DECIMAL(p, s)
+ * is rounded to s places and UNIQUEIDENTIFIER stays text.
+ */
+export function tsqlCast(expr, type) {
+    const t = String(type).trim().toUpperCase().replace(/\s+/g, ' ');
+    const m = /^([A-Z_0-9 ]+?)\s*(?:\(\s*([^)]*)\))?$/.exec(t);
+    if (!m) return null;
+    const name = m[1].trim();
+    const args = (m[2] || '').split(',').map(x => x.trim());
+    if (['DATE', 'DATETIME', 'DATETIME2', 'SMALLDATETIME', 'DATETIMEOFFSET', 'TIME'].includes(name)) {
+        if (name === 'DATE') return `date(${expr})`;
+        if (name === 'TIME') return `time(${expr})`;
+        return `datetime(${expr})`;
+    }
+    if (['CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR'].includes(name)) {
+        // VARCHAR without a length is 30 characters in CAST, as in SQL Server
+        const n = args[0] === 'MAX' ? 0 : Number(args[0] || 30);
+        return n > 0 ? `substr(CAST(${expr} AS TEXT), 1, ${n})` : `CAST(${expr} AS TEXT)`;
+    }
+    if (['TEXT', 'NTEXT', 'UNIQUEIDENTIFIER', 'SYSNAME', 'XML', 'SQL_VARIANT'].includes(name)) return `CAST(${expr} AS TEXT)`;
+    if (['INT', 'BIGINT', 'SMALLINT', 'TINYINT'].includes(name)) return `CAST(${expr} AS INTEGER)`;
+    if (name === 'BIT') return `(CASE WHEN (${expr}) IS NULL THEN NULL WHEN CAST(${expr} AS REAL) <> 0 OR upper(CAST(${expr} AS TEXT)) = 'TRUE' THEN 1 ELSE 0 END)`;
+    if (['DECIMAL', 'NUMERIC', 'MONEY', 'SMALLMONEY'].includes(name)) {
+        const scale = name.endsWith('MONEY') ? 4 : Number(args[1] || 0);
+        return `round(CAST(${expr} AS REAL), ${scale})`;
+    }
+    if (['FLOAT', 'REAL'].includes(name)) return `CAST(${expr} AS REAL)`;
+    if (['BINARY', 'VARBINARY', 'IMAGE'].includes(name)) return `CAST(${expr} AS BLOB)`;
+    return null;
+}
+
+// T-SQL functions SQLite has under another name
+const FUNCTION_NAMES = /** @type {Record<string, string>} */ ({
+    FORMAT: 'TSQL_FORMAT', LOG: 'ln', ATN2: 'atan2', COUNT_BIG: 'count', JSON_VALUE: 'json_extract', JSON_QUERY: 'json_extract',
+    ISJSON: 'json_valid', CEILING: 'ceil', SUBSTRING: 'TSQL_SUBSTRING'
+});
+// Session values that are words, not functions
+const SESSION_WORDS = /** @type {Record<string, string>} */ ({ SYSTEM_USER: 'sa', SESSION_USER: 'dbo', CURRENT_USER: 'dbo' });
+// @@ variables SQL Lab knows; each becomes a parameter the engine binds
+export const SYSTEM_VARIABLES = new Set(['ROWCOUNT', 'IDENTITY', 'ERROR', 'TRANCOUNT', 'VERSION', 'SERVERNAME', 'SERVICENAME', 'SPID',
+    'FETCH_STATUS', 'DATEFIRST', 'LANGUAGE', 'MAX_PRECISION', 'NESTLEVEL', 'LOCK_TIMEOUT', 'TEXTSIZE', 'OPTIONS', 'PROCID', 'DBTS', 'MICROSOFTVERSION']);
+// Functions whose value the engine knows (the error being handled, the last identity)
+const ENGINE_FUNCTIONS = /** @type {Record<string, string>} */ ({
+    SCOPE_IDENTITY: '@__identity', ERROR_MESSAGE: '@__error_message', ERROR_NUMBER: '@__error_number', ERROR_LINE: '@__error_line',
+    ERROR_SEVERITY: '@__error_severity', ERROR_STATE: '@__error_state', ERROR_PROCEDURE: '@__error_procedure', XACT_STATE: '@__xact_state',
+    DB_NAME: '@__db_name'
+});
+
+/**
+ * Names only T-SQL has: #temp tables, table variables, system variables (ROWCOUNT …) and the
+ * functions the engine answers (SCOPE_IDENTITY(), ERROR_MESSAGE() …).
+ */
+function tsqlNames(list, note, options) {
+    const tableVariables = options.tableVariables || new Set();
+    for (let i = 0; i < list.length; i++) {
+        const t = list[i];
+        if (t.t !== 'word') continue;
+        if (t.v.startsWith('#')) {
+            list[i] = { t: 'ident', v: `"${t.v.replace(/"/g, '""')}"` };
+            // CREATE TABLE #t → CREATE TEMP TABLE "#t"
+            const a = prevSig(list, i - 1);
+            const b = prevSig(list, a - 1);
+            if (upper(list[a]) === 'TABLE' && upper(list[b]) === 'CREATE') list[a] = { t: 'word', v: 'TEMP TABLE' };
+            note('Temp tables (#name) became SQLite temporary tables, kept until the database is closed.');
+        } else if (t.v.startsWith('@@')) {
+            const name = t.v.slice(2).toUpperCase();
+            if (SYSTEM_VARIABLES.has(name)) t.v = `@__${name.toLowerCase()}`;
+        } else if (t.v.startsWith('@') && tableVariables.has(t.v.toLowerCase())) {
+            list[i] = { t: 'ident', v: `"${t.v.replace(/"/g, '""')}"` };
+        } else if (ENGINE_FUNCTIONS[t.v.toUpperCase()]) {
+            const open = nextSig(list, i + 1);
+            const close = list[open]?.v === '(' ? nextSig(list, open + 1) : -1;
+            if (close > 0 && list[close].v === ')') replace(list, i, close + 1, ENGINE_FUNCTIONS[t.v.toUpperCase()]);
+        }
+    }
+}
+
+/** UPDATE … SET n += 1 → SET n = n + 1 (and -=, *=, /=, %=). */
+function compoundAssignments(list, note) {
+    for (let i = 0; i < list.length - 1; i++) {
+        const t = list[i];
+        if (t.t !== 'p' || !/^[+\-*/%]$/.test(t.v) || list[i + 1].v !== '=') continue;
+        const target = prevSig(list, i - 1);
+        if (target < 0 || (list[target].t !== 'word' && list[target].t !== 'ident')) continue;
+        // The whole name: t.col or [col]
+        let start = target;
+        while (start >= 2 && list[start - 1].v === '.' && (list[start - 2].t === 'word' || list[start - 2].t === 'ident')) start -= 2;
+        const name = textOf(list, start, target + 1);
+        list.splice(i, 2, { t: 'p', v: '=' }, { t: 'ws', v: ' ' }, { t: 'word', v: name }, { t: 'ws', v: ' ' }, { t: 'p', v: t.v });
+        note('n += 1 became n = n + 1.');
+    }
+}
+
+// Words that end an operand chain (anything else that is a word is a name or a function)
+const CHAIN_BREAKS = new Set(['SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'AS', 'ON', 'IS', 'IN', 'LIKE', 'BETWEEN', 'WHEN', 'THEN',
+    'ELSE', 'END', 'CASE', 'SET', 'VALUES', 'INTO', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'OUTER', 'CROSS', 'GROUP', 'BY', 'ORDER',
+    'HAVING', 'UNION', 'ALL', 'DISTINCT', 'TOP', 'LIMIT', 'OFFSET', 'ESCAPE', 'ASC', 'DESC', 'EXISTS', 'RETURNING', 'COLLATE', 'OVER',
+    'PARTITION', 'ROWS', 'RANGE', 'PRECEDING', 'FOLLOWING', 'UNBOUNDED', 'CURRENT', 'ROW', 'WITH', 'UPDATE', 'DELETE', 'INSERT', 'CREATE',
+    'TABLE', 'VIEW', 'DROP', 'ALTER', 'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES', 'DEFAULT', 'CHECK', 'CONSTRAINT', 'UNIQUE', 'INDEX',
+    'IF', 'PRINT', 'DECLARE', 'RETURN', 'EXCEPT', 'INTERSECT', 'USING', 'NATURAL', 'FETCH', 'NEXT', 'ONLY', 'FILTER', 'WITHIN', 'NULLS',
+    'FIRST', 'LAST', 'GLOB', 'REGEXP', 'MATCH', 'APPLY', 'PIVOT', 'UNPIVOT', 'OUTPUT', 'MERGE', 'MATCHED', 'TARGET', 'SOURCE', 'WHILE', 'BEGIN']);
+
+/**
+ * a + b in T-SQL adds numbers and joins text, depending on the values'
+ * types. Each chain of + becomes TSQL_ADD(a, b), which looks at the values
+ * when the query runs (numbers add, text joins, a date plus a number adds days).
+ */
+function plusChains(list, note) {
+    /** @type {{ kind: 'operand' | 'op' | 'break', start: number, end: number, v?: string, literal?: boolean, dot?: boolean }[]} */
+    const items = [];
+    // Groups at this level are operands; their insides are rewritten first (from the end, so indexes stay valid)
+    for (let i = 0; i < list.length; i++) {
+        const t = list[i];
+        if (isSpace(t)) continue;
+        if (t.t === 'p' && t.v === '(') {
+            const close = closing(list, i);
+            if (close < 0) { items.push({ kind: 'break', start: i, end: i + 1 }); continue; }
+            const inner = list.slice(i + 1, close);
+            plusChains(inner, note);
+            list.splice(i + 1, close - i - 1, ...inner);
+            const newClose = i + 1 + inner.length;
+            // A function call: the name before it is part of the operand
+            const last = items[items.length - 1];
+            if (last && last.kind === 'operand' && last.end === prevSig(list, i - 1) + 1 && (list[last.end - 1].t === 'word' || list[last.end - 1].t === 'ident') && !CHAIN_BREAKS.has(upper(list[last.end - 1]))) last.end = newClose + 1;
+            else items.push({ kind: 'operand', start: i, end: newClose + 1 });
+            i = newClose;
+            continue;
+        }
+        if (upper(t) === 'CASE') {
+            // CASE … END is one operand
+            let depth = 0;
+            let end = -1;
+            for (let k = i; k < list.length; k++) {
+                const u = upper(list[k]);
+                if (u === 'CASE') depth++;
+                else if (u === 'END' && --depth === 0) { end = k; break; }
+            }
+            if (end < 0) { items.push({ kind: 'break', start: i, end: i + 1 }); continue; }
+            const inner = list.slice(i + 1, end);
+            plusChains(inner, note);
+            list.splice(i + 1, end - i - 1, ...inner);
+            const newEnd = i + 1 + inner.length;
+            items.push({ kind: 'operand', start: i, end: newEnd + 1 });
+            i = newEnd;
+            continue;
+        }
+        if (t.t === 'p' && (t.v === '+' || t.v === '-' || t.v === '*' || t.v === '/' || t.v === '%')) {
+            items.push({ kind: 'op', start: i, end: i + 1, v: t.v });
+            continue;
+        }
+        if (t.t === 'p' && t.v === '.') {
+            const last = items[items.length - 1];
+            if (last && last.kind === 'operand') { last.end = i + 1; last.dot = true; continue; }
+        }
+        const isOperand = t.t === 'num' || t.t === 'str' || t.t === 'ident' || (t.t === 'word' && !CHAIN_BREAKS.has(upper(t))) || (t.t === 'p' && t.v.length > 2);
+        if (isOperand) {
+            const last = items[items.length - 1];
+            if (last && last.kind === 'operand' && last.dot) { last.end = i + 1; last.dot = false; continue; }
+            items.push({ kind: 'operand', start: i, end: i + 1, literal: t.t === 'num' });
+            continue;
+        }
+        items.push({ kind: 'break', start: i, end: i + 1 });
+    }
+    // Chains: operand (op operand)*, a unary sign belonging to the operand after it.
+    // Terms are split at + and -; inside a term, factors at *, / and %.
+    /** @type {{ start: number, end: number, terms: { op: string, factors: { op: string, start: number, end: number, literal: boolean }[] }[] }[]} */
+    const chains = [];
+    let k = 0;
+    while (k < items.length) {
+        const signStart = items[k].kind === 'op' && (items[k].v === '-' || items[k].v === '+') && items[k + 1]?.kind === 'operand';
+        if (items[k].kind !== 'operand' && !signStart) { k++; continue; }
+        /** @type {{ op: string, factors: { op: string, start: number, end: number, literal: boolean }[] }[]} */
+        const terms = [{ op: '', factors: [] }];
+        let pendingOp = '';
+        let factorStart = -1;
+        let expectOperand = true;
+        let j = k;
+        let lastEnd = items[k].end;
+        for (; j < items.length; j++) {
+            const it = items[j];
+            if (expectOperand) {
+                if (it.kind === 'op' && (it.v === '-' || it.v === '+')) {
+                    if (factorStart < 0) factorStart = it.start;
+                    continue; // unary sign
+                }
+                if (it.kind !== 'operand') break;
+                terms[terms.length - 1].factors.push({ op: pendingOp, start: factorStart >= 0 ? factorStart : it.start, end: it.end, literal: !!it.literal });
+                factorStart = -1;
+                lastEnd = it.end;
+                expectOperand = false;
+                continue;
+            }
+            if (it.kind === 'op') {
+                if (it.v === '+' || it.v === '-') {
+                    terms.push({ op: it.v, factors: [] });
+                    pendingOp = '';
+                } else pendingOp = it.v;
+                expectOperand = true;
+                continue;
+            }
+            break;
+        }
+        // A chain that ended on an operator isn't complete: leave it as written
+        if (expectOperand && terms[terms.length - 1].factors.length === 0) {
+            k = Math.max(j, k + 1);
+            continue;
+        }
+        const hasPlus = terms.some(t => t.op === '+');
+        const hasDivide = terms.some(t => t.factors.some(f => f.op === '/' || f.op === '%'));
+        const allLiteral = terms.every(t => t.factors.every(f => f.literal));
+        if ((hasPlus && !allLiteral) || hasDivide) chains.push({ start: terms[0].factors[0].start, end: lastEnd, terms });
+        k = Math.max(j, k + 1);
+    }
+    for (const chain of chains.reverse()) {
+        const termText = (/** @type {{ op: string, start: number, end: number }[]} */ factors) => {
+            let acc = textOf(list, factors[0].start, factors[0].end);
+            for (const f of factors.slice(1)) {
+                const v = textOf(list, f.start, f.end);
+                // SQLite gives NULL for x / 0; SQL Server stops with an error. SQLite still decides
+                // integer or decimal division from the values' types.
+                acc = f.op === '*' || (/^\s*\d+(\.\d+)?\s*$/.test(v) && Number(v) !== 0) ? `${acc} ${f.op} ${v}` : `(CASE WHEN (${v}) = 0 THEN TSQL_RAISE('Divide by zero error encountered.') ELSE ${acc} ${f.op} ${v} END)`;
+            }
+            return acc;
+        };
+        let acc = termText(chain.terms[0].factors);
+        for (const term of chain.terms.slice(1)) {
+            const v = termText(term.factors);
+            acc = term.op === '+' ? `TSQL_ADD(${acc}, ${v})` : `${acc} - ${v}`;
+        }
+        replace(list, chain.start, chain.end, acc);
+        if (chain.terms.some(t => t.op === '+')) note('a + b adds numbers and joins text, as in SQL Server (TSQL_ADD).');
+        if (chain.terms.some(t => t.factors.some(f => f.op === '/' || f.op === '%'))) note('Division by zero is an error, as in SQL Server.');
+    }
 }
 
 const STATEMENT_WORDS = new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'WITH', 'CREATE', 'DROP', 'ALTER', 'PRINT', 'TRUNCATE', 'MERGE', 'EXEC', 'EXECUTE', 'DECLARE', 'SET', 'BEGIN', 'COMMIT', 'ROLLBACK']);

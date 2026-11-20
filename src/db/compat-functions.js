@@ -226,6 +226,151 @@ const uuid = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID
 const str = (/** @type {unknown} */ v) => (v === null || v === undefined ? null : String(v));
 const chars = (/** @type {string} */ s) => [...s];
 
+const DATETIME_TEXT = /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/;
+const isNumericText = (/** @type {string} */ s) => s.trim() !== '' && !Number.isNaN(Number(s));
+const typeName = (/** @type {unknown} */ v) => (typeof v === 'string' ? 'varchar' : Number.isInteger(v) ? 'int' : 'numeric');
+
+/**
+ * a + b as SQL Server works it out: numbers add; text joins text; a date
+ * and a number add days; text and a number add when the text is a number,
+ * and otherwise fail as SQL Server does.
+ */
+export function tsqlAdd(a, b) {
+    if (a === null || b === null || a === undefined || b === undefined) return null;
+    if (a instanceof Uint8Array || b instanceof Uint8Array) {
+        const x = a instanceof Uint8Array ? a : new TextEncoder().encode(String(a));
+        const y = b instanceof Uint8Array ? b : new TextEncoder().encode(String(b));
+        const out = new Uint8Array(x.length + y.length);
+        out.set(x);
+        out.set(y, x.length);
+        return out;
+    }
+    const as = typeof a === 'string';
+    const bs = typeof b === 'string';
+    if (as && bs) return a + b;
+    if (!as && !bs) return Number(a) + Number(b);
+    const text = /** @type {string} */ (as ? a : b);
+    const num = Number(as ? b : a);
+    if (DATETIME_TEXT.test(text.trim())) {
+        const d = toDate(text);
+        if (d) {
+            const out = new Date(d.getTime() + num * 86400000);
+            return text.trim().length <= 10 && Number.isInteger(num) ? dateText(out) : dateTimeText(out);
+        }
+    }
+    if (isNumericText(text)) return Number(text) + num;
+    throw new Error(`Conversion failed when converting the varchar value '${text}' to data type ${typeName(as ? b : a)}.`);
+}
+
+/** TRY_CAST(value AS type): the converted value, or NULL when it can't be converted. */
+export function tryCast(value, type) {
+    if (value === null || value === undefined) return null;
+    const t = String(type).toUpperCase().replace(/\s+/g, '');
+    const name = t.replace(/\(.*$/, '');
+    const arg = /\(([^)]*)\)/.exec(t)?.[1] || '';
+    const text = String(value).trim();
+    if (['INT', 'BIGINT', 'SMALLINT', 'TINYINT'].includes(name)) {
+        if (typeof value === 'number') return Math.trunc(value);
+        if (!/^[+-]?\d+$/.test(text)) return null;
+        const n = Number(text);
+        const limits = { INT: 2147483647, SMALLINT: 32767, TINYINT: 255, BIGINT: Number.MAX_SAFE_INTEGER };
+        if (Math.abs(n) > limits[name] || (name === 'TINYINT' && n < 0)) return null;
+        return n;
+    }
+    if (['DECIMAL', 'NUMERIC', 'FLOAT', 'REAL', 'MONEY', 'SMALLMONEY'].includes(name)) {
+        if (typeof value === 'number') return value;
+        if (!isNumericText(text)) return null;
+        const n = Number(text);
+        const scale = name === 'DECIMAL' || name === 'NUMERIC' ? Number(arg.split(',')[1] || 0) : null;
+        return scale === null ? n : Math.round(n * 10 ** scale) / 10 ** scale;
+    }
+    if (name === 'BIT') {
+        if (/^(1|true)$/i.test(text)) return 1;
+        if (/^(0|false)$/i.test(text)) return 0;
+        return isNumericText(text) ? (Number(text) !== 0 ? 1 : 0) : null;
+    }
+    if (['DATE', 'DATETIME', 'DATETIME2', 'SMALLDATETIME', 'DATETIMEOFFSET'].includes(name)) {
+        const d = toDate(value);
+        if (!d || Number.isNaN(d.getTime())) return null;
+        // 2024-13-01 or 2024-02-30 isn't a date (Date would roll it over)
+        const parts = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(text);
+        if (parts && (d.getUTCMonth() + 1 !== Number(parts[2]) || d.getUTCDate() !== Number(parts[3]))) return null;
+        return name === 'DATE' ? dateText(d) : dateTimeText(d);
+    }
+    if (name === 'TIME') {
+        const d = toDate(value);
+        return d && !Number.isNaN(d.getTime()) ? dateTimeText(d).slice(11) : null;
+    }
+    if (name === 'UNIQUEIDENTIFIER') return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text) ? text.toUpperCase() : null;
+    if (/CHAR$|^TEXT$|^NTEXT$|^SYSNAME$/.test(name)) {
+        const n = arg === 'MAX' || arg === '' ? (arg === '' ? 30 : 0) : Number(arg);
+        const s = typeof value === 'string' ? value : String(value);
+        return n > 0 && chars(s).length > n ? null : s;
+    }
+    return value;
+}
+
+/** A LIKE pattern (%, _, [abc], [^a-z]) as a regular expression. */
+function likeToRegExp(pattern) {
+    let out = '';
+    for (let i = 0; i < pattern.length; i++) {
+        const c = pattern[i];
+        if (c === '%') out += '[\\s\\S]*';
+        else if (c === '_') out += '[\\s\\S]';
+        else if (c === '[') {
+            const j = pattern.indexOf(']', i + 1);
+            if (j < 0) { out += '\\['; continue; }
+            const body = pattern.slice(i + 1, j).replace(/\\/g, '\\\\');
+            out += `[${body.startsWith('^') ? '^' + body.slice(1) : body}]`;
+            i = j;
+        } else out += c.replace(/[.*+?^${}()|\\/\]]/g, '\\$&');
+    }
+    // PATINDEX patterns are anchored by their % signs
+    const anchoredStart = !pattern.startsWith('%');
+    const anchoredEnd = !pattern.endsWith('%');
+    return new RegExp(`${anchoredStart ? '^' : ''}${out.replace(/^\[\\s\\S\]\*/, '').replace(/\[\\s\\S\]\*$/, '')}${anchoredEnd ? '$' : ''}`, 'i');
+}
+
+/** A custom .NET number format such as 0.00, #,##0, 000 or #,##0.0 (null when f isn't one). */
+function numberPattern(n, f) {
+    if (!/^[#0,]*(\.[#0]+)?$/.test(f) || !/[#0]/.test(f)) return null;
+    const [whole, frac = ''] = f.split('.');
+    const minFrac = (frac.match(/0/g) || []).length;
+    const maxFrac = frac.length;
+    const minInt = (whole.match(/0/g) || []).length;
+    const text = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: minFrac, maximumFractionDigits: maxFrac, minimumIntegerDigits: Math.max(1, minInt), useGrouping: whole.includes(',') });
+    const out = minInt === 0 && text.startsWith('0') && Math.abs(n) < 1 ? text.slice(1) : text;
+    return (n < 0 ? '-' : '') + out;
+}
+
+/** FORMAT(value, format) with .NET format strings: N2, C, P, 0.00, #,##0, yyyy-MM-dd … */
+function formatValue(v, f) {
+    if (v === null) return null;
+    const d = typeof v === 'string' ? toDate(v) : null;
+    if (d && typeof f === 'string' && /[yMdHhms]/.test(f)) {
+        return f.replace(/yyyy|yy|MMMM|MMM|MM|M|dddd|ddd|dd|d|HH|H|hh|h|mm|m|ss|s|tt/g, (k) => ({
+            yyyy: String(d.getUTCFullYear()), yy: pad(d.getUTCFullYear() % 100), MMMM: MONTHS[d.getUTCMonth()], MMM: MONTHS[d.getUTCMonth()].slice(0, 3),
+            MM: pad(d.getUTCMonth() + 1), M: String(d.getUTCMonth() + 1), dddd: DAYS[d.getUTCDay()], ddd: DAYS[d.getUTCDay()].slice(0, 3),
+            dd: pad(d.getUTCDate()), d: String(d.getUTCDate()), HH: pad(d.getUTCHours()), H: String(d.getUTCHours()),
+            hh: pad(((d.getUTCHours() + 11) % 12) + 1), h: String(((d.getUTCHours() + 11) % 12) + 1), mm: pad(d.getUTCMinutes()), m: String(d.getUTCMinutes()),
+            ss: pad(d.getUTCSeconds()), s: String(d.getUTCSeconds()), tt: d.getUTCHours() < 12 ? 'AM' : 'PM'
+        })[k] ?? k);
+    }
+    const n = Number(v);
+    if (Number.isNaN(n)) return String(v);
+    if (typeof f === 'string' && /^0+$/.test(f)) return numberPattern(n, f);
+    if (typeof f === 'number' || /^\d+$/.test(String(f))) return n.toLocaleString('en-US', { minimumFractionDigits: Number(f), maximumFractionDigits: Number(f) });
+    const custom = numberPattern(n, String(f));
+    if (custom !== null) return custom;
+    if (/^[Dd](\d*)$/.test(String(f))) return (n < 0 ? '-' : '') + String(Math.trunc(Math.abs(n))).padStart(Number(String(f).slice(1) || 0), '0');
+    if (/^[Xx](\d*)$/.test(String(f))) { const h = Math.trunc(n).toString(16).padStart(Number(String(f).slice(1) || 0), '0'); return String(f)[0] === 'X' ? h.toUpperCase() : h; }
+    if (/^[Ff](\d*)$/.test(String(f))) return n.toFixed(Number(String(f).slice(1) || 2));
+    if (/^[Nn](\d*)$/.test(String(f))) { const k = Number(String(f).slice(1) || 2); return n.toLocaleString('en-US', { minimumFractionDigits: k, maximumFractionDigits: k }); }
+    if (/^[Cc](\d*)$/.test(String(f))) { const k = Number(String(f).slice(1) || 2); return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: k, maximumFractionDigits: k }); }
+    if (/^[Pp](\d*)$/.test(String(f))) { const k = Number(String(f).slice(1) || 2); return (n * 100).toLocaleString('en-US', { minimumFractionDigits: k, maximumFractionDigits: k }) + '%'; }
+    return String(v);
+}
+
 /**
  * The functions, each `[name, arity, fn, deterministic]`: arity -1 takes any
  * number of arguments. Names are matched without regard to case.
@@ -370,26 +515,47 @@ export const COMPAT_FUNCTIONS = [
     ['split_part', 3, (s, sep, n) => (s === null || sep === null || n === null ? null : (String(s).split(String(sep))[Number(n) - 1] ?? '')), true],
     ['quotename', 1, (s) => (s === null ? null : `[${String(s).replace(/]/g, ']]')}]`), true],
     ['str', 1, (n) => (n === null ? null : String(Math.round(Number(n))).padStart(10)), true],
-    ['format', 2, (v, f) => {
-        if (v === null) return null;
-        const d = typeof v === 'string' ? toDate(v) : null;
-        if (d && typeof f === 'string' && /[yMdHhms]/.test(f)) {
-            return f.replace(/yyyy|yy|MMMM|MMM|MM|M|dddd|ddd|dd|d|HH|H|hh|h|mm|m|ss|s|tt/g, (k) => ({
-                yyyy: String(d.getUTCFullYear()), yy: pad(d.getUTCFullYear() % 100), MMMM: MONTHS[d.getUTCMonth()], MMM: MONTHS[d.getUTCMonth()].slice(0, 3),
-                MM: pad(d.getUTCMonth() + 1), M: String(d.getUTCMonth() + 1), dddd: DAYS[d.getUTCDay()], ddd: DAYS[d.getUTCDay()].slice(0, 3),
-                dd: pad(d.getUTCDate()), d: String(d.getUTCDate()), HH: pad(d.getUTCHours()), H: String(d.getUTCHours()),
-                hh: pad(((d.getUTCHours() + 11) % 12) + 1), h: String(((d.getUTCHours() + 11) % 12) + 1), mm: pad(d.getUTCMinutes()), m: String(d.getUTCMinutes()),
-                ss: pad(d.getUTCSeconds()), s: String(d.getUTCSeconds()), tt: d.getUTCHours() < 12 ? 'AM' : 'PM'
-            })[k] ?? k);
-        }
-        const n = Number(v);
-        if (Number.isNaN(n)) return String(v);
-        if (typeof f === 'number' || /^\d+$/.test(String(f))) return n.toLocaleString('en-US', { minimumFractionDigits: Number(f), maximumFractionDigits: Number(f) });
-        if (/^[Nn](\d*)$/.test(String(f))) { const k = Number(String(f).slice(1) || 2); return n.toLocaleString('en-US', { minimumFractionDigits: k, maximumFractionDigits: k }); }
-        if (/^[Cc](\d*)$/.test(String(f))) { const k = Number(String(f).slice(1) || 2); return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: k, maximumFractionDigits: k }); }
-        if (/^[Pp](\d*)$/.test(String(f))) { const k = Number(String(f).slice(1) || 2); return (n * 100).toLocaleString('en-US', { minimumFractionDigits: k, maximumFractionDigits: k }) + '%'; }
-        return String(v);
+    ['format', 2, formatValue, true],
+    ['tsql_format', 2, formatValue, true],
+    ['tsql_format', 3, (v, f) => formatValue(v, f), true],
+    // T-SQL
+    ['tsql_add', 2, tsqlAdd, true],
+    ['tsql_try_cast', 2, tryCast, true],
+    ['tsql_raise', 1, (message) => { throw new Error(String(message)); }, false],
+    ['tsql_split', 2, (s, sep) => (s === null ? null : JSON.stringify(String(s).split(sep === null || sep === '' ? ' ' : String(sep)))), true],
+    ['tsql_substring', 3, (s, start, length) => {
+        if (s === null || start === null || length === null) return null;
+        if (Number(length) < 0) throw new Error('Invalid length parameter passed to the substring function.');
+        const text = chars(String(s));
+        const from = Number(start) - 1;
+        const to = from + Number(length);
+        return text.slice(Math.max(0, from), Math.max(0, to)).join('');
     }, true],
+    ['choose', -1, (i, ...v) => (i === null ? null : (v[Math.trunc(Number(i)) - 1] ?? null)), true],
+    ['patindex', 2, (p, s) => {
+        if (p === null || s === null) return null;
+        const re = likeToRegExp(String(p));
+        const m = re.exec(String(s));
+        return m ? chars(String(s).slice(0, m.index)).length + 1 : 0;
+    }, true],
+    ['ascii', 1, (s) => (s === null || String(s) === '' ? null : String(s).charCodeAt(0)), true],
+    ['nchar', 1, (n) => (n === null ? null : String.fromCodePoint(Number(n))), true],
+    ['translate', 3, (s, from, to) => {
+        if (s === null || from === null || to === null) return null;
+        const a = chars(String(from));
+        const b = chars(String(to));
+        if (a.length !== b.length) throw new Error('The second and third arguments of the TRANSLATE built-in function must contain an equal number of characters.');
+        return chars(String(s)).map(c => { const k = a.indexOf(c); return k < 0 ? c : b[k]; }).join('');
+    }, true],
+    ['suser_sname', 0, () => 'sa', true],
+    ['suser_name', 0, () => 'sa', true],
+    ['original_login', 0, () => 'sa', true],
+    ['user_name', 0, () => 'dbo', true],
+    ['host_name', 0, () => 'browser', true],
+    ['app_name', 0, () => 'SQL Lab', true],
+    ['schema_name', 0, () => 'dbo', true],
+    ['isjson', 1, (s) => { try { JSON.parse(String(s)); return 1; } catch { return 0; } }, true],
+    ['sign', 1, (n) => (n === null ? null : Math.sign(Number(n))), true],
     // Values
     ['isnull', 2, (a, b) => (a === null ? b : a), true],
     ['nvl', 2, (a, b) => (a === null ? b : a), true],
@@ -453,12 +619,64 @@ function padText(s, n, fill, left) {
  * already has (or one a database defines) is never replaced.
  * @param {any} db
  */
-export function registerCompatFunctions(db) {
+// Aggregates SQLite lacks: [name, finish(values)]
+const AGGREGATES = /** @type {[string, (v: number[]) => number | null][]} */ ([
+    ['stdev', (v) => (v.length < 2 ? null : Math.sqrt(variance(v, 1)))],
+    ['stdevp', (v) => (v.length < 1 ? null : Math.sqrt(variance(v, 0)))],
+    ['var', (v) => (v.length < 2 ? null : variance(v, 1))],
+    ['varp', (v) => (v.length < 1 ? null : variance(v, 0))]
+]);
+function variance(values, ddof) {
+    const mean = values.reduce((a, b) => a + b, 0) / values.length;
+    return values.reduce((a, b) => a + (b - mean) ** 2, 0) / (values.length - ddof);
+}
+
+/** OBJECT_ID('dbo.Customers'), OBJECT_ID('tempdb..#t'), with an optional type ('U' table, 'V' view). */
+function objectId(db, name, type) {
+    if (name === null || name === undefined) return null;
+    const raw = String(name).trim();
+    const temp = /^tempdb\./i.test(raw) || /(^|\.)\[?#/.test(raw);
+    const last = raw.split('.').pop()?.replace(/^\[|\]$/g, '').replace(/^"|"$/g, '') || '';
+    const schema = temp ? 'sqlite_temp_schema' : 'sqlite_schema';
+    const types = type === null || type === undefined ? null : String(type).trim().toUpperCase();
+    const kind = types === 'U' ? "('table')" : types === 'V' ? "('view')" : types === 'TR' ? "('trigger')" : types === null ? "('table', 'view', 'trigger')" : null;
+    if (!kind) return null;
+    const id = db.selectValue(`SELECT rowid FROM ${schema} WHERE type IN ${kind} AND name = ? COLLATE NOCASE`, [last]);
+    return id === undefined ? null : Number(id) + (temp ? 1000000 : 0);
+}
+
+/**
+ * @param {any} db an open sqlite3 oo1 database
+ * @param {any} [capi] sqlite3.capi, for the aggregates (STDEV, VAR …)
+ */
+export function registerCompatFunctions(db, capi) {
     const existing = new Set();
     try {
         for (const row of db.exec({ sql: 'SELECT name, narg FROM pragma_function_list', returnValue: 'resultRows' })) existing.add(`${String(row[0]).toLowerCase()}/${row[1]}`);
     } catch {
         // pragma_function_list may be left out of a build: then add them all
+    }
+    for (const [name, finish] of AGGREGATES) {
+        if (!capi || existing.has(`${name}/1`)) continue;
+        /** @type {Map<unknown, number[]>} */
+        const state = new Map();
+        db.createFunction({ name, arity: 1, deterministic: true,
+            // Each group's values are kept under its aggregate context, which is the same for every row of the group
+            xStep: (/** @type {any} */ ctx, /** @type {any} */ value) => {
+                const key = Number(capi.sqlite3_aggregate_context(ctx, 8));
+                if (!state.has(key)) state.set(key, []);
+                if (value !== null && value !== undefined && !Number.isNaN(Number(value))) state.get(key)?.push(Number(value));
+            },
+            xFinal: (/** @type {any} */ ctx) => {
+                const key = Number(capi.sqlite3_aggregate_context(ctx, 0));
+                const values = state.get(key) || [];
+                state.delete(key);
+                return finish(values);
+            } });
+    }
+    for (const arity of [1, 2]) {
+        db.createFunction({ name: 'object_id', arity, deterministic: false,
+            xFunc: (/** @type {any} */ _ctx, /** @type {any} */ name, /** @type {any} */ type = null) => objectId(db, name, type) });
     }
     for (const [name, arity, fn, deterministic] of COMPAT_FUNCTIONS) {
         if (existing.has(`${name}/${arity}`) || existing.has(`${name}/-1`)) continue;

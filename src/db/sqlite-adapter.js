@@ -10,6 +10,7 @@ import { DatabaseError, databaseFileName, isDatabaseId, positionAt } from './eng
 import { isSqliteFile } from './files.js';
 import { isStatementStartAt, replaceBatchSeparators } from './script-split.js';
 import { registerCompatFunctions } from './compat-functions.js';
+import { runTsql } from './tsql/engine.js';
 
 export const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 1000;
@@ -57,6 +58,8 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
     /** @type {Map<number, { stmt: any, columns: string[], pending: unknown[] | null }>} */
     const cursors = new Map();
     let nextCursor = 1;
+    /** T-SQL state kept while a database is open (transactions, the last identity) */
+    let tsqlSession = { tranCount: 0, savepoints: [], identity: null };
     /** @type {{ started: number, changesBefore: number } | null} an import's transaction, while it runs */
     let importing = null;
 
@@ -122,7 +125,8 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
             // Foreign keys are enforced, as on the database servers the app writes SQL for
             db.exec('PRAGMA foreign_keys = ON;');
             // SQL Server, PostgreSQL and MySQL functions SQLite lacks (GETDATE, DATEADD, NOW, …)
-            registerCompatFunctions(db);
+            registerCompatFunctions(db, capi);
+            tsqlSession = { tranCount: 0, savepoints: [], identity: null };
         } catch (error) {
             db.close();
             throw error;
@@ -152,13 +156,15 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
      * @param {string} text
      * @param {number} size
      * @param {boolean} keep keep unread rows for fetchPage (only the script's last statement)
+     * @param {((stmt: any) => void) | null} [bind] binds the statement's parameters (T-SQL variables)
      */
-    function runStatement(text, size, keep) {
+    function runStatement(text, size, keep, bind = null) {
         const { db } = current;
         const started = now();
         const stmt = db.prepare(text);
         let finalize = true;
         try {
+            if (bind) bind(stmt);
             let kind = statementKind(text);
             if (kind === 'with' || kind === 'other') kind = capi.sqlite3_stmt_readonly(stmt.pointer) ? (stmt.columnCount ? 'query' : 'other') : 'modify';
             const columns = stmt.columnCount ? stmt.getColumnNames([]) : [];
@@ -174,7 +180,9 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
                         finalize = false;
                     } else {
                         // A change (RETURNING) or an earlier statement: finish it, show the first page
-                        while (stmt.step()) { /* run to completion */ }
+                        let total = result.rows.length + 1;
+                        while (stmt.step()) total++;
+                        result.total = total;
                     }
                 }
             } else {
@@ -278,6 +286,43 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
 
     /** Whether another statement follows `offset` (without preparing it, which could fail early). */
     const hasMore = (bytes, offset) => startOf(bytes, offset) < bytes.length;
+
+    /**
+     * Runs every statement in `text` (already SQLite SQL), for the T-SQL engine.
+     * Each statement's parameters are bound with `bind`. Stops at the first
+     * error, which says where in `text` it is (a character offset).
+     * @param {string} text
+     * @param {{ size: number, keep: boolean, bind: (stmt: any) => void }} options
+     */
+    function runText(text, { size, keep, bind }) {
+        const bytes = new TextEncoder().encode(text);
+        const results = [];
+        let offset = 0;
+        const charAt = (/** @type {number} */ byteOffset) => new TextDecoder().decode(bytes.subarray(0, byteOffset)).length;
+        const mem = copyScript(bytes);
+        try {
+            for (;;) {
+                const next = nextStatement(bytes, mem, offset);
+                if (!next) break;
+                if ('skip' in next) {
+                    offset = next.skip;
+                    continue;
+                }
+                if ('error' in next) return { results, error: { message: next.error.message, code: next.error.code, at: charAt(next.error.offset) } };
+                try {
+                    const result = runStatement(next.text, size, keep && !hasMore(bytes, next.end), bind);
+                    results.push({ ...result, at: charAt(startOf(bytes, next.start)) });
+                } catch (e) {
+                    const reason = cleanMessage(e instanceof Error ? e.message : e);
+                    return { results, error: { ...reason, at: charAt(startOf(bytes, next.start)), cause: e } };
+                }
+                offset = next.end;
+            }
+        } finally {
+            freeScript(mem);
+        }
+        return { results, error: null };
+    }
 
     const adapter = {
         info() {
@@ -574,13 +619,21 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
         /**
          * Runs a script: every statement in order, stopping at the first error.
          * Statements before the error have run; outside a transaction they stay.
+         * With language 'sqlserver', the script runs in the T-SQL engine (tsql/engine.js).
          * @param {string} sql
-         * @param {{ pageSize?: number }} [options]
+         * @param {{ pageSize?: number, language?: string, databaseName?: string }} [options]
          */
-        execute(sql, { pageSize = DEFAULT_PAGE_SIZE } = {}) {
+        execute(sql, { pageSize = DEFAULT_PAGE_SIZE, language = 'sqlite', databaseName = '' } = {}) {
             requireOpen();
             closeCursors();
             const size = clampPage(pageSize);
+            if (language === 'sqlserver') {
+                try {
+                    return runTsql({ db: current.db, capi, now, size, runText, session: tsqlSession, databaseName: databaseName || current.id }, String(sql ?? ''));
+                } finally {
+                    saveCurrent();
+                }
+            }
             const bytes = new TextEncoder().encode(replaceBatchSeparators(String(sql ?? '')));
             const results = [];
             /** @type {any} */

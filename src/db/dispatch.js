@@ -17,7 +17,7 @@ const OPERATIONS = {
     exportFile: (a, { id }) => a.exportFile(id),
     // bytes: a Uint8Array, or the file itself (read a few MB at a time)
     importFile: (a, { id, bytes }, ctx) => a.importFile(id, bytes, ctx),
-    execute: (a, { sql, pageSize }) => a.execute(sql, { pageSize }),
+    execute: (a, { sql, pageSize, language, databaseName }) => a.execute(sql, { pageSize, language, databaseName }),
     fetchPage: (a, { cursor, pageSize }) => a.fetchPage(cursor, { pageSize }),
     closeCursor: (a, { cursor }) => a.closeCursor(cursor),
     schema: (a) => a.schema(),
