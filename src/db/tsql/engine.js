@@ -15,6 +15,8 @@ import { toDate } from '../compat-functions.js';
 import { parseBatch, sigTokens, splitBatches, TsqlSyntaxError } from './parse.js';
 import { dropModule, findModule, listModules, parseModule, parseParams, renameModule, saveModule, splitName, unquote } from './modules.js';
 import { createCatalogView, rewriteCatalogNames, runSystemProcedure, SYSTEM_PROCEDURES } from './catalog.js';
+import { rewriteApply, rewritePivot, runMerge } from './rewrites.js';
+import { parseTrigger } from './shapes.js';
 
 const MAX_RESULTS = 200;
 // A runaway WHILE stops here instead of hanging the tab
@@ -216,6 +218,17 @@ export function runTsql(ctx, script) {
     /** @type {number} where the statement running now starts (for errors in functions it calls) */
     let currentAt = 0;
     let tvfCount = 0;
+    /** @type {Map<string, { name: string, query: { text: string, start: number }, scroll: boolean, rows: any[][] | null, columns: string[], pos: number }>} */
+    const cursors = new Map();
+    let fetchStatus = -1;
+    /** @type {Map<string, { table: string, columns: string[], log: string }>} tables whose changes are logged for their triggers */
+    const armed = new Map();
+    /** @type {Set<string>} tables whose trigger is running now (a trigger doesn't fire itself again) */
+    const triggersOff = new Set();
+    /** @type {{ op: string }[]} the triggers running, innermost last */
+    const triggerStack = [];
+    let triggerFunction = false;
+    let cursorRows = 0;
     const createdViews = new Set();
     /** @type {Map<number, { def: import('./modules.js').ModuleDef, nodes: any[] }>} definitions read so far */
     const parsedModules = new Map();
@@ -254,6 +267,7 @@ export function runTsql(ctx, script) {
             const list = tokens(t);
             if (rewriteCatalogNames(list, ensureView)) t = list.map(x => x.v).join('');
         }
+        if (triggerStack.length && /\bUPDATE\s*\(/i.test(t)) t = updatedTest(t, triggerStack[triggerStack.length - 1].op);
         t = expandModules(t);
         const out = translateForSqlite(t, 'sqlserver', { tableVariables: tableVariables() });
         for (const c of out.changes) changes.set(c.message, (changes.get(c.message) || 0) + c.count);
@@ -266,6 +280,58 @@ export function runTsql(ctx, script) {
         createCatalogView(db, key, ctx.databaseName);
         createdViews.add(key);
         changes.set('INFORMATION_SCHEMA and sys. views were answered from SQLite\'s catalog.', 1);
+    }
+
+    /** How a statement's SQLite failure becomes a T-SQL error. */
+    function sqliteFailure(error, at) {
+        if (error.cause instanceof TsqlError) return Object.assign(error.cause, { at: error.cause.at >= 0 ? error.cause.at : at });
+        const message = String(error.message).replace(/^Error:\s*/, '');
+        return new TsqlError(message, { number: errorNumber(message), severity: 16, at });
+    }
+
+    /** SQLite SQL run for its rows, bound from the variables or from `bind`. */
+    function sqliteRows(sqlText, at, bind) {
+        const out = runText(sqlText, { size: 10000000, keep: false, bind: bind ? (/** @type {any} */ stmt) => { if (bind.length) stmt.bind(bind); } : binder(at) });
+        if (out.error) throw sqliteFailure(out.error, at);
+        return out.results;
+    }
+
+    /** What MERGE, APPLY and PIVOT (rewrites.js) run through. */
+    /** @type {import('./rewrites.js').Api} */
+    const rewriteApi = {
+        translate,
+        rows(sqlText, at, bind) {
+            const r = sqliteRows(sqlText, at, bind);
+            const last = r[r.length - 1];
+            return { columns: last?.columns || [], rows: last?.rows || [] };
+        },
+        run(sqlText, at, bind) {
+            const r = sqliteRows(sqlText, at, bind);
+            return r.reduce((n, x) => n + (x.kind === 'modify' ? x.rowsAffected || 0 : 0), 0);
+        },
+        setVar(name, value) {
+            vars.set(name.toLowerCase(), { name, kind: 'scalar', type: 'SQL_VARIANT', value });
+        },
+        deleteVar(name) {
+            vars.delete(name.toLowerCase());
+        },
+        temp: (prefix) => `"__${prefix}_${++tvfCount}"`,
+        drop: (table) => dropTemp(table),
+        dropAtEnd: (table) => dropLater.push(table),
+        fail(message, number, at) {
+            throw new TsqlError(message, { number, at });
+        },
+        get perCall() {
+            return modules().some(m => m.kind === 'TF');
+        }
+    };
+
+    /** PIVOT, UNPIVOT and APPLY written as SQL SQLite can run (running what they need to now). */
+    function rewriteShapes(text, at) {
+        let out = text;
+        if (/PIVOT/i.test(out)) out = rewritePivot(rewriteApi, out, at);
+        if (/\bAPPLY\b/i.test(out)) out = rewriteApply(rewriteApi, out, at);
+        return out;
     }
 
     function systemValue(name) {
@@ -285,7 +351,8 @@ export function runTsql(ctx, script) {
         case '@__textsize': return 2147483647;
         case '@__options': return 5496;
         case '@__procid': return moduleId;
-        case '@__fetch_status': return -1;
+        case '@__fetch_status': return fetchStatus;
+        case '@__cursor_rows': return cursorRows;
         case '@__dbts': return null;
         case '@__microsoftversion': return 268435456;
         case '@__db_name': return ctx.databaseName;
@@ -536,7 +603,20 @@ export function runTsql(ctx, script) {
             throw new TsqlError(`Database '${name}' isn't the one open. Open it from SQL Lab's Databases list to run SQL in it.`, { number: 911, at: node.start });
         }
         case 'sql':
-            statement(node);
+            if (armed.size && /^\s*(INSERT|UPDATE|DELETE|MERGE|WITH)\b/i.test(node.text)) runWithTriggers(node);
+            else statement(node);
+            // A new or changed table may have triggers, or its log may need new columns
+            if (/^\s*(CREATE|ALTER|DROP)\s+(TABLE|VIEW)\b/i.test(node.text) && modules().some(m => m.kind === 'TR')) {
+                if (/^\s*DROP\s+TABLE\b/i.test(node.text)) dropOrphanTriggers();
+                armTriggers();
+            }
+            return;
+        case 'cursor':
+        case 'open':
+        case 'fetch':
+        case 'close':
+        case 'deallocate':
+            cursorStatement(node);
             return;
         default:
             throw new TsqlError(`Unknown statement ${node.type}.`, { at: node.start });
@@ -574,6 +654,8 @@ export function runTsql(ctx, script) {
             db.exec('ROLLBACK');
             session.tranCount = 0;
             session.savepoints = [];
+            // The rollback can take the trigger logging made inside the transaction with it
+            if (armed.size && !triggerStack.length) armTriggers();
             show('ROLLBACK TRANSACTION');
         } else if (node.action === 'save') {
             if (session.tranCount === 0) throw new TsqlError('Cannot use SAVE TRANSACTION within a distributed transaction or outside a transaction.', { number: 628, at: node.start });
@@ -596,18 +678,22 @@ export function runTsql(ctx, script) {
 
     // ---- SQL statements
 
-    function statement(node) {
-        const sig = sigTokens(node.text);
+    function statement(written) {
+        let node = written;
+        let sig = sigTokens(node.text);
         const head = sig[0]?.u || '';
         const object = sig[1]?.u === 'OR' ? sig[3]?.u : sig[1]?.u;
         if (head === 'CREATE' || head === 'ALTER') {
-            if (object === 'TRIGGER') throw new TsqlError('CREATE TRIGGER isn\'t supported in SQL Lab yet.', { number: 102, at: node.start });
+            if (object === 'TRIGGER') {
+                defineTrigger(node);
+                return;
+            }
             if (['PROCEDURE', 'PROC', 'FUNCTION'].includes(object || '')) {
                 defineModule(node);
                 return;
             }
         }
-        if (head === 'DROP' && ['PROCEDURE', 'PROC', 'FUNCTION'].includes(sig[1]?.u)) {
+        if (head === 'DROP' && ['PROCEDURE', 'PROC', 'FUNCTION', 'TRIGGER'].includes(sig[1]?.u)) {
             dropModules(node, sig);
             return;
         }
@@ -628,11 +714,28 @@ export function runTsql(ctx, script) {
             const temp = tempTableCreated(sig);
             if (temp) scopeTemps.push(temp);
         }
-        if (head === 'MERGE') throw new TsqlError('MERGE isn\'t supported in SQL Lab yet: use UPDATE, then INSERT … WHERE NOT EXISTS.', { number: 102, at: node.start });
+        if (head === 'MERGE') {
+            mergeStatement(node);
+            return;
+        }
+        if (['SELECT', 'WITH', 'INSERT', 'UPDATE', 'DELETE'].includes(head) && /\b(APPLY|PIVOT|UNPIVOT)\b/i.test(node.text)) {
+            const text = rewriteShapes(node.text, node.start);
+            if (text !== node.text) {
+                node = { ...node, text, shown: node.text };
+                sig = sigTokens(text);
+            }
+        }
         if (head === 'TRUNCATE' && sig[1]?.u === 'TABLE') {
             const name = node.text.slice(sig[2].start, sig[sig.length - 1].end).replace(/;$/, '').trim();
             const target = translate(`DELETE FROM ${name}`);
-            runSql(target, node.start, { original: node.text.trim() });
+            // TRUNCATE doesn't fire DELETE triggers
+            const bare = splitName(name).name.toLowerCase();
+            triggersOff.add(bare);
+            try {
+                runSql(target, node.start, { original: node.text.trim() });
+            } finally {
+                triggersOff.delete(bare);
+            }
             // TRUNCATE starts IDENTITY numbering again
             const plain = name.split('.').pop()?.replace(/^\[|\]$/g, '').replace(/^"|"$/g, '') || '';
             try {
@@ -645,7 +748,7 @@ export function runTsql(ctx, script) {
         if (head === 'CREATE' && (object === 'TABLE' || object === 'INDEX' || object === 'UNIQUE' || object === 'CLUSTERED' || object === 'NONCLUSTERED')) {
             const text = object === 'TABLE' ? prepareCreateTable(node.text) : adaptSqlServerScript(node.text).text;
             const seed = identitySeed(node.text);
-            runSql(translate(text), node.start, { original: node.text.trim() });
+            runSql(translate(text), node.start, { original: (node.shown || node.text).trim() });
             if (seed) setSeed(seed.table, seed.seed);
             return;
         }
@@ -662,12 +765,12 @@ export function runTsql(ctx, script) {
             const count = Number(db.selectValue(`SELECT COUNT(*) FROM ${translate(into.target)}`));
             statements++;
             rowcount = count;
-            pushResult({ kind: 'modify', sql: node.text.trim(), columns: [], rows: [], more: false, cursor: null, rowsAffected: count, durationMs: 0, line: position(node.start).line, statement: statements - 1 });
+            pushResult({ kind: 'modify', sql: (node.shown || node.text).trim(), columns: [], rows: [], more: false, cursor: null, rowsAffected: count, durationMs: 0, line: position(node.start).line, statement: statements - 1 });
             return;
         }
         const output = outputClause(node.text, sig);
         if (output) {
-            const results2 = runSql(translate(output.sql), node.start, { original: node.text.trim(), show: !output.into });
+            const results2 = runSql(translate(output.sql), node.start, { original: (node.shown || node.text).trim(), show: !output.into });
             if (output.into) {
                 const rows = results2.flatMap(r => r.rows);
                 const target = translate(output.into);
@@ -675,7 +778,7 @@ export function runTsql(ctx, script) {
                     db.exec({ sql: `INSERT INTO ${target}${output.columns ? ` (${output.columns})` : ''} VALUES (${row.map(() => '?').join(', ')})`, bind: row });
                 }
                 const r = results2[results2.length - 1];
-                pushResult({ ...r, columns: [], rows: [], sql: node.text.trim(), line: position(node.start).line, statement: statements - 1 });
+                pushResult({ ...r, columns: [], rows: [], sql: (node.shown || node.text).trim(), line: position(node.start).line, statement: statements - 1 });
             }
             return;
         }
@@ -684,7 +787,289 @@ export function runTsql(ctx, script) {
             runTop(top, node);
             return;
         }
-        runSql(translate(node.text), node.start, { keep: true, original: node.text.trim() });
+        runSql(translate(node.text), node.start, { keep: true, original: (node.shown || node.text).trim() });
+    }
+
+    // ---- triggers
+    //
+    // SQLite runs a row at a time and can't run T-SQL, so each table with
+    // triggers gets temp SQLite triggers that log its changed rows. After a
+    // statement, the logged rows become the inserted and deleted tables and
+    // the T-SQL triggers run, once per statement, as in SQL Server. INSTEAD OF
+    // on a table is a BEFORE trigger that logs the row and skips the change.
+
+    const TRIGGER_EVENTS = ['INSERT', 'UPDATE', 'DELETE'];
+    const sq = (/** @type {string} */ name) => `"${String(name).replace(/"/g, '""')}"`;
+    const triggerInfo = (/** @type {any} */ mod) => /** @type {{ table: string, events: string[], instead: boolean }} */ (/** @type {unknown} */ (mod.params));
+
+    /** Sets up the logging for every table that has triggers (again, after a change). */
+    function armTriggers() {
+        disarmTriggers();
+        const list = modules().filter(m => m.kind === 'TR');
+        if (!list.length) return;
+        if (!triggerFunction) {
+            db.createFunction({ name: 'sqllab_trg_on', arity: 1, deterministic: false, xFunc: (/** @type {any} */ _c, /** @type {unknown} */ t) => (triggersOff.has(String(t).toLowerCase()) ? 0 : 1) });
+            triggerFunction = true;
+        }
+        /** @type {Map<string, { table: string, events: string[], instead: boolean }[]>} */
+        const tables = new Map();
+        for (const m of list) {
+            const info = triggerInfo(m);
+            const key = String(info.table).toLowerCase();
+            if (!tables.has(key)) tables.set(key, []);
+            tables.get(key)?.push(info);
+        }
+        for (const [key, infos] of tables) {
+            const obj = db.selectObject('SELECT name, type FROM main.sqlite_schema WHERE type IN (\'table\', \'view\') AND name = ? COLLATE NOCASE', [key]);
+            if (!obj) continue;
+            const name = String(obj.name);
+            const columns = db.selectValues('SELECT name FROM pragma_table_info(?, \'main\')', [name]).map(String);
+            const log = sq(`__trg_${name}`);
+            db.exec(`DROP TABLE IF EXISTS temp.${log}`);
+            db.exec(`CREATE TEMP TABLE ${log} (__seq INTEGER PRIMARY KEY, __op TEXT, __side TEXT${columns.map(c => `, ${sq(c)}`).join('')})`);
+            const into = `INSERT INTO temp.${log} (__op, __side${columns.map(c => `, ${sq(c)}`).join('')})`;
+            const row = (/** @type {string} */ op, /** @type {string} */ side, /** @type {string} */ ref) => `${into} VALUES ('${op}', '${side}'${columns.map(c => `, ${ref}.${sq(c)}`).join('')});`;
+            for (const event of TRIGGER_EVENTS) {
+                const on = infos.filter(i => i.events.includes(event));
+                if (!on.length) continue;
+                const instead = on.some(i => i.instead);
+                const timing = obj.type === 'view' ? 'INSTEAD OF' : instead ? 'BEFORE' : 'AFTER';
+                let body = event === 'INSERT' ? row(event, 'i', 'NEW') : event === 'DELETE' ? row(event, 'd', 'OLD') : `${row(event, 'd', 'OLD')} ${row(event, 'i', 'NEW')}`;
+                if (instead && obj.type === 'table') body += ' SELECT RAISE(IGNORE);';
+                db.exec(`CREATE TEMP TRIGGER ${sq(`__trg_${name}_${event}`)} ${timing} ${event} ON main.${sq(name)} WHEN sqllab_trg_on('${name.replace(/'/g, '\'\'')}') = 1 BEGIN ${body} END`);
+            }
+            armed.set(key, { table: name, columns, log });
+        }
+    }
+
+    function disarmTriggers() {
+        for (const a of armed.values()) {
+            for (const event of TRIGGER_EVENTS) db.exec(`DROP TRIGGER IF EXISTS temp.${sq(`__trg_${a.table}_${event}`)}`);
+            db.exec(`DROP TABLE IF EXISTS temp.${a.log}`);
+        }
+        armed.clear();
+    }
+
+    /** A table's triggers go with it, as in SQL Server. */
+    function dropOrphanTriggers() {
+        for (const m of modules().filter(x => x.kind === 'TR')) {
+            const exists = db.selectValue('SELECT 1 FROM main.sqlite_schema WHERE type IN (\'table\', \'view\') AND name = ? COLLATE NOCASE', [triggerInfo(m).table]);
+            if (!exists) dropModule(db, m.id);
+        }
+        forgetModules();
+    }
+
+    /** CREATE / ALTER / CREATE OR ALTER TRIGGER name ON table {AFTER | FOR | INSTEAD OF} events AS … */
+    function defineTrigger(node) {
+        const started = now();
+        const sig = sigTokens(node.text);
+        if (depth === 0 && batchHead && node !== batchHead) {
+            const what = sig[0].u === 'ALTER' ? 'ALTER TRIGGER' : sig[1]?.u === 'OR' ? 'CREATE OR ALTER TRIGGER' : 'CREATE TRIGGER';
+            throw new TsqlError(`'${what}' must be the first statement in a query batch. Put GO before it.`, { number: 111, at: node.start });
+        }
+        const def = parseTrigger(node.text, node.start);
+        parseBatch(def.body, node.start + def.bodyStart);
+        const obj = db.selectObject('SELECT name, type FROM main.sqlite_schema WHERE type IN (\'table\', \'view\') AND name = ? COLLATE NOCASE', [def.table]);
+        if (!obj || (obj.type === 'view' && !def.instead)) throw new TsqlError(`The object '${def.table}' does not exist or is invalid for this operation.`, { number: 8197, at: node.start });
+        const existing = lookupModule(`[${def.schema}].[${def.name}]`);
+        if (def.action === 'create' && existing) throw new TsqlError(`There is already an object named '${def.name}' in the database.`, { number: 2714, at: node.start });
+        if (def.action === 'alter' && !existing) throw new TsqlError(`Invalid object name '${def.name}'.`, { number: 208, at: node.start });
+        if (existing && existing.kind !== 'TR') throw new TsqlError(`Cannot perform alter on '${def.name}' because it is an incompatible object type.`, { number: 2010, at: node.start });
+        if (def.instead) {
+            for (const m of modules()) {
+                if (m.kind !== 'TR' || (existing && m.id === existing.id)) continue;
+                const info = triggerInfo(m);
+                const clash = info.instead && String(info.table).toLowerCase() === String(obj.name).toLowerCase() && info.events.find(e => def.events.includes(e));
+                if (clash) throw new TsqlError(`Cannot CREATE trigger '${def.name}' on table '${obj.name}' because an INSTEAD OF ${clash} trigger already exists on this object.`, { number: 2111, at: node.start });
+            }
+        }
+        const info = { table: String(obj.name), events: def.events, instead: def.instead };
+        saveModule(db, /** @type {any} */ ({ kind: 'TR', schema: def.schema, name: def.name, params: info, returns: null }), node.text.trim().replace(/;\s*$/, ''), nowText());
+        forgetModules();
+        armTriggers();
+        statements++;
+        pushResult({ kind: 'other', sql: node.text.trim(), columns: [], rows: [], more: false, cursor: null, rowsAffected: null, durationMs: Math.max(0, now() - started), line: position(node.start).line, statement: statements - 1, note: `The trigger ${def.schema}.${def.name} was ${existing ? 'altered' : 'created'}.` });
+        rowcount = 0;
+    }
+
+    /** UPDATE(Column) inside a trigger: whether the statement changed that column. */
+    function updatedTest(text, op) {
+        return text.replace(/\bUPDATE\s*\(\s*(\[[^\]]+\]|"[^"]+"|[A-Za-z_][\w$#]*)\s*\)/gi, (/** @type {string} */ _m, /** @type {string} */ col) => {
+            if (op === 'INSERT') return '(1 = 1)';
+            if (op === 'DELETE') return '(1 = 0)';
+            // SQL Server tests the SET list; SQL Lab tests whether any row's value changed
+            return `EXISTS (SELECT 1 FROM inserted AS __ui JOIN deleted AS __ud ON __ui.rowid = __ud.rowid WHERE __ui.${col} IS NOT __ud.${col})`;
+        });
+    }
+
+    /** A data change on a table with triggers: the change, then its triggers, all undone if one fails. */
+    function runWithTriggers(node) {
+        const point = sq(`__trg_sp_${++tvfCount}`);
+        const wasAuto = capi.sqlite3_get_autocommit(db.pointer) !== 0;
+        const count = session.tranCount;
+        db.exec(`SAVEPOINT ${point}`);
+        try {
+            statement(node);
+            fireTriggers(node.start);
+        } catch (e) {
+            if (capi.sqlite3_get_autocommit(db.pointer) === 0) {
+                try {
+                    db.exec(`ROLLBACK TO ${point}`);
+                    db.exec(`RELEASE ${point}`);
+                } catch {
+                    // a ROLLBACK in the trigger ended the transaction
+                }
+            }
+            if (wasAuto) session.tranCount = count;
+            throw e;
+        }
+        if (capi.sqlite3_get_autocommit(db.pointer) !== 0) {
+            // ROLLBACK TRANSACTION inside the trigger undid the change and everything before it
+            session.tranCount = 0;
+            session.savepoints = [];
+            if (!triggerStack.length) armTriggers();
+            throw new TsqlError('The transaction ended in the trigger. The batch has been aborted.', { number: 3609, severity: 16, at: node.start });
+        }
+        db.exec(`RELEASE ${point}`);
+        if (wasAuto) session.tranCount = count;
+    }
+
+    /** Runs the triggers of every table whose log has rows, with those rows as inserted and deleted. */
+    function fireTriggers(at) {
+        for (const a of armed.values()) {
+            const key = a.table.toLowerCase();
+            if (triggersOff.has(key)) continue;
+            const ops = db.selectValues(`SELECT __op FROM temp.${a.log} GROUP BY __op ORDER BY MIN(__seq)`).map(String);
+            if (!ops.length) continue;
+            const cols = a.columns.map(sq).join(', ');
+            const snapshot = (/** @type {string} */ op, /** @type {string} */ side) => {
+                const t = sq(`__trgrows_${++tvfCount}`);
+                db.exec(`CREATE TEMP TABLE ${t} AS SELECT ${cols} FROM temp.${a.log} WHERE __op = '${op}' AND __side = '${side}' ORDER BY __seq`);
+                return t;
+            };
+            const sets = ops.map(op => ({ op, inserted: snapshot(op, 'i'), deleted: snapshot(op, 'd') }));
+            db.exec(`DELETE FROM temp.${a.log}`);
+            for (const set of sets) {
+                try {
+                    const list = modules().filter(m => m.kind === 'TR' && String(triggerInfo(m).table).toLowerCase() === key && triggerInfo(m).events.includes(set.op)).sort((x, y) => x.id - y.id);
+                    const instead = list.filter(m => triggerInfo(m).instead);
+                    for (const mod of instead.length ? instead : list) runTrigger(mod, key, set, at);
+                } finally {
+                    dropTemp(set.inserted);
+                    dropTemp(set.deleted);
+                }
+            }
+        }
+    }
+
+    /** One trigger's statements, with its inserted and deleted tables named so. */
+    function runTrigger(mod, table, set, at) {
+        let p = parsedModules.get(mod.id);
+        if (!p) {
+            const def = parseTrigger(mod.definition, 0);
+            p = { def: /** @type {any} */ (def), nodes: parseBatch(def.body, def.bodyStart) };
+            parsedModules.set(mod.id, p);
+        }
+        // A trigger inside a trigger: the outer one's inserted and deleted wait under other names
+        const level = triggerStack.length;
+        if (level) {
+            db.exec(`ALTER TABLE temp.inserted RENAME TO ${sq(`inserted:${level}`)}`);
+            db.exec(`ALTER TABLE temp.deleted RENAME TO ${sq(`deleted:${level}`)}`);
+        }
+        // Each trigger gets its own copy: one may change its inserted table before the next runs
+        db.exec(`CREATE TEMP TABLE inserted AS SELECT * FROM temp.${set.inserted} ORDER BY rowid`);
+        db.exec(`CREATE TEMP TABLE deleted AS SELECT * FROM temp.${set.deleted} ORDER BY rowid`);
+        triggerStack.push({ op: set.op });
+        triggersOff.add(table);
+        const savedRowcount = rowcount;
+        try {
+            runScope({ nodes: p.nodes, src: moduleSource(mod), scope: new Map(), id: mod.id, at });
+        } finally {
+            triggersOff.delete(table);
+            triggerStack.pop();
+            rowcount = savedRowcount;
+            dropTemp('inserted');
+            dropTemp('deleted');
+            if (level && capi.sqlite3_get_autocommit(db.pointer) === 0) {
+                db.exec(`ALTER TABLE temp.${sq(`inserted:${level}`)} RENAME TO inserted`);
+                db.exec(`ALTER TABLE temp.${sq(`deleted:${level}`)} RENAME TO deleted`);
+            }
+        }
+    }
+
+    /** MERGE … USING … ON … WHEN …: runs in rewrites.js; the rows it changed, or what OUTPUT returned. */
+    function mergeStatement(node) {
+        const started = now();
+        currentAt = node.start;
+        record(node.text.trim());
+        const r = runMerge(rewriteApi, node.text, node.start);
+        statements++;
+        rowcount = r.affected;
+        lastError = 0;
+        if (r.inserted) session.identity = Number(capi.sqlite3_last_insert_rowid(db.pointer));
+        const base = { sql: node.text.trim(), more: false, cursor: null, durationMs: Math.max(0, now() - started), line: position(node.start).line, statement: statements - 1 };
+        if (r.output && r.into) {
+            const target = translate(`SELECT * FROM ${r.into}`).replace(/^\s*SELECT\s+\*\s+FROM\s+/i, '');
+            const columns = r.intoColumns ? ` (${r.intoColumns.split(',').map(c => `"${unquote(c.trim()).replace(/"/g, '""')}"`).join(', ')})` : '';
+            for (const row of r.output.rows) rewriteApi.run(`INSERT INTO ${target}${columns} VALUES (${row.map(() => '?').join(', ')})`, node.start, row);
+        }
+        if (r.output && !r.into) pushResult({ ...base, kind: 'query', columns: r.output.columns, rows: r.output.rows.slice(0, 1000), more: r.output.rows.length > 1000, rowsAffected: r.affected });
+        else pushResult({ ...base, kind: 'modify', columns: [], rows: [], rowsAffected: r.affected });
+    }
+
+    /** DECLARE c CURSOR FOR …, OPEN, FETCH, CLOSE, DEALLOCATE. A cursor reads its rows when it opens (as a STATIC cursor does). */
+    function cursorStatement(node) {
+        const key = node.name.toLowerCase();
+        const cursor = cursors.get(key);
+        if (node.type === 'cursor') {
+            if (cursor) throw new TsqlError(`A cursor with the name '${node.name}' already exists.`, { number: 16915, at: node.start });
+            cursors.set(key, { name: node.name, query: node.query, scroll: node.scroll, rows: null, columns: [], pos: -1 });
+            return;
+        }
+        if (!cursor) throw new TsqlError(`A cursor with the name '${node.name}' does not exist.`, { number: 16916, at: node.start });
+        if (node.type === 'deallocate') {
+            cursors.delete(key);
+            return;
+        }
+        if (node.type === 'open') {
+            if (cursor.rows) throw new TsqlError('The cursor is already open.', { number: 16905, at: node.start });
+            currentAt = node.start;
+            const text = rewriteShapes(cursor.query.text, cursor.query.start);
+            const out = rewriteApi.rows(translate(text), cursor.query.start);
+            cursor.rows = out.rows;
+            cursor.columns = out.columns;
+            cursor.pos = -1;
+            cursorRows = out.rows.length;
+            return;
+        }
+        if (!cursor.rows) throw new TsqlError('Cursor is not open.', { number: 16917, at: node.start });
+        if (node.type === 'close') {
+            cursor.rows = null;
+            return;
+        }
+        // FETCH
+        const { rows } = cursor;
+        const orientation = node.orientation;
+        if (orientation !== 'NEXT' && !cursor.scroll) throw new TsqlError(`fetch: The fetch type ${orientation} cannot be used with forward only cursors.`, { number: 16911, at: node.start });
+        const n = node.offset ? Math.trunc(Number(evaluate(node.offset))) : 0;
+        let pos = cursor.pos;
+        if (orientation === 'NEXT') pos = Math.min(pos + 1, rows.length);
+        else if (orientation === 'PRIOR') pos = Math.max(pos - 1, -1);
+        else if (orientation === 'FIRST') pos = rows.length ? 0 : -1;
+        else if (orientation === 'LAST') pos = rows.length - 1;
+        else if (orientation === 'ABSOLUTE') pos = n > 0 ? Math.min(n - 1, rows.length) : n < 0 ? Math.max(rows.length + n, -1) : -1;
+        else if (orientation === 'RELATIVE') pos = Math.max(-1, Math.min(pos + n, rows.length));
+        cursor.pos = pos;
+        const row = pos >= 0 && pos < rows.length ? rows[pos] : null;
+        fetchStatus = row ? 0 : -1;
+        rowcount = row ? 1 : 0;
+        if (node.into.length) {
+            if (node.into.length !== cursor.columns.length) throw new TsqlError('Cursorfetch: The number of variables declared in the INTO list must match that of selected columns.', { number: 16924, at: node.start });
+            if (row) node.into.forEach((/** @type {string} */ name, /** @type {number} */ k) => assign(name, row[k], node.start));
+            return;
+        }
+        statements++;
+        pushResult({ kind: 'query', sql: node.text || `FETCH ${orientation} FROM ${cursor.name}`, columns: cursor.columns, rows: row ? [row] : [], more: false, cursor: null, rowsAffected: null, durationMs: 0, line: position(node.start).line, statement: statements - 1 });
     }
 
     /** SELECT @a = x, @b = y FROM …: the query, with the assignments. */
@@ -751,7 +1136,7 @@ export function runTsql(ctx, script) {
         }
         statements++;
         rowcount = rows.length;
-        pushResult({ ...r, columns, rows: rows.slice(0, 1000), more: rows.length > 1000, cursor: null, sql: node.text.trim(), durationMs: Math.max(0, now() - started), line: position(node.start).line, statement: statements - 1 });
+        pushResult({ ...r, columns, rows: rows.slice(0, 1000), more: rows.length > 1000, cursor: null, sql: (node.shown || node.text).trim(), durationMs: Math.max(0, now() - started), line: position(node.start).line, statement: statements - 1 });
     }
 
     function setSeed(table, seed) {
@@ -835,21 +1220,23 @@ export function runTsql(ctx, script) {
 
     /** DROP PROCEDURE / FUNCTION [IF EXISTS] a, b */
     function dropModules(node, sig) {
-        const isProc = sig[1].u !== 'FUNCTION';
+        const what = sig[1].u === 'FUNCTION' ? 'function' : sig[1].u === 'TRIGGER' ? 'trigger' : 'procedure';
+        const fits = (/** @type {string} */ kind) => (what === 'procedure' ? kind === 'P' : what === 'trigger' ? kind === 'TR' : ['FN', 'IF', 'TF'].includes(kind));
         let k = 2;
         const ifExists = sig[2]?.u === 'IF' && sig[3]?.u === 'EXISTS';
         if (ifExists) k = 4;
-        if (!sig[k]) throw new TsqlError(`DROP ${isProc ? 'PROCEDURE' : 'FUNCTION'} needs a name.`, { number: 102, at: node.start });
+        if (!sig[k]) throw new TsqlError(`DROP ${what.toUpperCase()} needs a name.`, { number: 102, at: node.start });
         const names = splitArgs(node.text.slice(sig[k].start).replace(/;\s*$/, ''));
         for (const written of names) {
             const mod = lookupModule(written);
-            if (!mod || (mod.kind === 'P') !== isProc) {
+            if (!mod || !fits(mod.kind)) {
                 if (ifExists) continue;
-                throw new TsqlError(`Cannot drop the ${isProc ? 'procedure' : 'function'} '${splitName(written).name}', because it does not exist or you do not have permission.`, { number: 3701, at: node.start });
+                throw new TsqlError(`Cannot drop the ${what} '${splitName(written).name}', because it does not exist or you do not have permission.`, { number: 3701, at: node.start });
             }
             dropModule(db, mod.id);
             forgetModules();
         }
+        if (what === 'trigger') armTriggers();
         statements++;
         pushResult({ kind: 'other', sql: node.text.trim(), columns: [], rows: [], more: false, cursor: null, rowsAffected: null, durationMs: 0, line: position(node.start).line, statement: statements - 1 });
     }
@@ -1086,6 +1473,7 @@ export function runTsql(ctx, script) {
         }
         if (!mod) throw new TsqlError(`Could not find stored procedure '${written}'.`, { number: 2812, at: node.start });
         if (mod.kind === 'IF' || mod.kind === 'TF') throw new TsqlError(`The request for procedure '${mod.name}' failed because '${mod.name}' is a table valued function object.`, { number: 2809, at: node.start });
+        if (mod.kind === 'TR') throw new TsqlError(`The request for procedure '${mod.name}' failed because '${mod.name}' is a trigger object.`, { number: 2809, at: node.start });
         if (mod.kind === 'FN') {
             const { def } = parsedModule(mod);
             const { scope } = bindArgs(`${mod.schema}.${mod.name}`, def.params, call.args, node.start, { functionCall: true });
@@ -1252,8 +1640,9 @@ export function runTsql(ctx, script) {
      */
     function expandModules(text) {
         const list = modules();
-        if (!list.some(m => m.kind !== 'P')) return text;
-        const names = new Set(list.filter(m => m.kind !== 'P').map(m => m.name.toLowerCase()));
+        const isFunction = (/** @type {{ kind: string }} */ m) => m.kind === 'FN' || m.kind === 'IF' || m.kind === 'TF';
+        if (!list.some(isFunction)) return text;
+        const names = new Set(list.filter(isFunction).map(m => m.name.toLowerCase()));
         let out = text;
         for (let round = 0; round < MAX_NESTING; round++) {
             const toks = tokens(out);
@@ -1286,7 +1675,7 @@ export function runTsql(ctx, script) {
                 }
                 const written = toks.slice(start, i + 1).map(x => x.v).join('').replace(/\s+/g, '');
                 const mod = lookupModule(written);
-                if (!mod || mod.kind === 'P') continue;
+                if (!mod || !isFunction(mod)) continue;
                 let close = open;
                 let level = 0;
                 for (; close < toks.length; close++) {
@@ -1366,6 +1755,7 @@ export function runTsql(ctx, script) {
     // Functions are SQLite functions that call back into this run
     try {
         for (const m of modules()) if (m.kind === 'FN') registerFunction(m);
+        armTriggers();
     } catch (e) {
         if (!error) error = toError(e);
         batches = [];
@@ -1421,6 +1811,11 @@ export function runTsql(ctx, script) {
         };
     }
 
+    try {
+        disarmTriggers();
+    } catch {
+        // the database is busy; the logging goes when it closes
+    }
     for (const table of dropLater) {
         try {
             db.exec(`DROP TABLE IF EXISTS temp.${table}`);

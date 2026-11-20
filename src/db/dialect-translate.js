@@ -412,7 +412,7 @@ function sqlServer(list, note, options = {}) {
             if (/^(NOCASE|BINARY|RTRIM)$/i.test(name)) continue;
             list[n] = { t: 'word', v: /_CI(_|$)/i.test(name) ? 'NOCASE' : 'BINARY' };
             note('SQL Server collations became NOCASE (case-insensitive) or BINARY.');
-        } else if (FUNCTION_NAMES[w] && list[nextSig(list, i + 1)]?.v === '(') {
+        } else if (FUNCTION_NAMES[w] && list[nextSig(list, i + 1)]?.v === '(' && !NAME_BEFORE.has(upper(list[prevSig(list, i - 1)]))) {
             const target = FUNCTION_NAMES[w];
             if (w === 'LOG') {
                 // LOG(x) is the natural log; LOG(x, base) has the base second
@@ -485,7 +485,7 @@ const FUNCTION_NAMES = /** @type {Record<string, string>} */ ({
 const SESSION_WORDS = /** @type {Record<string, string>} */ ({ SYSTEM_USER: 'sa', SESSION_USER: 'dbo', CURRENT_USER: 'dbo' });
 // @@ variables SQL Lab knows; each becomes a parameter the engine binds
 export const SYSTEM_VARIABLES = new Set(['ROWCOUNT', 'IDENTITY', 'ERROR', 'TRANCOUNT', 'VERSION', 'SERVERNAME', 'SERVICENAME', 'SPID',
-    'FETCH_STATUS', 'DATEFIRST', 'LANGUAGE', 'MAX_PRECISION', 'NESTLEVEL', 'LOCK_TIMEOUT', 'TEXTSIZE', 'OPTIONS', 'PROCID', 'DBTS', 'MICROSOFTVERSION']);
+    'FETCH_STATUS', 'CURSOR_ROWS', 'DATEFIRST', 'LANGUAGE', 'MAX_PRECISION', 'NESTLEVEL', 'LOCK_TIMEOUT', 'TEXTSIZE', 'OPTIONS', 'PROCID', 'DBTS', 'MICROSOFTVERSION']);
 // Functions whose value the engine knows (the error being handled, the last identity)
 const ENGINE_FUNCTIONS = /** @type {Record<string, string>} */ ({
     SCOPE_IDENTITY: '@__identity', ERROR_MESSAGE: '@__error_message', ERROR_NUMBER: '@__error_number', ERROR_LINE: '@__error_line',
@@ -497,6 +497,9 @@ const ENGINE_FUNCTIONS = /** @type {Record<string, string>} */ ({
  * Names only T-SQL has: #temp tables, table variables, system variables (ROWCOUNT …) and the
  * functions the engine answers (SCOPE_IDENTITY(), ERROR_MESSAGE() …).
  */
+// After these a word is a table's name, even when a function has the same one (a table called Log)
+const NAME_BEFORE = new Set(['INTO', 'TABLE', 'FROM', 'JOIN', 'UPDATE', '.', 'REFERENCES', 'ON']);
+
 function tsqlNames(list, note, options) {
     const tableVariables = options.tableVariables || new Set();
     for (let i = 0; i < list.length; i++) {
@@ -516,7 +519,7 @@ function tsqlNames(list, note, options) {
             // A Map gives each table variable's SQLite name (procedures nest their own)
             const mapped = tableVariables instanceof Map ? tableVariables.get(t.v.toLowerCase()) : '';
             list[i] = { t: 'ident', v: mapped || `"${t.v.replace(/"/g, '""')}"` };
-        } else if (ENGINE_FUNCTIONS[t.v.toUpperCase()]) {
+        } else if (ENGINE_FUNCTIONS[t.v.toUpperCase()] && !NAME_BEFORE.has(upper(list[prevSig(list, i - 1)]))) {
             const open = nextSig(list, i + 1);
             const close = list[open]?.v === '(' ? nextSig(list, open + 1) : -1;
             if (close > 0 && list[close].v === ')') replace(list, i, close + 1, ENGINE_FUNCTIONS[t.v.toUpperCase()]);
