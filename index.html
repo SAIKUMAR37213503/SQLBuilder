@@ -12,10 +12,10 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <!-- The SQL Lab's database engine (SQLite). Listed so the offline cache keeps it and the app finds its current URL. -->
-    <link rel="prefetch" href="dist/db-worker.js?v=ce43b7f67e46" id="asset-db-worker">
+    <link rel="prefetch" href="dist/db-worker.js?v=1be3d32c426f" id="asset-db-worker">
     <link rel="prefetch" href="dist/sqlite3.wasm?v=2ee8f3dab694" id="asset-sqlite-wasm">
     <link rel="preload" href="fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
-    <link rel="stylesheet" href="style.css?v=d1cb731da9fb">
+    <link rel="stylesheet" href="style.css?v=1d340b846b27">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -265,7 +265,7 @@
                     </nav>
                     <section class="lab-main" id="lab-main" aria-live="polite" aria-labelledby="lab-main-heading"></section>
                 </div>
-                <p class="lab-note">SQL Lab runs SQL in SQLite, a database engine embedded in this app. Your databases are kept on this device and nothing is sent anywhere. SQLite's SQL is close to standard SQL but not identical to SQL Server, PostgreSQL or MySQL, so for SQL written for those, set the editor's Language and SQL Lab translates it. With SQL Server (T-SQL), scripts run in SQL Lab's own T-SQL engine: variables, IF, WHILE, TRY … CATCH, PRINT, #temp tables, transactions, stored procedures, functions, triggers, cursors, MERGE, CROSS and OUTER APPLY, PIVOT and UNPIVOT, dynamic SQL, INFORMATION_SCHEMA and sys. views, and sp_help work.</p>
+                <p class="lab-note">SQL Lab runs SQL in SQLite, a database engine embedded in this app. Your databases are kept on this device and nothing is sent anywhere. SQLite's SQL is close to standard SQL but not identical to SQL Server, PostgreSQL or MySQL, so for SQL written for those, set the editor's Language and SQL Lab translates it. With SQL Server (T-SQL), scripts run in SQL Lab's own T-SQL engine: variables, IF, WHILE, TRY … CATCH, PRINT, #temp tables, transactions, stored procedures, functions, triggers, cursors, MERGE, CROSS and OUTER APPLY, PIVOT and UNPIVOT, dynamic SQL, INFORMATION_SCHEMA and sys. views, and sp_help work. Right-click a table, procedure or database for Select Top 1000 Rows, Script as … and Generate Scripts; Ctrl+Space suggests names, Ctrl+Shift+F formats and Ctrl+L shows the plan.</p>
             </section>
         </main>
 
@@ -562,6 +562,50 @@
         </form>
     </dialog>
 
+    <dialog id="lab-scripts-dialog" class="dialog dialog-wide" aria-labelledby="lab-scripts-title" aria-describedby="lab-scripts-intro">
+        <form method="dialog" class="dialog-body">
+            <h2 id="lab-scripts-title" class="dialog-title">Generate Scripts</h2>
+            <p class="dialog-message" id="lab-scripts-intro">Writes the open database as one SQL script: tables in the order their foreign keys need, then views, procedures, functions and triggers, and, if you choose, an INSERT for every row. Nothing in the database changes.</p>
+            <fieldset class="fieldset">
+                <legend>Objects</legend>
+                <div class="lab-check-actions">
+                    <button type="button" class="btn btn-ghost btn-sm" id="lab-scripts-all">Select all</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="lab-scripts-none">Select none</button>
+                </div>
+                <ul class="lab-check-list" id="lab-scripts-list"></ul>
+            </fieldset>
+            <div class="field-row">
+                <fieldset class="fieldset">
+                    <legend>What to script</legend>
+                    <label class="check"><input type="radio" name="lab-scripts-what" id="lab-scripts-schema" checked> <span>Schema only</span></label>
+                    <label class="check"><input type="radio" name="lab-scripts-what" id="lab-scripts-data"> <span>Schema and data (up to 100,000 rows a table)</span></label>
+                </fieldset>
+                <fieldset class="fieldset">
+                    <legend>Output</legend>
+                    <label class="check"><input type="radio" name="lab-scripts-output" id="lab-scripts-editor" checked> <span>Open in the editor</span></label>
+                    <label class="check"><input type="radio" name="lab-scripts-output" id="lab-scripts-file"> <span>Save as a .sql file</span></label>
+                </fieldset>
+            </div>
+            <div class="field">
+                <label class="field-label" for="lab-scripts-language">Script for</label>
+                <select id="lab-scripts-language" class="select" aria-describedby="lab-scripts-note">
+                    <option value="sqlserver">SQL Server (T-SQL)</option>
+                    <option value="sqlite">SQLite</option>
+                </select>
+                <p class="field-hint" id="lab-scripts-note"></p>
+            </div>
+            <div class="field">
+                <span class="field-label" id="lab-scripts-sql-label">Preview</span>
+                <pre class="sql-output lab-sql-preview" id="lab-scripts-sql" tabindex="0" aria-labelledby="lab-scripts-sql-label"><code id="lab-scripts-code"></code></pre>
+            </div>
+            <p class="dialog-error field-error" id="lab-scripts-error" role="alert"></p>
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary" id="lab-scripts-go">Generate</button>
+                <button type="button" class="btn btn-secondary" value="cancel">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="lab-import-dialog" class="dialog dialog-wide" aria-labelledby="lab-import-title" aria-describedby="lab-import-intro">
         <form method="dialog" class="dialog-body">
             <h2 id="lab-import-title" class="dialog-title">Import into SQL Lab</h2>
@@ -689,6 +733,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=5e5d176802b7" defer></script>
+    <script src="dist/sqlbuilder.js?v=bef15db403f0" defer></script>
 </body>
 </html>

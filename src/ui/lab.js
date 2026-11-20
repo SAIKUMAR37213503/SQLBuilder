@@ -16,10 +16,13 @@ import { createStorage, createMemoryBackend } from '../storage.js';
 import { createImportDialog } from './lab-import.js';
 import { createConsole } from './lab-console.js';
 import { icon, twisty, folderNode, objectChildren, programmabilityNode } from './lab-tree.js';
+import { openMenu, closeMenu } from './lab-menu.js';
+import { scriptSelectTop, scriptSelect, scriptCreate, scriptInsert, scriptUpdate, scriptDelete, scriptDrop, scriptModule, scriptDatabase } from './lab-scripts.js';
 
 const TABS = [
     { id: 'results', label: 'Results' },
     { id: 'messages', label: 'Messages' },
+    { id: 'plan', label: 'Plan' },
     { id: 'table', label: 'Table' },
     { id: 'history', label: 'History' }
 ];
@@ -38,15 +41,16 @@ export function describeError(error) {
  *   doc: Document,
  *   storage: any,
  *   client: any,
- *   dialogs: { prompt: any, confirm: any, tables: any, import?: any },
+ *   dialogs: { prompt: any, confirm: any, tables: any, import?: any, scripts?: any },
  *   toast: (message: string, kind?: string) => void,
  *   schemaTables: () => any[],
  *   isNative?: boolean,
  *   saveFile?: ((filename: string, text: string, mimeType: string, done: string) => Promise<boolean>) | null,
+ *   copyText?: ((text: string) => Promise<boolean>) | null,
  *   onShow?: () => void
  * }} options
  */
-export function createLab({ doc, storage, client, dialogs, toast, schemaTables, isNative = false, saveFile = null, onShow = () => {} }) {
+export function createLab({ doc, storage, client, dialogs, toast, schemaTables, isNative = false, saveFile = null, copyText = null, onShow = () => {} }) {
     const $ = (id) => /** @type {any} */ (doc.getElementById(id));
     const el = {
         view: $('lab'),
@@ -619,7 +623,9 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         confirm: (options) => confirmDialog(dialogs.confirm, options),
         askName: (options) => promptDialog(dialogs.prompt, options),
         saveFile,
+        copyText,
         lab: {
+            objects: () => (usable() && state.open && state.objects ? { objects: state.objects, modules: state.modules || [] } : null),
             open: () => {
                 const entry = usable() && state.open ? databases.get(state.open) : null;
                 return entry ? { id: entry.id, name: entry.name } : null;
@@ -718,6 +724,7 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
             results: () => sqlConsole.resultsView(),
             messages: () => sqlConsole.messagesView(),
             history: () => sqlConsole.historyView(),
+            plan: () => sqlConsole.planView(),
             table: () => [tableView(hasSchema)]
         };
         panel.replaceChildren(...views[state.tab]());
@@ -772,7 +779,228 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
                 })()) : null);
     }
 
+    // ------------------------------------------ right-click: Script as …
+
+    /** The editor's language when it is one SQL Lab scripts in, else SQLite. */
+    const scriptLanguage = () => sqlConsole.state.language;
+
+    /** Puts a script in the editor (one undo step), optionally running it. */
+    async function toEditor(sql, { run = false, language = undefined, what = 'The script' } = {}) {
+        const had = sqlConsole.editor.value.trim() !== '';
+        await sqlConsole.putScript(sql, { run, language });
+        if (!run) toast(`${what} is in the editor.${had ? ' Ctrl+Z brings back what was there.' : ''}`, 'success');
+    }
+
+    /** The explorer's menu for a table or view (right-click, Shift+F10 or the Menu key). */
+    async function objectMenu(button, point) {
+        const object = state.objects?.find(o => o.name === button.dataset.name);
+        if (!object) return;
+        const table = object.type === 'table';
+        const word = table ? 'Table' : 'View';
+        const choice = await openMenu({
+            doc, anchor: button, x: point?.x, y: point?.y, label: `${word} ${object.name}`,
+            items: [
+                { id: 'top', label: 'Select Top 1000 Rows' },
+                { id: 'columns', label: 'Columns and keys' },
+                { separator: true },
+                { heading: `Script ${word} as` },
+                { id: 'create', label: 'CREATE' },
+                { id: 'select', label: 'SELECT' },
+                ...(table ? [{ id: 'insert', label: 'INSERT' }, { id: 'update', label: 'UPDATE' }, { id: 'delete', label: 'DELETE' }] : []),
+                { id: 'drop', label: 'DROP' }
+            ]
+        });
+        if (!choice) return;
+        const lang = scriptLanguage();
+        if (choice === 'columns') {
+            selectObject(object.name);
+            return;
+        }
+        if (choice === 'top') {
+            await toEditor(scriptSelectTop(object, lang), { run: true });
+            return;
+        }
+        const make = { create: scriptCreate, select: scriptSelect, insert: scriptInsert, update: scriptUpdate, delete: scriptDelete, drop: scriptDrop }[choice];
+        if (make) await toEditor(make(object, lang), { what: `${choice.toUpperCase()} for ${object.name}` });
+    }
+
+    /** The menu of a stored procedure, function or trigger. */
+    async function moduleMenu(button, point) {
+        const mod = state.modules?.find(m => m.name === button.dataset.name);
+        if (!mod) return;
+        const word = mod.kind === 'P' ? 'Stored procedure' : mod.kind === 'TR' ? 'Trigger' : 'Function';
+        const choice = await openMenu({
+            doc, anchor: button, x: point?.x, y: point?.y, label: `${word} ${mod.schema}.${mod.name}`,
+            items: [
+                { heading: `Script ${mod.kind === 'P' ? 'Stored Procedure' : mod.kind === 'TR' ? 'Trigger' : 'Function'} as` },
+                { id: 'create', label: 'CREATE' },
+                { id: 'alter', label: 'ALTER' },
+                ...(mod.kind === 'TR' ? [] : [{ id: 'execute', label: mod.kind === 'P' ? 'EXECUTE' : 'SELECT' }]),
+                { id: 'drop', label: 'DROP' }
+            ]
+        });
+        if (!choice) return;
+        // Procedures, functions and triggers are T-SQL: the editor switches to SQL Server
+        await toEditor(scriptModule(mod, choice), { language: 'sqlserver', what: `${choice === 'execute' ? (mod.kind === 'P' ? 'EXECUTE' : 'SELECT') : choice.toUpperCase()} for ${mod.name}` });
+    }
+
+    /** The menu of a database: New Query, Generate Scripts…, and the rest of its actions. */
+    async function databaseMenu(button, point) {
+        const id = button.dataset.id;
+        const entry = databases.get(id);
+        if (!entry) return;
+        const choice = await openMenu({
+            doc, anchor: button, x: point?.x, y: point?.y, label: `Database ${entry.name}`,
+            items: [
+                { id: 'query', label: 'New Query' },
+                { id: 'scripts', label: 'Generate Scripts…' },
+                ...(importer ? [{ id: 'import', label: 'Import…' }] : []),
+                { separator: true },
+                { id: 'rename', label: 'Rename…' },
+                { id: 'duplicate', label: 'Duplicate' },
+                ...(id === state.open ? [{ id: 'close', label: 'Close' }] : []),
+                { id: 'delete', label: 'Delete…' }
+            ]
+        });
+        if (!choice) return;
+        if (choice === 'rename') return renameDatabase(id);
+        if (choice === 'duplicate') return duplicateDatabase(id);
+        if (choice === 'delete') return deleteDatabase(id);
+        if (choice === 'close') return closeDatabase();
+        if (id !== state.open) await task(() => openDatabase(id));
+        if (state.open !== id) return;
+        if (choice === 'import') return importData();
+        if (choice === 'scripts') return generateScripts();
+        if (choice === 'query') {
+            await toEditor('', { what: 'A new query' });
+            sqlConsole.editor.focus();
+        }
+    }
+
+    /** Opens the menu that fits what was right-clicked; true when there was one. */
+    function contextMenu(target, point) {
+        if (state.busy) return false;
+        const object = target.closest?.('.lab-object-btn[data-lab-action="select"]');
+        if (object) {
+            objectMenu(object, point);
+            return true;
+        }
+        const mod = target.closest?.('[data-lab-action="module"]');
+        if (mod) {
+            moduleMenu(mod, point);
+            return true;
+        }
+        const db = target.closest?.('.lab-db-btn');
+        if (db) {
+            databaseMenu(db, point);
+            return true;
+        }
+        return false;
+    }
+
+    // ----------------------------------------------- Generate Scripts
+
+    /** Generate Scripts: the database's objects (and data) as one script, to the editor or a .sql file. */
+    async function generateScripts() {
+        if (!state.open || !state.objects) return;
+        const dialog = dialogs.scripts;
+        if (!dialog) return;
+        const entry = databases.get(state.open);
+        const $d = (id) => /** @type {any} */ (dialog.querySelector(`#${id}`));
+        const list = $d('lab-scripts-list');
+        const code = $d('lab-scripts-code');
+        const error = $d('lab-scripts-error');
+        const submit = $d('lab-scripts-go');
+        const objects = state.objects;
+        const modules = state.modules || [];
+        const entries = [
+            ...objects.map(o => ({ key: `o:${o.name}`, label: o.name, kind: o.type === 'view' ? 'View' : 'Table' })),
+            ...modules.map(m => ({ key: `m:${m.name}`, label: `${m.schema}.${m.name}`, kind: m.kind === 'P' ? 'Procedure' : m.kind === 'TR' ? 'Trigger' : 'Function' }))
+        ];
+        list.replaceChildren(...entries.map(e => h('li', {},
+            h('label', { class: 'check' },
+                h('input', { type: 'checkbox', value: e.key, checked: true }),
+                h('span', { class: 'lab-check-name' }, e.label),
+                h('span', { class: 'lab-check-state' }, e.kind)))));
+        $d('lab-scripts-language').value = scriptLanguage() === 'sqlserver' ? 'sqlserver' : 'sqlite';
+        error.textContent = '';
+        const boxes = () => /** @type {any[]} */ ([...list.querySelectorAll('input[type="checkbox"]')]);
+        const picked = () => new Set(boxes().filter(b => b.checked).map(b => b.value));
+        const options = () => ({
+            data: $d('lab-scripts-data').checked,
+            language: $d('lab-scripts-language').value,
+            output: $d('lab-scripts-file')?.checked ? 'file' : 'editor'
+        });
+        const build = (/** @type {Map<string, any> | null} */ data) => {
+            const keys = picked();
+            const { language } = options();
+            return scriptDatabase({
+                objects: objects.filter(o => keys.has(`o:${o.name}`)),
+                modules: modules.filter(m => keys.has(`m:${m.name}`)),
+                data,
+                language,
+                databaseName: entry?.name || 'database',
+                when: new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
+            });
+        };
+        const update = () => {
+            const count = picked().size;
+            const { data, language } = options();
+            const preview = build(null);
+            const lines = preview.split('\n');
+            renderSqlCode(code, count ? `${lines.slice(0, 120).join('\n')}${lines.length > 120 ? `\n-- … ${lines.length - 120} more lines` : ''}${data ? '\n-- …and an INSERT for each row of each table' : ''}` : '-- Nothing selected');
+            submit.disabled = count === 0;
+            $d('lab-scripts-note').textContent = language === 'sqlserver'
+                ? 'SQL Server types (NVARCHAR(MAX), INT, FLOAT …), IDENTITY and named keys; procedures, functions and triggers included.'
+                : 'SQLite\'s own CREATE statements, as the database has them. Procedures, functions and triggers are T-SQL, so they are scripted only for SQL Server.';
+        };
+        const onChange = () => {
+            error.textContent = '';
+            update();
+        };
+        const onClick = (event) => {
+            const all = event.target.closest('#lab-scripts-all');
+            const none = event.target.closest('#lab-scripts-none');
+            if (!all && !none) return;
+            for (const box of boxes()) box.checked = Boolean(all);
+            update();
+        };
+        dialog.addEventListener('change', onChange);
+        dialog.addEventListener('click', onClick);
+        try {
+            update();
+            const ok = await formDialog(dialog, { onOpen: () => list.querySelector('input')?.focus(), validate: () => picked().size > 0 });
+            if (!ok) return;
+            const { data: withData, output } = options();
+            const keys = picked();
+            await task(async () => {
+                /** @type {Map<string, any> | null} */
+                let data = null;
+                if (withData) {
+                    data = new Map();
+                    for (const o of objects.filter(x => x.type === 'table' && keys.has(`o:${x.name}`))) {
+                        data.set(o.name, await client.call('readTable', { name: o.name, limit: 100000 }));
+                    }
+                }
+                const script = build(data);
+                // eslint-disable-next-line no-control-regex
+                const name = `${entry?.name || 'database'}`.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ').trim() || 'database';
+                if (output === 'file' && saveFile) {
+                    await saveFile(`${name} script.sql`, script, 'application/sql', `Saved ${name} script.sql.`);
+                } else if (script.length > 5 * 1024 * 1024) {
+                    toast('The script is over 5 MB, too long for the editor. Choose Save as a .sql file instead.', 'error');
+                } else {
+                    await toEditor(script, { language: options().language === 'sqlserver' ? 'sqlserver' : 'sqlite', what: `The script of ${entry?.name}` });
+                }
+            });
+        } finally {
+            dialog.removeEventListener('change', onChange);
+            dialog.removeEventListener('click', onClick);
+        }
+    }
+
     function render() {
+        closeMenu();
         renderEngine();
         renderList();
         renderObjects();
@@ -790,6 +1018,10 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         const button = /** @type {any} */ (event.target).closest('[data-lab-action]');
         if (!button || button.disabled) return;
         const { labAction: action, id, name } = button.dataset;
+        if (action === 'module') {
+            moduleMenu(button, null);
+            return;
+        }
         if (action === 'open') {
             if (id === state.open) return;
             task(() => openDatabase(id)).then(() => doc.getElementById('lab-main-heading')?.focus());
@@ -803,8 +1035,20 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         else if (action === 'import') importData();
         else if (action === 'retry') retry();
     });
+    // Right-click (or a long press) on a table, view, module or database: its menu, as in SSMS
+    el.view.addEventListener('contextmenu', (/** @type {MouseEvent} */ event) => {
+        const target = /** @type {any} */ (event.target);
+        if (!target.closest?.('.lab-explorer, #lab-db-list, #lab-objects')) return;
+        // The keyboard's Menu key fires contextmenu at the focused item, with no pointer position
+        const fromKeys = event.button !== 2 && event.clientX === 0 && event.clientY === 0;
+        if (contextMenu(target, fromKeys ? null : { x: event.clientX, y: event.clientY })) event.preventDefault();
+    });
     // In the explorer, Right opens a node and Left closes it (or moves to its parent), as in SSMS
     el.view.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
+        if (event.key === 'F10' && event.shiftKey) {
+            if (contextMenu(/** @type {any} */ (event.target), null)) event.preventDefault();
+            return;
+        }
         if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
         const target = /** @type {any} */ (event.target);
         const row = target.closest?.('.lab-explorer .lab-row');
@@ -844,6 +1088,7 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         render,
         createTablesFromSchema,
         importData,
+        generateScripts,
         /**
          * Puts SQL generated in the builder in the editor and shows SQL Lab.
          * @param {{ sql: string, dialect: string, generic: string }} from

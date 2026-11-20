@@ -134,7 +134,7 @@ export function programmabilityNode(modules, isOpen) {
             return h('li', { class: 'lab-node lab-leaf' },
                 h('div', { class: 'lab-row' },
                     twisty(null, false, ''),
-                    h('span', { class: 'lab-leaf-label', title: `${m.schema}.${m.name} ${detail}` },
+                    h('button', { type: 'button', class: 'lab-leaf-label lab-module-btn', title: `${m.schema}.${m.name} ${detail}`, 'aria-haspopup': 'menu', dataset: { labAction: 'module', name: m.name } },
                         icon('trigger'),
                         h('span', { class: 'lab-column-name' }, `${m.schema}.${m.name}`),
                         h('span', { class: 'lab-column-detail' }, detail))));
@@ -144,7 +144,7 @@ export function programmabilityNode(modules, isOpen) {
         return h('li', { class: 'lab-node lab-leaf' },
             h('div', { class: 'lab-row' },
                 twisty(null, false, ''),
-                h('span', { class: 'lab-leaf-label', title: `${m.schema}.${m.name}(${params})${returns}` },
+                h('button', { type: 'button', class: 'lab-leaf-label lab-module-btn', title: `${m.schema}.${m.name}(${params})${returns}`, 'aria-haspopup': 'menu', dataset: { labAction: 'module', name: m.name } },
                     icon(m.kind === 'P' ? 'procedure' : 'function'),
                     h('span', { class: 'lab-column-name' }, `${m.schema}.${m.name}`),
                     h('span', { class: 'lab-column-detail' }, `(${params})${returns}`))));

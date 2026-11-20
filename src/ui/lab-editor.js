@@ -99,6 +99,32 @@ export function createEditor({ label, describedBy = '', onInput = () => {}, onRu
             input.focus();
             input.setSelectionRange(at, Math.min(input.value.length, at + word));
         },
+        /**
+         * Replaces part of the text as if it were typed, so Ctrl+Z undoes it,
+         * and leaves the cursor after it (or selects it, with `select`).
+         * @param {number} from
+         * @param {number} to
+         * @param {string} text
+         * @param {{ select?: boolean }} [options]
+         */
+        replaceRange(from, to, text, { select = false } = {}) {
+            input.focus();
+            input.setSelectionRange(from, to);
+            const doc = input.ownerDocument;
+            let done = false;
+            try {
+                done = typeof doc.execCommand === 'function' && doc.execCommand('insertText', false, text);
+            } catch {
+                done = false;
+            }
+            // Firefox before 89 and some web views: no undo step, but the same text
+            if (!done || input.value.slice(from, from + text.length) !== text) {
+                input.setRangeText(text, from, to, 'end');
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            if (select) input.setSelectionRange(from, from + text.length);
+            else input.setSelectionRange(from + text.length, from + text.length);
+        },
         focus: () => input.focus(),
         set disabled(value) {
             input.readOnly = Boolean(value);

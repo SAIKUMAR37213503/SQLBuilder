@@ -281,6 +281,21 @@ function sqlServer(list, note, options = {}) {
         if (t.t === 'str' && /^N'/i.test(t.v)) {
             t.v = t.v.slice(1);
             note("N'text' became 'text'.");
+        } else if (t.t === 'num' && /^0x[0-9a-f]*$/i.test(t.v)) {
+            // 0xCAFE is binary in SQL Server (VARBINARY), a whole number in SQLite
+            const hex = t.v.slice(2);
+            t.v = `X'${hex.length % 2 ? `0${hex}` : hex}'`;
+            note("Binary values written 0x… became X'…' blobs.");
+        } else if (w === 'INSERT' && t.t === 'word') {
+            // INSERT [dbo].[T] (…) VALUES …, as SSMS's scripts write it: SQLite needs INTO
+            const n = nextSig(list, i + 1);
+            const next = list[n];
+            const before = upper(list[prevSig(list, i - 1)]);
+            const event = ['AFTER', 'FOR', 'OF', 'INSTEAD', ','].includes(before) || ['AS', 'ON', ',', 'NOT', 'WITH'].includes(upper(next));
+            if (n > 0 && next && !event && (next.t === 'ident' || (next.t === 'word' && !['INTO', 'OR', 'EXEC', 'EXECUTE', 'SELECT', 'VALUES', 'DEFAULT'].includes(upper(next)) && !/^@/.test(next.v)))) {
+                t.v = `${t.v} INTO`;
+                note('INSERT without INTO got INTO, which SQLite needs.');
+            }
         } else if (w === 'TOP') {
             const prev = upper(list[prevSig(list, i - 1)]);
             if (prev === 'SELECT' || prev === 'DISTINCT' || prev === 'ALL') {

@@ -1744,3 +1744,65 @@ body.view-lab .mobile-bar { display: none; }
 .lab-history-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .lab-import-change { flex: 1 1 20rem; min-width: 0; }
 #lab-import-adapt-field[hidden] { display: none; }
+
+/* ---- SQL Lab: SSMS-style tools (context menu, IntelliSense, plan, grid tools) */
+.lab-module-btn { flex: 1 1 auto; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text); font: inherit; font-size: 0.82rem; text-align: left; cursor: pointer; }
+.lab-module-btn:hover { background: var(--surface); }
+.lab-module-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+.lab-menu {
+    position: absolute;
+    z-index: 1000;
+    min-width: 12rem;
+    max-width: min(20rem, calc(100vw - 8px));
+    padding: 0.25rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: var(--shadow-lg);
+}
+.lab-menu-item { display: flex; width: 100%; gap: 1rem; justify-content: space-between; padding: 0.35rem 0.6rem; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text); font: inherit; font-size: 0.875rem; text-align: left; cursor: pointer; }
+.lab-menu-item:hover, .lab-menu-item:focus { background: var(--surface-3); outline: none; }
+.lab-menu-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.lab-menu-hint { color: var(--text-muted); font-size: 0.75rem; }
+.lab-menu-heading { padding: 0.35rem 0.6rem 0.15rem; color: var(--text-muted); font-size: 0.75rem; font-weight: 650; }
+.lab-menu-separator { height: 1px; margin: 0.25rem 0; background: var(--border); }
+@media (pointer: coarse) { .lab-menu-item { min-height: 2.5rem; align-items: center; } }
+
+.lab-complete {
+    position: absolute;
+    z-index: 20;
+    width: min(22.5rem, calc(100% - 8px));
+    max-height: 14rem;
+    margin: 0;
+    padding: 0.2rem;
+    overflow-y: auto;
+    list-style: none;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: var(--shadow-lg);
+}
+.lab-complete-item { display: flex; gap: 0.5rem; align-items: baseline; padding: 0.2rem 0.4rem; border-radius: var(--radius-sm); font-size: 0.82rem; cursor: pointer; }
+.lab-complete-item[aria-selected="true"] { background: var(--accent); color: #fff; }
+.lab-complete-item[aria-selected="true"] .lab-complete-detail, .lab-complete-item[aria-selected="true"] .lab-complete-kind { color: inherit; }
+.lab-complete-kind { flex: 0 0 1.1rem; color: var(--text-muted); font-family: var(--font-mono); font-size: 0.72rem; text-align: center; }
+.lab-complete-label { font-family: var(--font-mono); white-space: nowrap; }
+.lab-complete-detail { margin-left: auto; overflow: hidden; color: var(--text-muted); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; }
+
+.lab-result-tools { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; margin-left: auto; }
+.lab-sort-btn { display: inline-flex; gap: 0.3rem; align-items: center; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.lab-sort-btn:hover span:first-child { text-decoration: underline; }
+.lab-sort-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.lab-sort-mark { min-width: 0.7em; font-size: 0.7em; }
+.lab-result-text { max-height: 28rem; margin: 0.4rem 0 0; padding: 0.6rem 0.75rem; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.45; white-space: pre; }
+#lab-text-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft, var(--surface-2)); color: var(--accent); }
+
+.lab-plan { display: grid; gap: 0.4rem; margin-top: 0.9rem; }
+.lab-plan-sql { display: block; white-space: pre-wrap; }
+.lab-plan-tree, .lab-plan-children { margin: 0; padding: 0; list-style: none; }
+.lab-plan-children { margin-left: 0.55rem; padding-left: 1rem; border-left: 1px solid var(--border-strong); }
+.lab-plan-node { padding: 0.15rem 0; }
+.lab-plan-op { display: inline-block; margin-right: 0.5rem; padding: 0.05rem 0.4rem; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-2); font-size: 0.82rem; font-weight: 650; }
+.lab-plan-root { border-color: var(--accent); color: var(--accent); }
+.lab-plan-detail { color: var(--text-2); font-family: var(--font-mono); font-size: 0.78rem; overflow-wrap: anywhere; }
+.lab-plan-hints { margin: 0.2rem 0 0; padding-left: 1.1rem; color: var(--text-2); font-size: 0.85rem; }

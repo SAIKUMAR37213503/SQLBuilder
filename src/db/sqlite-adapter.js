@@ -744,7 +744,50 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
         /** Stored procedures and functions of the open database (made with SQL Lab's T-SQL engine). */
         modules() {
             const { db } = requireOpen();
-            return listModules(db).map(m => ({ name: m.name, schema: m.schema, kind: m.kind, params: m.params, returns: m.returns }));
+            return listModules(db).map(m => ({ name: m.name, schema: m.schema, kind: m.kind, params: m.params, returns: m.returns, definition: m.definition }));
+        },
+
+        /**
+         * How SQLite would run each statement (EXPLAIN QUERY PLAN), for the plan
+         * view. Nothing runs, and open result cursors are left alone. Parameters
+         * (@name) are left unbound.
+         * @param {string[]} statements SQLite SQL, one statement each
+         * @returns {{ sql: string, steps: { id: number, parent: number, detail: string }[] | null, error: string | null }[]}
+         */
+        explain(statements) {
+            const { db } = requireOpen();
+            return (Array.isArray(statements) ? statements : [statements]).map(sql => {
+                const text = String(sql).trim().replace(/;+\s*$/, '');
+                try {
+                    const rows = db.selectArrays(`EXPLAIN QUERY PLAN ${text}`);
+                    return { sql: text, steps: rows.map((/** @type {any[]} */ r) => ({ id: Number(r[0]), parent: Number(r[1]), detail: String(r[3]) })), error: null };
+                } catch (e) {
+                    return { sql: text, steps: null, error: cleanMessage(e instanceof Error ? e.message : e).message };
+                }
+            });
+        },
+
+        /**
+         * A table's rows, for Generate Scripts (up to `limit`). Open result
+         * cursors are left alone.
+         * @param {string} name
+         * @param {{ limit?: number }} [options]
+         */
+        readTable(name, { limit = 100000 } = {}) {
+            const { db } = requireOpen();
+            const found = db.selectValue("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?", [String(name)]);
+            if (found === undefined) throw new DatabaseError(`There's no table named ${name}.`, { code: 'NOT_FOUND' });
+            const quoted = `"${String(found).replace(/"/g, '""')}"`;
+            const stmt = db.prepare(`SELECT * FROM ${quoted} LIMIT ${Math.max(0, Math.floor(limit)) + 1}`);
+            try {
+                const columns = stmt.getColumnNames([]);
+                const rows = [];
+                while (stmt.step()) rows.push(stmt.get([]).map((/** @type {unknown} */ v) => (v instanceof Uint8Array ? { hex: [...v].map(b => b.toString(16).padStart(2, '0')).join('') } : typeof v === 'bigint' ? Number(v) : v)));
+                const more = rows.length > limit;
+                return { columns, rows: more ? rows.slice(0, limit) : rows, more };
+            } finally {
+                stmt.finalize();
+            }
         },
 
         /**

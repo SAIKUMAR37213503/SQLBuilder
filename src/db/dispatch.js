@@ -23,6 +23,8 @@ const OPERATIONS = {
     schema: (a) => a.schema(),
     modules: (a) => a.modules(),
     countRows: (a, { name }) => a.countRows(name),
+    explain: (a, { statements }) => a.explain(statements),
+    readTable: (a, { name, limit }) => a.readTable(name, { limit }),
     // Reading an import changes nothing; running it is one transaction.
     // `source` is a file (up to 1 GB, read in parts); `text` is pasted text
     previewImport: (_a, args, ctx) => (args.source !== undefined ? previewImportFile(args, ctx) : previewImport(args)),
