@@ -28,7 +28,7 @@ export const MODULE_ID_BASE = 2000000;
  */
 
 export const KIND_NAMES = /** @type {Record<string, string>} */ ({
-    P: 'SQL_STORED_PROCEDURE', FN: 'SQL_SCALAR_FUNCTION', IF: 'SQL_INLINE_TABLE_VALUED_FUNCTION', TF: 'SQL_TABLE_VALUED_FUNCTION'
+    P: 'SQL_STORED_PROCEDURE', FN: 'SQL_SCALAR_FUNCTION', IF: 'SQL_INLINE_TABLE_VALUED_FUNCTION', TF: 'SQL_TABLE_VALUED_FUNCTION', TR: 'SQL_TRIGGER'
 });
 
 /** A name without its [brackets] or "quotes". */
@@ -333,7 +333,7 @@ export function findModule(db, written) {
 /**
  * Saves a definition (creating or replacing the row).
  * @param {any} db
- * @param {ModuleDef} def
+ * @param {{ kind: string, schema: string, name: string, params: unknown, returns: string | null }} def a procedure or function (ModuleDef), or a trigger (params: its table and events)
  * @param {string} definition the CREATE text as written
  * @param {string} now
  * @returns {ModuleRow}
@@ -342,7 +342,7 @@ export function saveModule(db, def, definition, now) {
     ensureModulesTable(db);
     const existing = findModule(db, `[${def.schema}].[${def.name}]`);
     const params = JSON.stringify(def.params);
-    const returns = def.kind === 'FN' ? def.returns : def.kind === 'P' ? null : 'TABLE';
+    const returns = def.kind === 'FN' ? def.returns : def.kind === 'P' || def.kind === 'TR' ? null : 'TABLE';
     if (existing) {
         db.exec({ sql: `UPDATE ${MODULES_TABLE} SET kind = ?, definition = ?, params = ?, returns = ?, modified = ? WHERE rowid = ?`, bind: [def.kind, definition, params, returns, now, existing.id - MODULE_ID_BASE] });
     } else {

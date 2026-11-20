@@ -649,8 +649,8 @@ function objectId(db, name, type) {
         const id = db.selectValue(`SELECT rowid FROM ${schema} WHERE type IN ${kind} AND name = ? COLLATE NOCASE`, [last]);
         if (id !== undefined) return Number(id) + (temp ? 1000000 : 0);
     }
-    // Procedures and functions (tsql/modules.js)
-    if (temp || (types !== null && !['P', 'FN', 'IF', 'TF'].includes(types)) || !hasModulesTable(db)) return null;
+    // Procedures, functions and triggers (tsql/modules.js)
+    if (temp || (types !== null && !['P', 'FN', 'IF', 'TF', 'TR'].includes(types)) || !hasModulesTable(db)) return null;
     const id = db.selectValue(`SELECT rowid FROM ${MODULES_TABLE} WHERE name = ? AND schema_name = ? COLLATE NOCASE${types ? ' AND kind = ?' : ''}`, types ? [last, schemaName, types] : [last, schemaName]);
     return id === undefined ? null : Number(id) + MODULE_ID_BASE;
 }

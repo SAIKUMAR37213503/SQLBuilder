@@ -12,10 +12,10 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <!-- The SQL Lab's database engine (SQLite). Listed so the offline cache keeps it and the app finds its current URL. -->
-    <link rel="prefetch" href="dist/db-worker.js?v=cdb8a41a78c2" id="asset-db-worker">
+    <link rel="prefetch" href="dist/db-worker.js?v=ce43b7f67e46" id="asset-db-worker">
     <link rel="prefetch" href="dist/sqlite3.wasm?v=2ee8f3dab694" id="asset-sqlite-wasm">
     <link rel="preload" href="fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
-    <link rel="stylesheet" href="style.css?v=465cd74225c3">
+    <link rel="stylesheet" href="style.css?v=d1cb731da9fb">
 </head>
 <body>
     <a class="skip-link" href="#builder">Skip to query builder</a>
@@ -265,7 +265,7 @@
                     </nav>
                     <section class="lab-main" id="lab-main" aria-live="polite" aria-labelledby="lab-main-heading"></section>
                 </div>
-                <p class="lab-note">SQL Lab runs SQL in SQLite, a database engine embedded in this app. Your databases are kept on this device and nothing is sent anywhere. SQLite's SQL is close to standard SQL but not identical to SQL Server, PostgreSQL or MySQL, so for SQL written for those, set the editor's Language and SQL Lab translates it. With SQL Server (T-SQL), scripts run in SQL Lab's own T-SQL engine: variables, IF, WHILE, TRY … CATCH, PRINT, #temp tables, transactions, stored procedures, functions, dynamic SQL, INFORMATION_SCHEMA and sys. views, and sp_help work.</p>
+                <p class="lab-note">SQL Lab runs SQL in SQLite, a database engine embedded in this app. Your databases are kept on this device and nothing is sent anywhere. SQLite's SQL is close to standard SQL but not identical to SQL Server, PostgreSQL or MySQL, so for SQL written for those, set the editor's Language and SQL Lab translates it. With SQL Server (T-SQL), scripts run in SQL Lab's own T-SQL engine: variables, IF, WHILE, TRY … CATCH, PRINT, #temp tables, transactions, stored procedures, functions, triggers, cursors, MERGE, CROSS and OUTER APPLY, PIVOT and UNPIVOT, dynamic SQL, INFORMATION_SCHEMA and sys. views, and sp_help work.</p>
             </section>
         </main>
 
@@ -689,6 +689,6 @@
     </dialog>
 
     <noscript><p class="noscript">This app needs JavaScript to build queries. Nothing is sent to a server.</p></noscript>
-    <script src="dist/sqlbuilder.js?v=a2afbcd4be6f" defer></script>
+    <script src="dist/sqlbuilder.js?v=5e5d176802b7" defer></script>
 </body>
 </html>

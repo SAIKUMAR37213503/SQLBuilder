@@ -154,7 +154,7 @@ function viewSql(key, dbName, hasModules) {
             NULL AS create_date, NULL AS modify_date, 0 AS is_ms_shipped, 0 AS is_published, 0 AS is_schema_published
         FROM main.sqlite_schema s WHERE s.type IN ('table', 'view', 'trigger') AND ${USER_S}
         UNION ALL
-        SELECT m.name, m.id, NULL, CASE m.schema_name WHEN 'dbo' THEN 1 ELSE 5 END, 0, m.kind, ${kindDesc('m.kind')}, m.created, m.modified, 0, 0, 0 FROM ${mods} m`;
+        SELECT m.name, m.id, NULL, CASE m.schema_name WHEN 'dbo' THEN 1 ELSE 5 END, CASE m.kind WHEN 'TR' THEN COALESCE((SELECT t.rowid FROM main.sqlite_schema t WHERE t.type IN ('table', 'view') AND t.name = json_extract(m.params, '$.table') COLLATE NOCASE), 0) ELSE 0 END, m.kind, ${kindDesc('m.kind')}, m.created, m.modified, 0, 0, 0 FROM ${mods} m`;
     switch (key) {
     // ---- INFORMATION_SCHEMA
     case 'information_schema.tables':
@@ -174,12 +174,12 @@ function viewSql(key, dbName, hasModules) {
     case 'information_schema.routines':
         return `SELECT ${db} AS SPECIFIC_CATALOG, m.schema_name AS SPECIFIC_SCHEMA, m.name AS SPECIFIC_NAME, ${db} AS ROUTINE_CATALOG, m.schema_name AS ROUTINE_SCHEMA, m.name AS ROUTINE_NAME,
             CASE m.kind WHEN 'P' THEN 'PROCEDURE' ELSE 'FUNCTION' END AS ROUTINE_TYPE, CASE m.kind WHEN 'P' THEN NULL WHEN 'FN' THEN sqllab_type(m.returns, 'name') ELSE 'TABLE' END AS DATA_TYPE,
-            'SQL' AS ROUTINE_BODY, m.definition AS ROUTINE_DEFINITION, CASE m.kind WHEN 'FN' THEN 'YES' ELSE 'NO' END AS IS_DETERMINISTIC, m.created AS CREATED, m.modified AS LAST_ALTERED FROM ${mods} m`;
+            'SQL' AS ROUTINE_BODY, m.definition AS ROUTINE_DEFINITION, CASE m.kind WHEN 'FN' THEN 'YES' ELSE 'NO' END AS IS_DETERMINISTIC, m.created AS CREATED, m.modified AS LAST_ALTERED FROM ${mods} m WHERE m.kind != 'TR'`;
     case 'information_schema.parameters':
         return `SELECT ${db} AS SPECIFIC_CATALOG, m.schema_name AS SPECIFIC_SCHEMA, m.name AS SPECIFIC_NAME, j.key + 1 AS ORDINAL_POSITION,
             CASE WHEN json_extract(j.value, '$.output') THEN 'INOUT' ELSE 'IN' END AS PARAMETER_MODE, 'NO' AS IS_RESULT, json_extract(j.value, '$.name') AS PARAMETER_NAME,
             sqllab_type(json_extract(j.value, '$.type'), 'name') AS DATA_TYPE, sqllab_type(json_extract(j.value, '$.type'), 'char_length') AS CHARACTER_MAXIMUM_LENGTH
-            FROM ${mods} m, json_each(m.params) j`;
+            FROM ${mods} m, json_each(m.params) j WHERE m.kind != 'TR'`;
     case 'information_schema.schemata':
         return `SELECT ${db} AS CATALOG_NAME, column1 AS SCHEMA_NAME, column1 AS SCHEMA_OWNER FROM (VALUES ('dbo'), ('guest'), ('INFORMATION_SCHEMA'), ('sys'))`;
     case 'information_schema.table_constraints':
@@ -216,7 +216,9 @@ function viewSql(key, dbName, hasModules) {
     case 'sys.triggers':
         return `SELECT s.name AS name, s.rowid AS object_id, 1 AS parent_class, 'OBJECT_OR_COLUMN' AS parent_class_desc, COALESCE((SELECT t.rowid FROM main.sqlite_schema t WHERE t.type = 'table' AND t.name = s.tbl_name), 0) AS parent_id,
             'TR' AS type, 'SQL_TRIGGER' AS type_desc, NULL AS create_date, NULL AS modify_date, 0 AS is_ms_shipped, 0 AS is_disabled, CASE WHEN s.sql LIKE '%INSTEAD OF%' THEN 1 ELSE 0 END AS is_instead_of_trigger
-            FROM main.sqlite_schema s WHERE s.type = 'trigger'`;
+            FROM main.sqlite_schema s WHERE s.type = 'trigger'
+            UNION ALL SELECT m.name, m.id, 1, 'OBJECT_OR_COLUMN', COALESCE((SELECT t.rowid FROM main.sqlite_schema t WHERE t.type IN ('table', 'view') AND t.name = json_extract(m.params, '$.table') COLLATE NOCASE), 0), 'TR', 'SQL_TRIGGER', m.created, m.modified, 0, 0, COALESCE(json_extract(m.params, '$.instead'), 0)
+            FROM ${mods} m WHERE m.kind = 'TR'`;
     case 'sys.columns':
     case 'sys.all_columns':
         return `SELECT s.rowid AS object_id, p.name AS name, p.cid + 1 AS column_id, sqllab_type(p.type, 'type_id') AS system_type_id, sqllab_type(p.type, 'type_id') AS user_type_id,
@@ -270,7 +272,7 @@ function viewSql(key, dbName, hasModules) {
             sqllab_type(json_extract(j.value, '$.type'), 'max_length') AS max_length, sqllab_type(json_extract(j.value, '$.type'), 'precision') AS precision,
             sqllab_type(json_extract(j.value, '$.type'), 'scale') AS scale, json_extract(j.value, '$.output') AS is_output,
             json_extract(j.value, '$.default') IS NOT NULL AS has_default_value, json_extract(j.value, '$.readonly') AS is_readonly
-            FROM ${mods} m, json_each(m.params) j`;
+            FROM ${mods} m, json_each(m.params) j WHERE m.kind != 'TR'`;
     default:
         return null;
     }
@@ -474,14 +476,14 @@ export function runSystemProcedure(ctx, name, args) {
         if (!target) {
             const rows = db.selectObjects(`SELECT name, type FROM main.sqlite_schema WHERE type IN ('table', 'view', 'trigger') AND ${USER_TABLES} ORDER BY name COLLATE NOCASE`)
                 .map((/** @type {any} */ o) => [o.name, 'dbo', o.type === 'table' ? 'user table' : o.type === 'view' ? 'view' : 'trigger']);
-            for (const m of ctx.modules()) rows.push([m.name, m.schema, m.kind === 'P' ? 'stored procedure' : 'function']);
+            for (const m of ctx.modules()) rows.push([m.name, m.schema, m.kind === 'P' ? 'stored procedure' : m.kind === 'TR' ? 'trigger' : 'function']);
             rows.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
             grid(['Name', 'Owner', 'Object_type'], rows, 'sp_help');
             return;
         }
         const mod = ctx.findModule(target);
         if (mod) {
-            grid(['Name', 'Owner', 'Type', 'Created_datetime'], [[mod.name, mod.schema, mod.kind === 'P' ? 'stored procedure' : mod.kind === 'FN' ? 'scalar function' : mod.kind === 'IF' ? 'inline function' : 'table function', mod.created]], 'sp_help');
+            grid(['Name', 'Owner', 'Type', 'Created_datetime'], [[mod.name, mod.schema, mod.kind === 'P' ? 'stored procedure' : mod.kind === 'TR' ? 'trigger' : mod.kind === 'FN' ? 'scalar function' : mod.kind === 'IF' ? 'inline function' : 'table function', mod.created]], 'sp_help');
             if (mod.params.length) {
                 grid(['Parameter_name', 'Type', 'Length', 'Prec', 'Scale', 'Param_order', 'Collation'], mod.params.map((p, k) => {
                     const t = typeInfo(p.type);

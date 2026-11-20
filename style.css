@@ -1367,6 +1367,7 @@ kbd {
 .lab-icon-key { color: #c9a227; }
 .lab-icon-link { color: #8a7fd0; }
 .lab-icon-procedure, .lab-icon-function { color: #5a9a6e; }
+.lab-icon-trigger { color: #b8862f; }
 .lab-empty-hint { color: var(--text-muted); font-size: 0.85rem; }
 
 .lab-main { display: grid; gap: 0.75rem; min-width: 0; }

@@ -95,7 +95,10 @@ export function sigTokens(text, base = 0) {
 // being read continues with them (see continues below)
 const STARTS = new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'WITH', 'CREATE', 'ALTER', 'DROP', 'TRUNCATE',
     'DECLARE', 'SET', 'IF', 'WHILE', 'BEGIN', 'END', 'ELSE', 'PRINT', 'EXEC', 'EXECUTE', 'RETURN', 'BREAK', 'CONTINUE',
-    'THROW', 'RAISERROR', 'USE', 'COMMIT', 'ROLLBACK', 'SAVE', 'GOTO', 'WAITFOR']);
+    'THROW', 'RAISERROR', 'USE', 'COMMIT', 'ROLLBACK', 'SAVE', 'GOTO', 'WAITFOR', 'OPEN', 'FETCH', 'CLOSE', 'DEALLOCATE']);
+// Cursor statements; these words are also common column names (Open, Close), so they start a statement only in a cursor's shape
+const CURSOR_WORDS = new Set(['OPEN', 'FETCH', 'CLOSE', 'DEALLOCATE']);
+const NOT_BEFORE_CURSOR = new Set(['SELECT', 'BY', 'AS', 'ROWS', 'ROW', 'ON', 'WHERE', 'AND', 'OR', 'THEN', 'WHEN', 'DISTINCT', 'NEXT', 'FIRST', 'SET', 'IN', 'IS', 'NOT', 'LIKE', 'BETWEEN']);
 // After DROP / CREATE: IF EXISTS / IF NOT EXISTS belongs to the statement
 const OBJECT_TYPES = new Set(['TABLE', 'VIEW', 'PROCEDURE', 'PROC', 'FUNCTION', 'INDEX', 'TRIGGER', 'SCHEMA', 'DATABASE',
     'SEQUENCE', 'TYPE', 'COLUMN', 'CONSTRAINT', 'SYNONYM', 'USER', 'ROLE', 'LOGIN', 'STATISTICS', 'DEFAULT', 'RULE', 'ASSEMBLY']);
@@ -127,6 +130,22 @@ export function parseBatch(text, base = 0) {
         while (v(i) === ';' && at(i)?.t === 'p') i++;
     };
     const isWord = (/** @type {number} */ k, /** @type {string} */ w) => u(k) === w;
+
+    /** Whether OPEN / FETCH / CLOSE / DEALLOCATE at k is a cursor statement, not a column named Open or Close. */
+    function isCursorStatement(k) {
+        const prev = sig[k - 1];
+        if (prev && ((prev.t === 'p' && prev.v !== ')' && prev.v !== ';') || NOT_BEFORE_CURSOR.has(prev.u))) return false;
+        const named = (/** @type {number} */ j) => !!sig[j] && (sig[j].t === 'ident' || (sig[j].t === 'word' && !sig[j].v.startsWith('@@') && !['FROM', 'AS', 'INTO'].includes(sig[j].u)));
+        const ends = (/** @type {number} */ j) => !sig[j] || (sig[j].t === 'p' && sig[j].v === ';') || (sig[j].t === 'word' && STARTS.has(sig[j].u)) || sig[j].u === 'INTO';
+        let j = k + 1;
+        if (u(k) === 'FETCH') {
+            if (['NEXT', 'PRIOR', 'FIRST', 'LAST'].includes(u(j))) return u(j + 1) === 'FROM';
+            if (['ABSOLUTE', 'RELATIVE'].includes(u(j))) return u(j + 2) === 'FROM' || ((v(j + 1) === '-' || v(j + 1) === '+') && u(j + 3) === 'FROM');
+            if (u(j) === 'FROM') j++;
+        }
+        if (u(j) === 'GLOBAL') j++;
+        return named(j) && ends(j + 1);
+    }
 
     /**
      * The end (exclusive) of an expression or SQL statement starting at `from`:
@@ -170,6 +189,9 @@ export function parseBatch(text, base = 0) {
             // INSERT … VALUES / DEFAULT VALUES has its rows: a SELECT after it is a new statement
             if (main === 'INSERT' && (w === 'VALUES' || (w === 'DEFAULT' && u(k + 1) === 'VALUES'))) expectQuery = false;
             if (!STARTS.has(w)) continue;
+            if (CURSOR_WORDS.has(w) && !isCursorStatement(k)) continue;
+            // UPDATE(Column) in a trigger is a test, not a statement
+            if (w === 'UPDATE' && sig[k + 1]?.v === '(') continue;
             const prev = sig[k - 1];
             const pu = prev?.u || '';
             // a, print / x.Select / = Update: a name, not a statement
@@ -272,7 +294,7 @@ export function parseBatch(text, base = 0) {
                 items.push({ name: name.v, kind: 'table', columns: src(i + 1, close), start: offsetOf(start) });
                 i = close + 1;
             } else if (isWord(i, 'CURSOR')) {
-                fail('Cursors (DECLARE … CURSOR) aren\'t supported in SQL Lab yet. A WHILE loop over a temp table does the same job.', i);
+                fail('A cursor\'s name doesn\'t start with @: DECLARE c CURSOR FOR SELECT …', i);
             } else {
                 const typeStart = i;
                 if (!at(i) || (at(i).t !== 'word' && at(i).t !== 'ident')) fail(`DECLARE ${name.v} needs a data type, for example INT or NVARCHAR(50).`, i);
@@ -297,7 +319,7 @@ export function parseBatch(text, base = 0) {
                         }
                         if (tok.u === 'CASE') caseDepth++;
                         else if (tok.u === 'END' && caseDepth > 0) caseDepth--;
-                        else if (depth === 0 && caseDepth === 0 && i > exprStart && STARTS.has(tok.u)) {
+                        else if (depth === 0 && caseDepth === 0 && i > exprStart && STARTS.has(tok.u) && !(CURSOR_WORDS.has(tok.u) && !isCursorStatement(i)) && !(tok.u === 'UPDATE' && sig[i + 1]?.v === '(')) {
                             const prev = sig[i - 1];
                             if (!(prev.v === ',' || prev.v === '.' || (prev.t === 'p' && prev.v !== ')'))) break;
                         }
@@ -313,6 +335,78 @@ export function parseBatch(text, base = 0) {
             break;
         }
         return { type: 'declare', items, start: offsetOf(start), end: endOf(i) };
+    }
+
+    /** DECLARE name [INSENSITIVE] [SCROLL] CURSOR [options] FOR SELECT … [FOR READ ONLY | FOR UPDATE [OF …]] */
+    function declareCursor() {
+        const start = i;
+        i++;
+        const name = v(i).replace(/^\[|\]$/g, '');
+        i++;
+        let scroll = false;
+        while (['INSENSITIVE', 'SCROLL'].includes(u(i))) {
+            if (u(i) === 'SCROLL') scroll = true;
+            i++;
+        }
+        if (!isWord(i, 'CURSOR')) fail(`DECLARE ${name} needs a data type, or CURSOR FOR a SELECT.`, i);
+        i++;
+        while (i < sig.length && !isWord(i, 'FOR')) {
+            const option = u(i);
+            if (!['LOCAL', 'GLOBAL', 'FORWARD_ONLY', 'SCROLL', 'STATIC', 'KEYSET', 'DYNAMIC', 'FAST_FORWARD', 'READ_ONLY', 'SCROLL_LOCKS', 'OPTIMISTIC', 'TYPE_WARNING'].includes(option)) {
+                fail(`Incorrect syntax near '${v(i)}': a cursor option or FOR was expected.`, i);
+            }
+            if (option === 'SCROLL' || option === 'STATIC' || option === 'KEYSET' || option === 'DYNAMIC') scroll = true;
+            i++;
+        }
+        if (!isWord(i, 'FOR')) fail('DECLARE … CURSOR needs FOR and a SELECT.', i);
+        i++;
+        const queryStart = i;
+        const end = scanEnd(i);
+        if (end === queryStart) fail('DECLARE … CURSOR FOR needs a SELECT.', i);
+        i = end;
+        let text = src(queryStart, end);
+        // FOR READ ONLY / FOR UPDATE [OF cols] describe the cursor, not the query
+        text = text.replace(/\s+FOR\s+(READ\s+ONLY|UPDATE(\s+OF\s+[\s\S]*)?)\s*$/i, '');
+        return { type: 'cursor', name, scroll, query: { text, start: offsetOf(queryStart) }, start: offsetOf(start), end: endOf(i) };
+    }
+
+    /** OPEN c, CLOSE c, DEALLOCATE c, FETCH [NEXT | PRIOR | FIRST | LAST | ABSOLUTE n | RELATIVE n FROM] c [INTO @a, …] */
+    function cursorStatement() {
+        const start = i;
+        const w = u(i);
+        i++;
+        let orientation = 'NEXT';
+        let offset = null;
+        if (w === 'FETCH') {
+            if (['NEXT', 'PRIOR', 'FIRST', 'LAST'].includes(u(i))) {
+                orientation = u(i);
+                i++;
+            } else if (['ABSOLUTE', 'RELATIVE'].includes(u(i))) {
+                orientation = u(i);
+                i++;
+                let k = i;
+                if (v(k) === '-' || v(k) === '+') k++;
+                offset = { text: src(i, k + 1), start: offsetOf(i) };
+                i = k + 1;
+            }
+            if (isWord(i, 'FROM')) i++;
+        }
+        if (isWord(i, 'GLOBAL')) i++;
+        if (!at(i)) fail(`${w} needs the cursor's name.`, i);
+        const name = v(i).replace(/^\[|\]$/g, '');
+        i++;
+        const into = [];
+        if (w === 'FETCH' && isWord(i, 'INTO')) {
+            i++;
+            for (;;) {
+                if (!at(i) || !v(i).startsWith('@')) fail('FETCH … INTO needs variables: INTO @a, @b.', i);
+                into.push(v(i));
+                i++;
+                if (v(i) !== ',') break;
+                i++;
+            }
+        }
+        return { type: w.toLowerCase(), name, orientation, offset, into, start: offsetOf(start), end: endOf(i) };
     }
 
     function closeOf(open) {
@@ -357,7 +451,9 @@ export function parseBatch(text, base = 0) {
         skipSemis();
         const start = i;
         const w = u(i);
+        if (w === 'DECLARE' && at(i + 1) && !v(i + 1).startsWith('@')) return declareCursor();
         if (w === 'DECLARE') return declare();
+        if (CURSOR_WORDS.has(w) && isCursorStatement(i)) return cursorStatement();
         if (w === 'SET') return setStatement();
         if (w === 'IF') {
             i++;

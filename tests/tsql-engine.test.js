@@ -298,10 +298,9 @@ describe('queries', () => {
         expect(run.translation.changes.map(c => c.message)).toEqual(expect.arrayContaining(['TOP n became LIMIT n.']));
     });
 
-    test('not yet supported statements say so', async () => {
-        expect((await tsql('MERGE INTO Emp AS t USING Emp AS s ON t.Id = s.Id WHEN MATCHED THEN UPDATE SET Name = s.Name;')).error.message).toMatch(/isn't supported in SQL Lab yet/);
-        expect((await tsql('CREATE TRIGGER tr ON Emp AFTER INSERT AS SELECT 1')).error.message).toMatch(/isn't supported in SQL Lab yet/);
-        expect((await tsql("DECLARE c CURSOR FOR SELECT 1")).error).not.toBeNull();
+    test('statements SQL Lab leaves out say so', async () => {
+        expect((await tsql('CREATE TRIGGER tr ON DATABASE FOR CREATE_TABLE AS SELECT 1')).error.message).toMatch(/aren't supported in SQL Lab/);
+        expect((await tsql('MERGE TOP (1) Emp AS t USING Emp AS s ON t.Id = s.Id WHEN MATCHED THEN DELETE;')).error.message).toMatch(/isn't supported in SQL Lab/);
     });
 });
 
