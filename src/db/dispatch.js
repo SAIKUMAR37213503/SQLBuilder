@@ -21,6 +21,7 @@ const OPERATIONS = {
     fetchPage: (a, { cursor, pageSize }) => a.fetchPage(cursor, { pageSize }),
     closeCursor: (a, { cursor }) => a.closeCursor(cursor),
     schema: (a) => a.schema(),
+    modules: (a) => a.modules(),
     countRows: (a, { name }) => a.countRows(name),
     // Reading an import changes nothing; running it is one transaction.
     // `source` is a file (up to 1 GB, read in parts); `text` is pasted text

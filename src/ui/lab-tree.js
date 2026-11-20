@@ -1,6 +1,6 @@
 // The SQL Lab explorer's tree, laid out like SQL Server Management Studio's
 // Object Explorer: Databases → a database → Tables / Views → a table →
-// Columns / Keys. Folders open and close with their arrow (or the Right and
+// Columns / Keys, and Programmability → Stored Procedures / Functions. Folders open and close with their arrow (or the Right and
 // Left arrow keys); the names keep their own actions (open a database, show
 // a table). Which folders are open is kept in a set of keys.
 
@@ -16,7 +16,9 @@ const ICONS = {
     view: 'M2.5 3h11v10h-11zM2.5 6.5h11M5 9.5c1.6-1.6 4.4-1.6 6 0-1.6 1.6-4.4 1.6-6 0z',
     column: 'M4 2.5h8v11H4zM4 6h8M4 9.5h8',
     key: 'M6 10a3 3 0 1 1 2.6-1.5L13.5 13.5M11 11l1.5-1.5M12.5 12.5 14 11',
-    link: 'M6.5 9.5l3-3M5.2 7.8 3.9 9.1a2.1 2.1 0 0 0 3 3l1.3-1.3M10.8 8.2l1.3-1.3a2.1 2.1 0 0 0-3-3L7.8 5.2'
+    link: 'M6.5 9.5l3-3M5.2 7.8 3.9 9.1a2.1 2.1 0 0 0 3 3l1.3-1.3M10.8 8.2l1.3-1.3a2.1 2.1 0 0 0-3-3L7.8 5.2',
+    procedure: 'M3.5 2.5h7l2 2v9h-9zM5.5 6.5h5M5.5 9h5M5.5 11.5h3',
+    function: 'M10.5 2.5c-1.5 0-2 .8-2.3 2.2L6.8 11.3c-.3 1.4-.8 2.2-2.3 2.2M5.5 6.5h5'
 };
 
 /** A small outline icon. */
@@ -115,4 +117,37 @@ export function objectChildren(object, isOpen) {
                 h('span', { class: 'lab-leaf-label' }, icon(k.icon), h('span', { class: 'lab-column-name' }, k.name), h('span', { class: 'lab-column-detail' }, k.detail)))))
     });
     return [columns, keyFolder];
+}
+
+/**
+ * Programmability: the database's stored procedures and functions, with their
+ * parameters (from the engine's modules()).
+ * @param {{ name: string, schema: string, kind: string, params: { name: string, type: string, output: boolean }[], returns: string | null }[]} modules
+ * @param {(key: string, fallback: boolean) => boolean} isOpen
+ */
+export function programmabilityNode(modules, isOpen) {
+    const leaf = (/** @type {any} */ m) => {
+        const params = m.params.map((/** @type {any} */ p) => `${p.name} ${p.type.toLowerCase()}${p.output ? ' output' : ''}`).join(', ');
+        const returns = m.kind === 'FN' ? ` returns ${String(m.returns || '').toLowerCase()}` : m.kind === 'P' ? '' : ' returns table';
+        return h('li', { class: 'lab-node lab-leaf' },
+            h('div', { class: 'lab-row' },
+                twisty(null, false, ''),
+                h('span', { class: 'lab-leaf-label', title: `${m.schema}.${m.name}(${params})${returns}` },
+                    icon(m.kind === 'P' ? 'procedure' : 'function'),
+                    h('span', { class: 'lab-column-name' }, `${m.schema}.${m.name}`),
+                    h('span', { class: 'lab-column-detail' }, `(${params})${returns}`))));
+    };
+    const group = (/** @type {string} */ key, /** @type {string} */ title, /** @type {any[]} */ items) => folderNode({
+        key, title, count: items.length, open: isOpen(key, true), label: title, children: () => items.map(leaf)
+    });
+    const procedures = modules.filter(m => m.kind === 'P');
+    const functions = modules.filter(m => m.kind !== 'P');
+    return folderNode({
+        key: 'programmability',
+        title: 'Programmability',
+        count: modules.length,
+        open: isOpen('programmability', false),
+        label: 'Programmability',
+        children: () => [group('programmability:procedures', 'Stored Procedures', procedures), group('programmability:functions', 'Functions', functions)]
+    });
 }

@@ -160,7 +160,7 @@ const SQLITE_SCHEMAS = new Set(['MAIN', 'TEMP']);
 /**
  * @param {string} sql
  * @param {LabDialect} dialect
- * @param {{ tableVariables?: Set<string> }} [options] SQL Server: names (lower case) of the table variables declared so far
+ * @param {{ tableVariables?: Set<string> | Map<string, string> }} [options] SQL Server: names (lower case) of the table variables declared so far (a Map gives their SQLite names)
  * @returns {{ sql: string, changes: { message: string, count: number }[] }}
  */
 export function translateForSqlite(sql, dialect, options = {}) {
@@ -189,9 +189,13 @@ function common(list, note, dialect) {
             const before = upper(list[prevSig(list, i - 1)]);
             const known = (dialect === 'sqlserver' && name === 'DBO') || (dialect === 'postgresql' && name === 'PUBLIC');
             const threePart = list[i + 3]?.v === '.' && (list[i + 4]?.t === 'word' || list[i + 4]?.t === 'ident');
-            if (!SQLITE_SCHEMAS.has(name) && (known || (SCHEMA_CONTEXT.has(before) && !threePart))) {
+            // ON sales.T (col) / ON sales.T AFTER INSERT is a table; JOIN … ON c.Id = … is an alias's column
+            const after = upper(list[nextSig(list, i + (threePart ? 5 : 3))]) || list[nextSig(list, i + (threePart ? 5 : 3))]?.v;
+            const onTable = before !== 'ON' || ['(', 'AFTER', 'FOR', 'INSTEAD', 'WITH'].includes(after || '');
+            const tableContext = SCHEMA_CONTEXT.has(before) && onTable;
+            if (!SQLITE_SCHEMAS.has(name) && (known || tableContext)) {
                 // database.schema.table: drop both
-                if (threePart && SCHEMA_CONTEXT.has(before)) list.splice(i, 4);
+                if (threePart && tableContext) list.splice(i, 4);
                 else list.splice(i, 2);
                 note('Schema names (dbo., public., sales.) were dropped, since SQLite has no schemas.');
                 continue;
@@ -509,7 +513,9 @@ function tsqlNames(list, note, options) {
             const name = t.v.slice(2).toUpperCase();
             if (SYSTEM_VARIABLES.has(name)) t.v = `@__${name.toLowerCase()}`;
         } else if (t.v.startsWith('@') && tableVariables.has(t.v.toLowerCase())) {
-            list[i] = { t: 'ident', v: `"${t.v.replace(/"/g, '""')}"` };
+            // A Map gives each table variable's SQLite name (procedures nest their own)
+            const mapped = tableVariables instanceof Map ? tableVariables.get(t.v.toLowerCase()) : '';
+            list[i] = { t: 'ident', v: mapped || `"${t.v.replace(/"/g, '""')}"` };
         } else if (ENGINE_FUNCTIONS[t.v.toUpperCase()]) {
             const open = nextSig(list, i + 1);
             const close = list[open]?.v === '(' ? nextSig(list, open + 1) : -1;

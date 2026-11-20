@@ -9,16 +9,21 @@
 // It follows SQL Server's documented behaviour (learn.microsoft.com T-SQL
 // reference). It isn't SQL Server and uses none of its code.
 
-import { translateForSqlite, tsqlCast } from '../dialect-translate.js';
+import { tokens, translateForSqlite, tsqlCast } from '../dialect-translate.js';
 import { adaptSqlServerScript } from '../import-sqlserver.js';
 import { toDate } from '../compat-functions.js';
 import { parseBatch, sigTokens, splitBatches, TsqlSyntaxError } from './parse.js';
+import { dropModule, findModule, listModules, parseModule, parseParams, renameModule, saveModule, splitName, unquote } from './modules.js';
+import { createCatalogView, rewriteCatalogNames, runSystemProcedure, SYSTEM_PROCEDURES } from './catalog.js';
 
 const MAX_RESULTS = 200;
 // A runaway WHILE stops here instead of hanging the tab
 const MAX_LOOP_STEPS = 1000000;
 // SELECT @v = @v + … is worked out one row at a time up to this many rows
 const MAX_ROW_ASSIGNMENTS = 10000;
+// Procedures, functions and dynamic SQL nest this deep, as in SQL Server
+const MAX_NESTING = 32;
+const CATALOG_WORDS = /information_schema|\bsys\s*\]?\s*\.|sysobjects/i;
 
 export const TSQL_VERSION = 'SQL Lab T-SQL engine 1.0 (SQLite storage), compatible with Microsoft SQL Server 2022 syntax';
 
@@ -36,12 +41,19 @@ export class TsqlError extends Error {
         this.at = at;
         /** @type {number | undefined} the script line, when it isn't the statement's first */
         this.line = undefined;
+        /** @type {string | undefined} the procedure or function it was raised in */
+        this.procedure = undefined;
     }
 }
 
 class Break { }
 class Continue { }
-class Return { }
+class Return {
+    /** @param {unknown} [value] RETURN's value, in a procedure or function */
+    constructor(value = null) {
+        this.value = value;
+    }
+}
 
 const INT_LIMITS = /** @type {Record<string, [number, number]>} */ ({
     TINYINT: [0, 255], SMALLINT: [-32768, 32767], INT: [-2147483648, 2147483647], BIGINT: [-Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]
@@ -138,7 +150,7 @@ function errorNumber(message) {
  * @param {string} script
  */
 export function runTsql(ctx, script) {
-    const { db, capi, now, size, runText, session } = ctx;
+    const { db, capi, now, size, session } = ctx;
     const changesBefore = capi.sqlite3_total_changes(db.pointer);
     /** @type {any[]} */
     const results = [];
@@ -152,10 +164,21 @@ export function runTsql(ctx, script) {
     const ran = [];
     const ranSet = new Set();
 
-    // Line and column of an offset in the script
-    const lineStarts = [0];
-    for (let k = 0; k < script.length; k++) if (script[k] === '\n') lineStarts.push(k + 1);
+    /**
+     * The text statements are running from: the script, a procedure's or
+     * function's definition, or dynamic SQL. Offsets count from its start.
+     * @typedef {{ text: string, lineStarts: number[], procedure: string | null }} Source
+     * @returns {Source}
+     */
+    const makeSource = (/** @type {string} */ text, /** @type {string | null} */ procedure) => {
+        const lineStarts = [0];
+        for (let k = 0; k < text.length; k++) if (text[k] === '\n') lineStarts.push(k + 1);
+        return { text, lineStarts, procedure };
+    };
+    let source = makeSource(script, null);
+    // Line and column of an offset in the current source
     const position = (/** @type {number} */ offset) => {
+        const { lineStarts } = source;
         let lo = 0;
         let hi = lineStarts.length - 1;
         while (lo < hi) {
@@ -166,21 +189,83 @@ export function runTsql(ctx, script) {
         return { line: lo + 1, column: offset - lineStarts[lo] + 1 };
     };
 
-    /** @type {Map<string, { name: string, kind: 'scalar' | 'table', type?: string, value?: unknown, table?: string }>} */
+    /** @type {Map<string, { name: string, kind: 'scalar' | 'table', type?: string, value?: unknown, table?: string, keep?: boolean }>} */
     let vars = new Map();
     let rowcount = 0;
     let lastError = 0;
-    /** @type {{ number: number, message: string, severity: number, state: number, line: number } | null} the error a CATCH block is handling */
+    /** @type {{ number: number, message: string, severity: number, state: number, line: number, procedure: string | null } | null} the error a CATCH block is handling */
     let handling = null;
     let loopSteps = 0;
+    // Procedures, functions and dynamic SQL running inside each other
+    let depth = 0;
+    /** @type {number} object id of the running procedure or function (@@PROCID) */
+    let moduleId = 0;
+    let inFunction = false;
+    /** @type {number | null} the script line of the outermost EXEC, which results inside it report */
+    let callLine = null;
+    /** @type {any[] | null} INSERT … EXEC collects the result sets here instead of showing them */
+    let capture = null;
+    /** @type {string[]} #temp tables a procedure created, dropped when it ends */
+    let scopeTemps = [];
+    /** @type {string[]} SQLite tables to drop when the run ends (function results, busy table variables) */
+    const dropLater = [];
+    /** @type {any} an error raised inside a function SQLite called, which SQLite only passes on as text */
+    let udfError = null;
+    /** @type {any} the first node of the batch running now (CREATE PROCEDURE must be it) */
+    let batchHead = null;
+    /** @type {number} where the statement running now starts (for errors in functions it calls) */
+    let currentAt = 0;
+    let tvfCount = 0;
+    const createdViews = new Set();
+    /** @type {Map<number, { def: import('./modules.js').ModuleDef, nodes: any[] }>} definitions read so far */
+    const parsedModules = new Map();
+    /** @type {Map<string, import('./modules.js').ModuleRow | null>} */
+    let moduleCache = new Map();
+    /** @type {import('./modules.js').ModuleRow[] | null} */
+    let allModules = null;
+    const forgetModules = () => {
+        moduleCache = new Map();
+        allModules = null;
+        parsedModules.clear();
+    };
+    const modules = () => (allModules ||= listModules(db));
+    const lookupModule = (/** @type {string} */ written) => {
+        const { schema, name } = splitName(written);
+        const key = `${schema}.${name}`.toLowerCase();
+        if (!moduleCache.has(key)) moduleCache.set(key, findModule(db, `[${schema}].[${name}]`));
+        return moduleCache.get(key) || null;
+    };
 
-    const tableVariables = () => new Set([...vars.values()].filter(x => x.kind === 'table').map(x => x.name.toLowerCase()));
+    const tableVariables = () => new Map([...vars.values()].filter(x => x.kind === 'table').map(x => [x.name.toLowerCase(), /** @type {string} */ (x.table)]));
+
+    /** Runs SQLite SQL, passing on an error a function raised inside it. */
+    function runText(text, options) {
+        udfError = null;
+        const out = ctx.runText(text, options);
+        if (out.error && udfError) out.error.cause = udfError;
+        udfError = null;
+        return out;
+    }
 
     /** Translates one statement (or expression wrapped in SELECT) for SQLite. */
     function translate(text) {
-        const out = translateForSqlite(text, 'sqlserver', { tableVariables: tableVariables() });
+        let t = text;
+        if (CATALOG_WORDS.test(t)) {
+            const list = tokens(t);
+            if (rewriteCatalogNames(list, ensureView)) t = list.map(x => x.v).join('');
+        }
+        t = expandModules(t);
+        const out = translateForSqlite(t, 'sqlserver', { tableVariables: tableVariables() });
         for (const c of out.changes) changes.set(c.message, (changes.get(c.message) || 0) + c.count);
         return out.sql;
+    }
+
+    function ensureView(key) {
+        const exists = db.selectValue('SELECT 1 FROM sqlite_temp_schema WHERE type = \'view\' AND name = ?', [`__cat_${key.replace('.', '_')}`]) !== undefined;
+        if (exists && createdViews.has(key)) return;
+        createCatalogView(db, key, ctx.databaseName);
+        createdViews.add(key);
+        changes.set('INFORMATION_SCHEMA and sys. views were answered from SQLite\'s catalog.', 1);
     }
 
     function systemValue(name) {
@@ -195,11 +280,11 @@ export function runTsql(ctx, script) {
         case '@__datefirst': return 7;
         case '@__language': return 'us_english';
         case '@__max_precision': return 38;
-        case '@__nestlevel': return 0;
+        case '@__nestlevel': return depth;
         case '@__lock_timeout': return -1;
         case '@__textsize': return 2147483647;
         case '@__options': return 5496;
-        case '@__procid': return 0;
+        case '@__procid': return moduleId;
         case '@__fetch_status': return -1;
         case '@__dbts': return null;
         case '@__microsoftversion': return 268435456;
@@ -210,7 +295,7 @@ export function runTsql(ctx, script) {
         case '@__error_severity': return handling ? handling.severity : null;
         case '@__error_state': return handling ? handling.state : null;
         case '@__error_line': return handling ? handling.line : null;
-        case '@__error_procedure': return null;
+        case '@__error_procedure': return handling ? handling.procedure : null;
         default: return undefined;
         }
     }
@@ -244,6 +329,16 @@ export function runTsql(ctx, script) {
     }
 
     function pushResult(entry) {
+        if (capture) {
+            if (entry.columns?.length) capture.push(entry);
+            return;
+        }
+        if (inFunction && entry.kind !== 'print') {
+            if (entry.columns?.length) throw new TsqlError('Select statements included within a function cannot return data to a client.', { number: 444, at: currentAt });
+            return;
+        }
+        // Inside a procedure, results belong to the line that called it
+        if (callLine !== null) entry = { ...entry, line: callLine };
         if (results.length >= MAX_RESULTS) {
             results.pop();
             omitted++;
@@ -259,7 +354,8 @@ export function runTsql(ctx, script) {
      */
     function runSql(sqlText, at, { keep = false, show = true, original = '' } = {}) {
         record(sqlText);
-        const out = runText(sqlText, { size, keep, bind: binder(at) });
+        currentAt = at;
+        const out = runText(sqlText, { size: capture ? 1000000 : size, keep: keep && !capture && depth === 0, bind: binder(at) });
         const where = position(at);
         if (out.error) {
             if (out.error.cause instanceof TsqlError) throw Object.assign(out.error.cause, { at: out.error.cause.at >= 0 ? out.error.cause.at : at });
@@ -288,6 +384,7 @@ export function runTsql(ctx, script) {
 
     /** The value of an expression (the first column of SELECT expr). */
     function evaluate(expr) {
+        currentAt = expr.start;
         const sqlText = translate(`SELECT ${expr.text}`);
         const out = runText(sqlText, { size: 1, keep: false, bind: binder(expr.start) });
         if (out.error) {
@@ -330,8 +427,14 @@ export function runTsql(ctx, script) {
                 const key = item.name.toLowerCase();
                 if (vars.has(key)) throw new TsqlError(`The variable name '${item.name}' has already been declared. Variable names must be unique within a query batch.`, { number: 134, at: node.start });
                 if (item.kind === 'table') {
-                    const table = `"${item.name.replace(/"/g, '""')}"`;
-                    db.exec(`DROP TABLE IF EXISTS temp.${table}`);
+                    // A procedure's table variables get their own SQLite names, so a caller's @t is left alone
+                    let table = `"${(depth ? `${item.name}:${depth}` : item.name).replace(/"/g, '""')}"`;
+                    try {
+                        db.exec(`DROP TABLE IF EXISTS temp.${table}`);
+                    } catch {
+                        // still being read (a function's table, while the query calling it runs)
+                        table = `"${`${item.name}:${depth}:${++tvfCount}`.replace(/"/g, '""')}"`;
+                    }
                     vars.set(key, { name: item.name, kind: 'table', table });
                     createTable(table, item.columns, node.start, true);
                 } else {
@@ -390,8 +493,9 @@ export function runTsql(ctx, script) {
             return;
         case 'break': throw new Break();
         case 'continue': throw new Continue();
-        case 'return': throw new Return();
+        case 'return': throw new Return(node.expr ? evaluate(node.expr) : null);
         case 'print': {
+            if (inFunction) throw new TsqlError('Invalid use of a side-effecting operator \'PRINT\' within a function.', { number: 443, at: node.start });
             const value = evaluate(node.expr);
             pushResult({ kind: 'print', sql: `PRINT ${node.expr.text}`, text: printText(value), columns: [], rows: [], line: position(node.start).line, statement: statements, durationMs: 0 });
             rowcount = 0;
@@ -483,10 +587,11 @@ export function runTsql(ctx, script) {
 
     function errorInfo(e) {
         const at = e && typeof e.at === 'number' && e.at >= 0 ? e.at : 0;
-        if (e instanceof TsqlError) return { number: e.number, message: e.message, severity: e.severity, state: e.state, line: e.line || position(at).line };
-        if (e instanceof TsqlSyntaxError) return { number: 102, message: e.message, severity: 15, state: 1, line: position(e.offset).line };
+        const procedure = (e && e.procedure) || source.procedure || null;
+        if (e instanceof TsqlError) return { number: e.number, message: e.message, severity: e.severity, state: e.state, line: e.line || position(at).line, procedure };
+        if (e instanceof TsqlSyntaxError) return { number: 102, message: e.message, severity: 15, state: 1, line: position(e.offset).line, procedure };
         const message = e instanceof Error ? e.message : String(e);
-        return { number: errorNumber(message), message, severity: 16, state: 1, line: position(at).line };
+        return { number: errorNumber(message), message, severity: 16, state: 1, line: position(at).line, procedure };
     }
 
     // ---- SQL statements
@@ -495,10 +600,34 @@ export function runTsql(ctx, script) {
         const sig = sigTokens(node.text);
         const head = sig[0]?.u || '';
         const object = sig[1]?.u === 'OR' ? sig[3]?.u : sig[1]?.u;
-        if ((head === 'CREATE' || head === 'ALTER') && ['PROCEDURE', 'PROC', 'FUNCTION', 'TRIGGER'].includes(object || '')) {
-            throw new TsqlError(`CREATE ${object} isn't supported in SQL Lab yet.`, { number: 102, at: node.start });
+        if (head === 'CREATE' || head === 'ALTER') {
+            if (object === 'TRIGGER') throw new TsqlError('CREATE TRIGGER isn\'t supported in SQL Lab yet.', { number: 102, at: node.start });
+            if (['PROCEDURE', 'PROC', 'FUNCTION'].includes(object || '')) {
+                defineModule(node);
+                return;
+            }
         }
-        if (head === 'EXEC' || head === 'EXECUTE') throw new TsqlError('EXEC (stored procedures) isn\'t supported in SQL Lab yet.', { number: 2812, at: node.start });
+        if (head === 'DROP' && ['PROCEDURE', 'PROC', 'FUNCTION'].includes(sig[1]?.u)) {
+            dropModules(node, sig);
+            return;
+        }
+        if (inFunction) checkSideEffects(node, sig);
+        if (head === 'EXEC' || head === 'EXECUTE') {
+            runExec(node);
+            return;
+        }
+        if (head === 'INSERT') {
+            const execAt = findWord(sig, 1, 'EXEC') >= 0 ? findWord(sig, 1, 'EXEC') : findWord(sig, 1, 'EXECUTE');
+            if (execAt > 0) {
+                insertExec(node, sig, execAt);
+                return;
+            }
+        }
+        // A procedure's #temp tables are dropped when it ends
+        if (depth > 0 && !inFunction) {
+            const temp = tempTableCreated(sig);
+            if (temp) scopeTemps.push(temp);
+        }
         if (head === 'MERGE') throw new TsqlError('MERGE isn\'t supported in SQL Lab yet: use UPDATE, then INSERT … WHERE NOT EXISTS.', { number: 102, at: node.start });
         if (head === 'TRUNCATE' && sig[1]?.u === 'TABLE') {
             const name = node.text.slice(sig[2].start, sig[sig.length - 1].end).replace(/;$/, '').trim();
@@ -635,6 +764,595 @@ export function runTsql(ctx, script) {
         }
     }
 
+    // ---- procedures, functions and dynamic SQL
+
+    const nowText = () => new Date().toISOString().replace('T', ' ').slice(0, 23);
+
+    /** A definition read once per run: its parsed header and statements. */
+    function parsedModule(mod) {
+        let p = parsedModules.get(mod.id);
+        if (!p) {
+            const def = parseModule(mod.definition, 0);
+            const nodes = def.kind === 'IF' ? [] : parseBatch(def.body, def.bodyStart);
+            p = { def, nodes };
+            parsedModules.set(mod.id, p);
+        }
+        return p;
+    }
+
+    /** CREATE / ALTER / CREATE OR ALTER PROCEDURE or FUNCTION. */
+    function defineModule(node) {
+        const started = now();
+        if (depth === 0 && batchHead && node !== batchHead) {
+            const sig = sigTokens(node.text);
+            const what = `${sig[0].u === 'ALTER' ? 'ALTER' : sig[1]?.u === 'OR' ? 'CREATE OR ALTER' : 'CREATE'} ${['FUNCTION'].includes(sig[sig[1]?.u === 'OR' ? 3 : 1]?.u) ? 'FUNCTION' : 'PROCEDURE'}`;
+            throw new TsqlError(`'${what}' must be the first statement in a query batch. Put GO before it.`, { number: 111, at: node.start });
+        }
+        const def = parseModule(node.text, node.start);
+        const label = def.kind === 'P' ? 'procedure' : 'function';
+        if (def.kind !== 'IF') {
+            // Read the statements now, so mistakes show at CREATE, as in SQL Server
+            const nodes = parseBatch(def.body, node.start + def.bodyStart);
+            if (def.kind !== 'P') {
+                const block = nodes.length === 1 && nodes[0].type === 'block' ? nodes[0] : null;
+                const last = block ? block.body[block.body.length - 1] : null;
+                if (!block || !last || last.type !== 'return' || (def.kind === 'FN') !== !!last.expr) {
+                    throw new TsqlError(def.kind === 'FN'
+                        ? 'The last statement included within a function must be a return statement: RETURN followed by the value.'
+                        : 'The last statement of a table-valued function must be RETURN, with no value.', { number: 455, at: node.start });
+                }
+                // Functions can't change data or print, as in SQL Server
+                const visit = (/** @type {any[]} */ list) => {
+                    for (const n of list) {
+                        if (n.type === 'sql') checkSideEffects(n, sigTokens(n.text));
+                        else if (n.type === 'print') throw new TsqlError('Invalid use of a side-effecting operator \'PRINT\' within a function.', { number: 443, at: n.start });
+                        else if (n.type === 'tran') throw new TsqlError(`Invalid use of a side-effecting operator '${n.action.toUpperCase()} TRANSACTION' within a function.`, { number: 443, at: n.start });
+                        for (const child of [n.then, n.else].filter(Boolean)) visit([child]);
+                        for (const key of ['body', 'handler']) if (Array.isArray(n[key])) visit(n[key]);
+                        if (n.body && !Array.isArray(n.body)) visit([n.body]);
+                    }
+                };
+                visit(nodes);
+            }
+        }
+        const existing = lookupModule(`[${def.schema}].[${def.name}]`);
+        const clash = db.selectValue('SELECT type FROM sqlite_schema WHERE type IN (\'table\', \'view\', \'trigger\') AND name = ? COLLATE NOCASE', [def.name]);
+        if (def.action === 'create' && (existing || (clash && def.schema.toLowerCase() === 'dbo'))) {
+            throw new TsqlError(`There is already an object named '${def.name}' in the database.`, { number: 2714, at: node.start });
+        }
+        if (def.action === 'alter' && !existing) throw new TsqlError(`Invalid object name '${def.name}'.`, { number: 208, at: node.start });
+        if (existing && (existing.kind === 'P') !== (def.kind === 'P')) {
+            throw new TsqlError(`Cannot perform alter on '${def.name}' because it is an incompatible object type.`, { number: 2010, at: node.start });
+        }
+        const row = saveModule(db, def, node.text.trim().replace(/;\s*$/, ''), nowText());
+        forgetModules();
+        if (row.kind === 'FN') registerFunction(row);
+        statements++;
+        const verb = existing ? 'altered' : 'created';
+        pushResult({ kind: 'other', sql: node.text.trim(), columns: [], rows: [], more: false, cursor: null, rowsAffected: null, durationMs: Math.max(0, now() - started), line: position(node.start).line, statement: statements - 1, note: `The ${label} ${def.schema}.${def.name} was ${verb}.` });
+        rowcount = 0;
+    }
+
+    /** DROP PROCEDURE / FUNCTION [IF EXISTS] a, b */
+    function dropModules(node, sig) {
+        const isProc = sig[1].u !== 'FUNCTION';
+        let k = 2;
+        const ifExists = sig[2]?.u === 'IF' && sig[3]?.u === 'EXISTS';
+        if (ifExists) k = 4;
+        if (!sig[k]) throw new TsqlError(`DROP ${isProc ? 'PROCEDURE' : 'FUNCTION'} needs a name.`, { number: 102, at: node.start });
+        const names = splitArgs(node.text.slice(sig[k].start).replace(/;\s*$/, ''));
+        for (const written of names) {
+            const mod = lookupModule(written);
+            if (!mod || (mod.kind === 'P') !== isProc) {
+                if (ifExists) continue;
+                throw new TsqlError(`Cannot drop the ${isProc ? 'procedure' : 'function'} '${splitName(written).name}', because it does not exist or you do not have permission.`, { number: 3701, at: node.start });
+            }
+            dropModule(db, mod.id);
+            forgetModules();
+        }
+        statements++;
+        pushResult({ kind: 'other', sql: node.text.trim(), columns: [], rows: [], more: false, cursor: null, rowsAffected: null, durationMs: 0, line: position(node.start).line, statement: statements - 1 });
+    }
+
+    /** Functions can change only their own table variables, as in SQL Server. */
+    function checkSideEffects(node, sig) {
+        const head = sig[0]?.u || '';
+        if (!['INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TRUNCATE', 'CREATE', 'DROP', 'ALTER', 'EXEC', 'EXECUTE'].includes(head)) return;
+        let k = 1;
+        if (head === 'INSERT' && sig[k]?.u === 'INTO') k++;
+        if (head === 'DELETE' && sig[k]?.u === 'FROM') k++;
+        if (['INSERT', 'UPDATE', 'DELETE'].includes(head) && sig[k]?.v.startsWith('@')) return;
+        throw new TsqlError(`Invalid use of a side-effecting operator '${head}' within a function.`, { number: 443, at: node.start });
+    }
+
+    /** CREATE TABLE #t / SELECT … INTO #t: the #t, or ''. */
+    function tempTableCreated(sig) {
+        if (sig[0]?.u === 'CREATE' && sig[1]?.u === 'TABLE' && /^\[?#/.test(sig[2]?.v || '')) return unquote(sig[2].v);
+        if (sig[0]?.u === 'SELECT' || sig[0]?.u === 'WITH') {
+            const into = findWord(sig, 0, 'INTO');
+            if (into > 0 && /^\[?#/.test(sig[into + 1]?.v || '')) return unquote(sig[into + 1].v);
+        }
+        return '';
+    }
+
+    /**
+     * EXEC's parts: EXEC [@rc =] name args, EXEC (@sql) or EXEC ('…' + @x).
+     * @returns {{ dynamic: { text: string, start: number } | null, ret: string | null, name: string, nameVar: string | null, args: any[] }}
+     */
+    function parseExec(text, base) {
+        const sig = sigTokens(text, base);
+        const local = (/** @type {number} */ k) => (sig[k] ? sig[k].start - base : text.length);
+        let k = 1;
+        if (sig[k]?.v === '(') {
+            let level = 0;
+            let close = k;
+            for (; close < sig.length; close++) {
+                if (sig[close].t !== 'p') continue;
+                if (sig[close].v === '(') level++;
+                else if (sig[close].v === ')' && --level === 0) break;
+            }
+            if (close >= sig.length || close === k + 1) throw new TsqlError('EXEC ( … ) needs the SQL to run, as text.', { number: 102, at: base });
+            return { dynamic: { text: text.slice(local(k + 1), local(close)), start: sig[k + 1].start }, ret: null, name: '', nameVar: null, args: [] };
+        }
+        let ret = null;
+        if (sig[k]?.v.startsWith('@') && sig[k + 1]?.v === '=') {
+            ret = sig[k].v;
+            k += 2;
+        }
+        let name = '';
+        let nameVar = null;
+        if (sig[k]?.v.startsWith('@')) {
+            nameVar = sig[k].v;
+            k++;
+        } else {
+            const from = k;
+            while (k < sig.length && (sig[k].t === 'word' || sig[k].t === 'ident' || (sig[k].t === 'p' && sig[k].v === '.'))) {
+                // Arguments start after the name: the next word without a dot before it
+                if (k > from && sig[k].t !== 'p' && sig[k - 1].v !== '.') break;
+                k++;
+            }
+            if (k === from) throw new TsqlError('EXEC needs the name of a procedure.', { number: 102, at: base });
+            name = text.slice(local(from), sig[k - 1].end - base);
+        }
+        // Arguments, split at top-level commas
+        const args = [];
+        let level = 0;
+        let from = k;
+        const finish = (/** @type {number} */ end) => {
+            let a = from;
+            let b = end;
+            if (a >= b) return;
+            const arg = { name: /** @type {string | null} */ (null), text: '', start: 0, output: false, isDefault: false, bare: false };
+            if (sig[a].v.startsWith('@') && sig[a + 1]?.v === '=' && b > a + 2) {
+                arg.name = sig[a].v;
+                a += 2;
+            }
+            if (b - 1 > a && ['OUTPUT', 'OUT'].includes(sig[b - 1].u)) {
+                arg.output = true;
+                b--;
+            }
+            arg.text = text.slice(local(a), sig[b - 1].end - base);
+            arg.start = sig[a].start;
+            if (b === a + 1 && sig[a].u === 'DEFAULT') arg.isDefault = true;
+            // EXEC sp_help Customers: a bare name is passed as text
+            else if (b === a + 1 && ((sig[a].t === 'word' && !sig[a].v.startsWith('@') && sig[a].u !== 'NULL') || sig[a].t === 'ident')) arg.bare = true;
+            args.push(arg);
+        };
+        for (; k < sig.length; k++) {
+            const t = sig[k];
+            if (t.t === 'p' && t.v === '(') level++;
+            else if (t.t === 'p' && t.v === ')') level--;
+            else if (level === 0 && t.t === 'p' && (t.v === ',' || t.v === ';')) {
+                finish(k);
+                from = k + 1;
+                if (t.v === ';') break;
+            } else if (level === 0 && t.u === 'WITH' && ['RECOMPILE', 'RESULT'].includes(sig[k + 1]?.u || '')) break;
+        }
+        finish(k);
+        return { dynamic: null, ret, name, nameVar, args };
+    }
+
+    /** An EXEC argument's value, in the caller's scope. */
+    function argValue(arg) {
+        if (arg.bare) return unquote(arg.text);
+        return evaluate({ text: arg.text, start: arg.start });
+    }
+
+    /**
+     * Matches EXEC's arguments to a procedure's parameters, giving each its value.
+     * @returns {{ scope: Map<string, any>, outputs: { param: string, target: string }[] }}
+     */
+    function bindArgs(label, params, args, at, { functionCall = false } = {}) {
+        const scope = new Map();
+        const outputs = [];
+        /** @type {Map<string, any>} */
+        const named = new Map();
+        const positional = [];
+        for (const arg of args) {
+            if (arg.name) named.set(arg.name.toLowerCase(), arg);
+            else {
+                if (named.size) throw new TsqlError(`Must pass parameter number ${positional.length + named.size + 1} and subsequent parameters as '@name = value'. After the form '@name = value' has been used, all subsequent parameters must be passed in the form '@name = value'.`, { number: 119, at });
+                positional.push(arg);
+            }
+        }
+        if (positional.length > params.length) throw new TsqlError(`Procedure or function ${label} has too many arguments specified.`, { number: 8144, at });
+        for (const key of named.keys()) {
+            if (!params.some((/** @type {any} */ p) => p.name.toLowerCase() === key)) throw new TsqlError(`${named.get(key).name} is not a parameter for procedure ${label}.`, { number: 8145, at });
+        }
+        params.forEach((/** @type {any} */ p, /** @type {number} */ k) => {
+            const key = p.name.toLowerCase();
+            const arg = named.get(key) || positional[k];
+            let value;
+            if (arg && !arg.isDefault) value = argValue(arg);
+            else if (p.default !== null) value = evaluate({ text: p.default, start: at });
+            else if (functionCall) throw new TsqlError(`An insufficient number of arguments were supplied for the procedure or function ${label}.`, { number: 313, at });
+            else throw new TsqlError(`Procedure or function '${label}' expects parameter '${p.name}', which was not supplied.`, { number: 201, at });
+            let converted;
+            try {
+                converted = convertTo(p.type, value);
+            } catch (e) {
+                if (e instanceof TsqlError) e.at = at;
+                throw e;
+            }
+            scope.set(key, { name: p.name, kind: 'scalar', type: p.type, value: converted });
+            if (arg && arg.output) {
+                if (!p.output) throw new TsqlError(`The formal parameter "${p.name}" was not declared as an OUTPUT parameter, but the actual parameter passed in requested output.`, { number: 8162, at });
+                if (!arg.text.startsWith('@')) throw new TsqlError(`OUTPUT needs a variable to receive ${p.name}, such as @result OUTPUT.`, { number: 179, at });
+                outputs.push({ param: key, target: arg.text });
+            }
+        });
+        return { scope, outputs };
+    }
+
+    /**
+     * Runs statements in a scope of their own (a procedure, a function or
+     * dynamic SQL), then puts the caller's scope back.
+     * @param {{ nodes: any[], src: Source, scope: Map<string, any>, id?: number, fn?: boolean, at: number }} options
+     * @returns {{ returned: unknown, scope: Map<string, any> }}
+     */
+    function runScope({ nodes, src, scope, id = moduleId, fn = false, at }) {
+        if (depth >= MAX_NESTING) throw new TsqlError(`Maximum stored procedure, function, trigger, or view nesting level exceeded (limit ${MAX_NESTING}).`, { number: 217, at });
+        const saved = { vars, source, moduleId, inFunction, scopeTemps, callLine, batchHead };
+        if (callLine === null) callLine = position(at).line;
+        vars = scope;
+        source = src;
+        moduleId = id;
+        inFunction = fn;
+        scopeTemps = [];
+        batchHead = nodes[0] || null;
+        depth++;
+        let returned = null;
+        try {
+            for (const n of nodes) exec(n);
+        } catch (e) {
+            if (e instanceof Return) returned = e.value;
+            else {
+                let err = e;
+                if (e instanceof Break || e instanceof Continue) err = new TsqlError('BREAK and CONTINUE can only be used inside a WHILE loop.', { number: 135, at });
+                else if (!(e instanceof TsqlError)) {
+                    const info = errorInfo(e);
+                    err = new TsqlError(info.message, { number: info.number, severity: info.severity, state: info.state, at });
+                    err.line = info.line;
+                }
+                if (!err.procedure && src.procedure) {
+                    err.procedure = src.procedure;
+                    if (!err.line) err.line = position(err.at >= 0 ? err.at : 0).line;
+                } else if (!err.procedure) err.line = undefined;
+                err.at = at;
+                throw err;
+            }
+        } finally {
+            depth--;
+            for (const v of vars.values()) {
+                if (v.kind === 'table' && !v.keep) dropTemp(v.table);
+            }
+            for (const t of scopeTemps) dropTemp(`"${t.replace(/"/g, '""')}"`);
+            ({ vars, source, moduleId, inFunction, scopeTemps, callLine, batchHead } = saved);
+        }
+        return { returned, scope };
+    }
+
+    function dropTemp(table) {
+        try {
+            db.exec(`DROP TABLE IF EXISTS temp.${table}`);
+        } catch {
+            dropLater.push(table);
+        }
+    }
+
+    function moduleSource(mod) {
+        return makeSource(mod.definition, mod.name);
+    }
+
+    /** EXEC [@rc =] procedure …, EXEC (@sql), EXEC sp_executesql …, EXEC sp_help … */
+    function runExec(node) {
+        const call = parseExec(node.text, node.start);
+        if (call.dynamic) {
+            const text = printText(evaluate(call.dynamic));
+            runDynamic(text, new Map(), node.start);
+            return;
+        }
+        const written = call.nameVar ? printText(evaluate({ text: call.nameVar, start: node.start })) : call.name;
+        const { name } = splitName(written);
+        const lower = name.toLowerCase();
+        if (lower === 'sp_executesql') {
+            executeSql(call, node.start);
+            return;
+        }
+        const mod = lookupModule(written);
+        if (!mod && SYSTEM_PROCEDURES[lower]) {
+            runSystem(lower, call, node);
+            return;
+        }
+        if (!mod) throw new TsqlError(`Could not find stored procedure '${written}'.`, { number: 2812, at: node.start });
+        if (mod.kind === 'IF' || mod.kind === 'TF') throw new TsqlError(`The request for procedure '${mod.name}' failed because '${mod.name}' is a table valued function object.`, { number: 2809, at: node.start });
+        if (mod.kind === 'FN') {
+            const { def } = parsedModule(mod);
+            const { scope } = bindArgs(`${mod.schema}.${mod.name}`, def.params, call.args, node.start, { functionCall: true });
+            const value = invokeScalar(mod, [...scope.values()].map(v => v.value), node.start);
+            if (call.ret) assign(call.ret, value, node.start);
+            return;
+        }
+        const { def, nodes } = parsedModule(mod);
+        const { scope, outputs } = bindArgs(mod.name, def.params, call.args, node.start);
+        const run = runScope({ nodes, src: moduleSource(mod), scope, id: mod.id, at: node.start });
+        for (const o of outputs) assign(o.target, run.scope.get(o.param).value, node.start);
+        if (call.ret) assign(call.ret, run.returned === null || run.returned === undefined ? 0 : run.returned, node.start);
+    }
+
+    /** Dynamic SQL: its own batch, which sees #temp tables but not the caller's variables. */
+    function runDynamic(text, scope, at) {
+        let nodes;
+        try {
+            nodes = parseBatch(text, 0);
+        } catch (e) {
+            if (e instanceof TsqlSyntaxError) throw new TsqlError(e.message, { number: 102, severity: 15, at });
+            throw e;
+        }
+        return runScope({ nodes, src: makeSource(text, null), scope, at });
+    }
+
+    /** EXEC sp_executesql @stmt, N'@a INT, @b INT OUTPUT', @a = 1, @b = @x OUTPUT */
+    function executeSql(call, at) {
+        const args = [...call.args];
+        const take = (/** @type {string} */ key, /** @type {number} */ index) => {
+            const k = args.findIndex(a => a.name && a.name.toLowerCase() === key);
+            if (k >= 0) return args.splice(k, 1)[0];
+            const positional = args.filter(a => !a.name);
+            if (positional.length && index === 0) return args.splice(args.indexOf(positional[0]), 1)[0];
+            return null;
+        };
+        const stmt = take('@stmt', 0);
+        if (!stmt) throw new TsqlError('Procedure expects parameter \'@statement\' of type \'ntext/nchar/nvarchar\'.', { number: 214, at });
+        const text = printText(argValue(stmt));
+        const defArg = take('@params', 0);
+        const definition = defArg ? printText(argValue(defArg)) : '';
+        let params = [];
+        try {
+            params = definition.trim() ? parseParams(definition) : [];
+        } catch (e) {
+            throw new TsqlError(e instanceof Error ? e.message : String(e), { number: 102, at });
+        }
+        const { scope, outputs } = bindArgs('sp_executesql', params, args, at);
+        const run = runDynamic(text, scope, at);
+        for (const o of outputs) assign(o.target, run.scope.get(o.param).value, at);
+    }
+
+    /** sp_help, sp_helptext, sp_columns … (catalog.js) */
+    function runSystem(lower, call, node) {
+        const names = SYSTEM_PROCEDURES[lower];
+        /** @type {Record<string, unknown>} */
+        const args = {};
+        let k = 0;
+        for (const arg of call.args) {
+            const key = arg.name ? arg.name.toLowerCase() : names[k++];
+            if (!key || !names.includes(key)) throw new TsqlError(arg.name ? `${arg.name} is not a parameter for procedure ${lower}.` : `Procedure or function ${lower} has too many arguments specified.`, { number: arg.name ? 8145 : 8144, at: node.start });
+            args[key] = arg.isDefault ? null : argValue(arg);
+        }
+        const started = now();
+        const line = position(node.start).line;
+        try {
+            runSystemProcedure({
+                db,
+                dbName: ctx.databaseName,
+                grid: (columns, rows, title) => {
+                    statements++;
+                    rowcount = rows.length;
+                    pushResult({ kind: 'query', sql: `${node.text.trim()} -- ${title}`, columns, rows: rows.slice(0, 1000), more: rows.length > 1000, cursor: null, rowsAffected: null, durationMs: Math.max(0, now() - started), line, statement: statements - 1 });
+                },
+                print: text => pushResult({ kind: 'print', sql: node.text.trim(), text, columns: [], rows: [], line, statement: statements, durationMs: 0 }),
+                modules,
+                findModule: lookupModule,
+                renameModule: (id, newName) => {
+                    renameModule(db, id, newName);
+                    forgetModules();
+                },
+                fail: (message, number) => {
+                    throw new TsqlError(message, { number, at: node.start });
+                }
+            }, lower, args);
+        } catch (e) {
+            if (e instanceof TsqlError) throw e;
+            const message = String(e instanceof Error ? e.message : e).replace(/^.*?Error:\s*/, '');
+            throw new TsqlError(message, { number: errorNumber(message), at: node.start });
+        }
+    }
+
+    /** INSERT INTO t [(cols)] EXEC …: the procedure's rows go into t. */
+    function insertExec(node, sig, execAt) {
+        const head = node.text.slice(0, sig[execAt].start).trim();
+        const execNode = { ...node, text: node.text.slice(sig[execAt].start), start: node.start + sig[execAt].start };
+        const outer = capture;
+        capture = [];
+        let sets;
+        try {
+            runExec(execNode);
+            sets = capture;
+        } finally {
+            capture = outer;
+        }
+        const rows = sets.flatMap((/** @type {any} */ r) => r.rows);
+        const width = sets[0]?.columns.length || 0;
+        let count = 0;
+        if (rows.length) {
+            const target = translate(`${head} VALUES (${new Array(width).fill('NULL').join(', ')})`).replace(/VALUES\s*\([^)]*\)\s*;?\s*$/i, '');
+            for (const row of rows) {
+                const out = runText(`${target} VALUES (${row.map((/** @type {any} */ _v, /** @type {number} */ k) => `@__v${k}`).join(', ')})`, { size: 1, keep: false, bind: (/** @type {any} */ stmt) => {
+                    row.forEach((/** @type {any} */ v, /** @type {number} */ k) => stmt.bind(`@__v${k}`, v && typeof v === 'object' && 'blob' in v ? null : v));
+                } });
+                if (out.error) {
+                    const message = String(out.error.message).replace(/^Error:\s*/, '');
+                    throw new TsqlError(message, { number: errorNumber(message), at: node.start });
+                }
+                count++;
+            }
+        }
+        statements++;
+        rowcount = count;
+        pushResult({ kind: 'modify', sql: node.text.trim(), columns: [], rows: [], more: false, cursor: null, rowsAffected: count, durationMs: 0, line: position(node.start).line, statement: statements - 1 });
+    }
+
+    /** Makes a scalar function callable from SQL as sqllab_fn_<id>. */
+    function registerFunction(mod) {
+        db.createFunction({ name: `sqllab_fn_${mod.id}`, arity: -1, deterministic: false,
+            xFunc: (/** @type {any} */ _c, /** @type {any[]} */ ...args) => {
+                try {
+                    const current = (allModules || modules()).find(m => m.id === mod.id);
+                    if (!current) throw new TsqlError(`Cannot find either column "${mod.schema}" or the user-defined function or aggregate "${mod.schema}.${mod.name}", or the name is ambiguous.`, { number: 4121, at: currentAt });
+                    const value = invokeScalar(current, args.map(a => (typeof a === 'bigint' ? Number(a) : a)), currentAt);
+                    return value === undefined ? null : value;
+                } catch (e) {
+                    udfError = e;
+                    throw e;
+                }
+            } });
+    }
+
+    /** Runs a scalar function with argument values; returns its value. */
+    function invokeScalar(mod, values, at) {
+        const { def, nodes } = parsedModule(mod);
+        const label = `${mod.schema}.${mod.name}`;
+        if (values.length < def.params.length) throw new TsqlError(`An insufficient number of arguments were supplied for the procedure or function ${label}.`, { number: 313, at });
+        if (values.length > def.params.length) throw new TsqlError(`Procedure or function ${label} has too many arguments specified.`, { number: 8144, at });
+        const scope = new Map();
+        def.params.forEach((p, k) => scope.set(p.name.toLowerCase(), { name: p.name, kind: 'scalar', type: p.type, value: convertTo(p.type, values[k]) }));
+        const savedAt = currentAt;
+        try {
+            const { returned } = runScope({ nodes, src: moduleSource(mod), scope, id: mod.id, fn: true, at });
+            return convertTo(/** @type {string} */ (def.returns), returned);
+        } finally {
+            currentAt = savedAt;
+        }
+    }
+
+    /**
+     * Calls to user functions in a statement: dbo.f(x) becomes sqllab_fn_<id>(x);
+     * an inline table-valued function becomes its SELECT; a multi-statement one
+     * runs now and becomes the table it returned.
+     */
+    function expandModules(text) {
+        const list = modules();
+        if (!list.some(m => m.kind !== 'P')) return text;
+        const names = new Set(list.filter(m => m.kind !== 'P').map(m => m.name.toLowerCase()));
+        let out = text;
+        for (let round = 0; round < MAX_NESTING; round++) {
+            const toks = tokens(out);
+            let changed = false;
+            const sigAt = (/** @type {number} */ k) => {
+                let j = k;
+                while (j < toks.length && (toks[j].t === 'ws' || toks[j].t === 'nl' || toks[j].t === 'comment')) j++;
+                return j;
+            };
+            for (let i = 0; i < toks.length; i++) {
+                const t = toks[i];
+                if (t.t !== 'word' && t.t !== 'ident') continue;
+                if (!names.has(unquote(t.v).toLowerCase())) continue;
+                const open = sigAt(i + 1);
+                if (toks[open]?.v !== '(') continue;
+                // The whole name: [db.][schema.]name
+                let start = i;
+                for (;;) {
+                    let p = start - 1;
+                    while (p >= 0 && (toks[p].t === 'ws' || toks[p].t === 'nl')) p--;
+                    if (p >= 1 && toks[p].v === '.') {
+                        let q = p - 1;
+                        while (q >= 0 && (toks[q].t === 'ws' || toks[q].t === 'nl')) q--;
+                        if (q >= 0 && (toks[q].t === 'word' || toks[q].t === 'ident')) {
+                            start = q;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                const written = toks.slice(start, i + 1).map(x => x.v).join('').replace(/\s+/g, '');
+                const mod = lookupModule(written);
+                if (!mod || mod.kind === 'P') continue;
+                let close = open;
+                let level = 0;
+                for (; close < toks.length; close++) {
+                    if (toks[close].t !== 'p') continue;
+                    if (toks[close].v === '(') level++;
+                    else if (toks[close].v === ')' && --level === 0) break;
+                }
+                if (close >= toks.length) continue;
+                const argText = toks.slice(open + 1, close).map(x => x.v).join('');
+                let replacement;
+                if (mod.kind === 'FN') replacement = `sqllab_fn_${mod.id}(${argText})`;
+                else replacement = tableFunction(mod, splitArgs(argText), toks, close, sigAt);
+                toks.splice(start, close - start + 1, { t: 'word', v: replacement });
+                changed = true;
+                break;
+            }
+            out = toks.map(x => x.v).join('');
+            if (!changed) break;
+        }
+        return out;
+    }
+
+    const ALIAS_STOPS = new Set(['WHERE', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS', 'OUTER', 'ON', 'GROUP', 'ORDER', 'HAVING', 'UNION',
+        'EXCEPT', 'INTERSECT', 'OPTION', 'FOR', 'WITH', 'NATURAL', 'APPLY', 'PIVOT', 'UNPIVOT', 'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'SET', 'WINDOW']);
+
+    /** A table-valued function call as SQL: its SELECT, or the table a multi-statement one filled. */
+    function tableFunction(mod, args, toks, close, sigAt) {
+        const { def, nodes } = parsedModule(mod);
+        const label = `${mod.schema}.${mod.name}`;
+        if (args.length < def.params.length) throw new TsqlError(`An insufficient number of arguments were supplied for the procedure or function ${label}.`, { number: 313, at: currentAt });
+        if (args.length > def.params.length) throw new TsqlError(`Procedure or function ${label} has too many arguments specified.`, { number: 8144, at: currentAt });
+        const next = toks[sigAt(close + 1)];
+        const hasAlias = next && (next.t === 'ident' || (next.t === 'word' && !next.v.startsWith('@') && (next.v.toUpperCase() === 'AS' || !ALIAS_STOPS.has(next.v.toUpperCase()))));
+        const alias = hasAlias ? '' : ` AS "${mod.name.replace(/"/g, '""')}"`;
+        if (mod.kind === 'IF') {
+            // Each parameter becomes the argument written for it
+            const byName = new Map(def.params.map((p, k) => [p.name.toLowerCase(), args[k].trim().toUpperCase() === 'DEFAULT' ? (p.default ?? 'NULL') : args[k]]));
+            const body = tokens(/** @type {string} */ (def.query)).map(x => (x.t === 'word' && byName.has(x.v.toLowerCase()) ? { ...x, v: `(${byName.get(x.v.toLowerCase())})` } : x)).map(x => x.v).join('');
+            return `(${body})${alias}`;
+        }
+        // Multi-statement: run it with the argument values, keep the table it filled
+        const values = args.map((a, k) => {
+            if (a.trim().toUpperCase() === 'DEFAULT') return def.params[k].default === null ? null : evaluate({ text: /** @type {string} */ (def.params[k].default), start: currentAt });
+            try {
+                return evaluate({ text: a, start: currentAt });
+            } catch (e) {
+                if (e instanceof TsqlError && e.number === 207) throw new TsqlError(`SQL Lab runs a multi-statement table-valued function (${label}) once per statement, so its arguments must be values or variables, not columns.`, { number: 4104, at: currentAt });
+                throw e;
+            }
+        });
+        const scope = new Map();
+        def.params.forEach((p, k) => scope.set(p.name.toLowerCase(), { name: p.name, kind: 'scalar', type: p.type, value: convertTo(p.type, values[k]) }));
+        const table = `"__tvf_${++tvfCount}"`;
+        const returnTable = /** @type {{ name: string, columns: string }} */ (def.table);
+        createTable(table, returnTable.columns, currentAt, true);
+        dropLater.push(table);
+        scope.set(returnTable.name.toLowerCase(), { name: returnTable.name, kind: 'table', table, keep: true });
+        const savedAt = currentAt;
+        try {
+            runScope({ nodes, src: moduleSource(mod), scope, id: mod.id, fn: true, at: currentAt });
+        } finally {
+            currentAt = savedAt;
+        }
+        return `temp.${table}${alias}`;
+    }
+
     // ---- run the batches
 
     /** @type {{ text: string, start: number, repeat: number }[]} */
@@ -645,6 +1363,13 @@ export function runTsql(ctx, script) {
         batches = [];
         error = toError(e);
     }
+    // Functions are SQLite functions that call back into this run
+    try {
+        for (const m of modules()) if (m.kind === 'FN') registerFunction(m);
+    } catch (e) {
+        if (!error) error = toError(e);
+        batches = [];
+    }
     outer: for (const batch of batches) {
         let nodes;
         try {
@@ -653,6 +1378,7 @@ export function runTsql(ctx, script) {
             error = toError(e);
             break;
         }
+        batchHead = nodes[0] || null;
         for (let rep = 0; rep < batch.repeat; rep++) {
             vars = new Map();
             try {
@@ -682,14 +1408,25 @@ export function runTsql(ctx, script) {
         const info = errorInfo(e);
         const at = e instanceof TsqlSyntaxError ? e.offset : e && typeof e.at === 'number' && e.at >= 0 ? e.at : 0;
         const where = position(at);
-        const line = e && e.line ? e.line : where.line;
+        // An error inside a procedure points the editor at the EXEC; its own line is in the code, as SSMS shows it
+        const inside = e && e.procedure;
+        const line = !inside && e && e.line ? e.line : where.line;
         return {
             message: info.message,
-            code: `Msg ${info.number}, Level ${info.severity}, State ${info.state}`,
+            code: `Msg ${info.number}, Level ${info.severity}, State ${info.state}${inside ? `, Procedure ${e.procedure}, Line ${e.line}` : ''}`,
             statement: statements,
             line,
-            column: line === where.line ? where.column : 1
+            column: line === where.line ? where.column : 1,
+            ...(inside ? { procedure: e.procedure, procedureLine: e.line } : {})
         };
+    }
+
+    for (const table of dropLater) {
+        try {
+            db.exec(`DROP TABLE IF EXISTS temp.${table}`);
+        } catch {
+            // still in use: it goes when the database closes
+        }
     }
 
     const inTransaction = capi.sqlite3_get_autocommit(db.pointer) === 0;

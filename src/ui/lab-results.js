@@ -63,10 +63,11 @@ const snippet = (sql) => {
 /**
  * A result grid with its heading and, when there are more rows, Load more.
  * @param {any} r
- * @param {{ index: number, count: number, loading: boolean }} context
+ * @param {{ index: number, count: number, loading: boolean, number?: number }} context
+ *   index: the result's place among all results (for Load more); number: its place among the grids, from 1
  */
-export function renderGrid(r, { index, count, loading }) {
-    const title = count > 1 ? `Result ${index + 1} of ${count} (line ${r.line})` : `Result (line ${r.line})`;
+export function renderGrid(r, { index, count, loading, number = index + 1 }) {
+    const title = count > 1 ? `Result ${number} of ${count} (line ${r.line})` : `Result (line ${r.line})`;
     const capped = r.rows.length >= MAX_SHOWN_ROWS;
     const status = describeResult(r);
     return h('section', { class: 'lab-result', 'aria-label': title },
