@@ -23,6 +23,7 @@ const firstWord = (sql) => /^\s*([a-z]+)/i.exec(String(sql))?.[1]?.toUpperCase()
  * @param {any} r a statement result
  */
 export function describeResult(r) {
+    if (r.kind === 'print') return r.text === '' ? '(empty line)' : r.text;
     const rows = r.rows?.length || 0;
     const returned = r.more ? `First ${plural(rows, 'row')} shown; more available` : `${plural(rows, 'row')} returned`;
     if (r.kind === 'query') return returned;
@@ -93,7 +94,11 @@ export function renderGrid(r, { index, count, loading }) {
  * @param {any} run { results, omitted, statements, changes, error, inTransaction, stopped }
  */
 export function renderMessages(run) {
-    const items = run.results.map((r) => h('li', { class: 'lab-message' },
+    const items = run.results.map((r) => r.kind === 'print'
+        ? h('li', { class: 'lab-message lab-message-print' },
+            h('span', { class: 'lab-message-where' }, `Line ${r.line}`),
+            h('span', { class: 'lab-message-text' }, describeResult(r)))
+        : h('li', { class: 'lab-message' },
         h('span', { class: 'lab-message-where' }, `Line ${r.line}`),
         h('span', { class: 'lab-message-text' }, describeResult(r)),
         h('span', { class: 'lab-message-time' }, formatDuration(r.durationMs)),
@@ -124,9 +129,10 @@ export function renderMessages(run) {
 /** One sentence for the whole run. */
 export function summary(run) {
     if (run.stopped) return 'Stopped before it finished.';
-    const total = run.results.reduce((sum, r) => sum + (Number(r.durationMs) || 0), 0);
+    const executed = run.results.filter((/** @type {any} */ r) => r.kind !== 'print');
+    const total = executed.reduce((sum, r) => sum + (Number(r.durationMs) || 0), 0);
     const ran = `${plural(run.statements, 'statement')} ran`;
-    const time = run.results.length && !run.omitted ? ` in ${formatDuration(total)}` : '';
+    const time = executed.length && !run.omitted ? ` in ${formatDuration(total)}` : '';
     const changed = run.changes ? `, ${plural(run.changes, 'row')} changed` : '';
     if (run.error) return run.statements ? `${ran}${changed}, then an error stopped the script.` : 'The SQL didn\'t run: the engine reported an error.';
     if (!run.statements) return 'There was no SQL to run.';

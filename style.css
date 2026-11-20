@@ -1727,6 +1727,7 @@ body.view-lab .mobile-bar { display: none; }
 .lab-message-text { flex: 1 1 12rem; min-width: 0; }
 .lab-message-time { color: var(--text-muted); font-size: 0.8rem; }
 .lab-message-sql { flex-basis: 100%; color: var(--text-2); font-family: var(--font-mono); font-size: 0.8rem; overflow-wrap: anywhere; }
+.lab-message-print .lab-message-text { font-family: var(--font-mono); font-size: 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .lab-message-more { color: var(--text-muted); font-style: italic; }
 .lab-message-error { box-shadow: inset 4px 0 0 var(--danger); background: var(--danger-soft); }
 .lab-message-note { color: var(--text-2); font-size: 0.85rem; }
