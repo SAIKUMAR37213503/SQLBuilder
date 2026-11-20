@@ -81,7 +81,7 @@ SELECT @c AS c`);
         const a = await open();
         ok(a, 'CREATE PROC p AS SELECT 42 AS answer');
         expect(grids(ok(a, 'EXEC p'))).toEqual([[[42]]]);
-        expect(a.modules()).toEqual([{ name: 'p', schema: 'dbo', kind: 'P', params: [], returns: null }]);
+        expect(a.modules()).toEqual([{ name: 'p', schema: 'dbo', kind: 'P', params: [], returns: null, definition: 'CREATE PROC p AS SELECT 42 AS answer' }]);
         // The catalog table is hidden from the explorer
         expect(a.schema().map(o => o.name)).toEqual(['Emp']);
     });

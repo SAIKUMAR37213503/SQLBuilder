@@ -215,6 +215,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         skipLink: /** @type {any} */ (doc.querySelector('.skip-link')),
         schemaDb: $('schema-db-btn'),
         labTablesDialog: $('lab-tables-dialog'),
+        labScriptsDialog: $('lab-scripts-dialog'),
         labImportDialog: $('lab-import-dialog'),
         statusBadge: $('status-badge')
     };
@@ -2224,7 +2225,7 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             suggester.close();
             return true;
         }
-        const dialogs = [el.confirmDialog, el.labTablesDialog, el.labImportDialog, el.versionsDialog, el.projectsDialog, el.moveDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
+        const dialogs = [el.confirmDialog, el.labTablesDialog, el.labScriptsDialog, el.labImportDialog, el.versionsDialog, el.projectsDialog, el.moveDialog, el.backupDialog, el.promptDialog, el.templateDialog, el.schemaTableDialog, el.schemaImportDialog, el.sqlImportDialog, el.compareDialog, el.paletteDialog, el.shortcutsDialog, el.settingsDialog];
         const open = dialogs.find(dialog => dialog.open || dialog.hasAttribute('open'));
         if (open) {
             closeDialog(open, 'cancel');
@@ -2247,11 +2248,12 @@ export function startApp({ doc = document, storage = createStorage(), platform =
         doc,
         storage,
         client: dbClient || createEngineClient(doc),
-        dialogs: { prompt: el.promptDialog, confirm: el.confirmDialog, tables: el.labTablesDialog, import: el.labImportDialog },
+        dialogs: { prompt: el.promptDialog, confirm: el.confirmDialog, tables: el.labTablesDialog, import: el.labImportDialog, scripts: el.labScriptsDialog },
         toast,
         schemaTables: () => schema.list(),
         isNative: platform.isNative,
         saveFile: downloadFile,
+        copyText,
         onShow: () => setView('lab', { focus: false })
     });
 
@@ -2436,6 +2438,9 @@ export function startApp({ doc = document, storage = createStorage(), platform =
             { id: 'open-in-lab', group: 'SQL Lab', label: 'Open the SQL in SQL Lab', keywords: 'run execute database sqlite test query', run: openInLab },
             { id: 'lab-import', group: 'SQL Lab', label: 'Import into SQL Lab…', keywords: 'database sqlite csv json sql file load data', run: () => { setView('lab', { focus: false }); lab.importData(); } },
             schema.size > 0 && { id: 'schema-to-lab', group: 'SQL Lab', label: 'Create schema tables in SQL Lab…', keywords: 'database sqlite create table run', run: () => lab.createTablesFromSchema() },
+            { id: 'lab-format', group: 'SQL Lab', label: 'Format the SQL Lab editor\'s SQL', keywords: 'format beautify pretty indent layout', run: () => { setView('lab', { focus: false }); lab.console.format(); } },
+            { id: 'lab-plan', group: 'SQL Lab', label: 'Show the estimated plan', keywords: 'explain query plan execution index scan seek', run: () => { setView('lab', { focus: false }); lab.console.showPlan(); } },
+            { id: 'lab-scripts', group: 'SQL Lab', label: 'Generate Scripts of the open database…', keywords: 'script export schema data backup ddl create insert', run: () => { setView('lab', { focus: false }); lab.generateScripts(); } },
             { id: 'open-history', group: 'Library', label: 'Open history', run: () => openLibraryTab('history') },
             { id: 'open-templates', group: 'Library', label: 'Open templates', run: () => openLibraryTab('templates') },
             { id: 'open-examples', group: 'Library', label: 'Open examples', run: () => openLibraryTab('examples') },

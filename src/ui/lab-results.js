@@ -62,23 +62,44 @@ const snippet = (sql) => {
 
 /**
  * A result grid with its heading and, when there are more rows, Load more.
+ * Column headers sort the rows (ascending, descending, as returned), and the
+ * tools copy the rows or save them as CSV, JSON or text.
  * @param {any} r
- * @param {{ index: number, count: number, loading: boolean, number?: number }} context
- *   index: the result's place among all results (for Load more); number: its place among the grids, from 1
+ * @param {{ index: number, count: number, loading: boolean, number?: number, sort?: { column: number, direction: 'asc' | 'desc' } | null, rows?: unknown[][], text?: string | null, tools?: { copy: boolean, save: boolean } }} context
+ *   index: the result's place among all results (for Load more); number: its place among the grids, from 1;
+ *   rows: the rows in the order shown; text: the result as text (Results to text) instead of a grid
  */
-export function renderGrid(r, { index, count, loading, number = index + 1 }) {
+export function renderGrid(r, { index, count, loading, number = index + 1, sort = null, rows = r.rows, text = null, tools = { copy: false, save: false } }) {
     const title = count > 1 ? `Result ${number} of ${count} (line ${r.line})` : `Result (line ${r.line})`;
     const capped = r.rows.length >= MAX_SHOWN_ROWS;
     const status = describeResult(r);
+    const tool = (/** @type {string} */ action, /** @type {string} */ label, /** @type {string} */ aria) => h('button', {
+        type: 'button', class: 'btn btn-ghost btn-sm', dataset: { consoleAction: action, result: String(index) }, 'aria-label': `${aria} (${title})`
+    }, label);
+    const header = (/** @type {string} */ c, /** @type {number} */ k) => {
+        const sorted = sort && sort.column === k ? sort.direction : null;
+        return h('th', { scope: 'col', 'aria-sort': sorted === 'asc' ? 'ascending' : sorted === 'desc' ? 'descending' : null },
+            h('button', {
+                type: 'button', class: 'lab-sort-btn', dataset: { consoleAction: 'sort', result: String(index), column: String(k) },
+                title: `Sort by ${c}`
+            }, h('span', {}, c), h('span', { class: 'lab-sort-mark', 'aria-hidden': 'true' }, sorted === 'asc' ? '▲' : sorted === 'desc' ? '▼' : '')));
+    };
     return h('section', { class: 'lab-result', 'aria-label': title },
         h('div', { class: 'lab-result-head' },
             h('h4', { class: 'lab-result-title' }, title),
             h('span', { class: 'lab-result-status', role: 'status' }, status),
-            h('span', { class: 'lab-result-time' }, formatDuration(r.durationMs))),
-        h('div', { class: 'lab-table-scroll lab-result-scroll', tabindex: '0', role: 'region', 'aria-label': `${title}: ${status}` },
-            h('table', { class: 'lab-columns lab-data' },
-                h('thead', {}, h('tr', {}, r.columns.map(c => h('th', { scope: 'col' }, c)))),
-                h('tbody', {}, r.rows.map(row => h('tr', {}, row.map(cell)))))),
+            h('span', { class: 'lab-result-time' }, formatDuration(r.durationMs)),
+            tools.copy || tools.save ? h('span', { class: 'lab-result-tools', role: 'group', 'aria-label': `Copy or save ${title}` },
+                tools.copy ? tool('copy', 'Copy', 'Copy the rows with column names') : null,
+                tools.save ? tool('csv', 'CSV', 'Save the rows as a CSV file') : null,
+                tools.save ? tool('json', 'JSON', 'Save the rows as a JSON file') : null,
+                tools.save && text !== null ? tool('text', 'Text', 'Save the result as a text file') : null) : null),
+        text !== null
+            ? h('pre', { class: 'lab-result-text', tabindex: '0', role: 'region', 'aria-label': `${title}: ${status}`, translate: 'no' }, text)
+            : h('div', { class: 'lab-table-scroll lab-result-scroll', tabindex: '0', role: 'region', 'aria-label': `${title}: ${status}` },
+                h('table', { class: 'lab-columns lab-data' },
+                    h('thead', {}, h('tr', {}, r.columns.map(header))),
+                    h('tbody', {}, rows.map(row => h('tr', {}, row.map(cell)))))),
         r.more && r.cursor && !capped
             ? h('button', { type: 'button', class: 'btn btn-secondary btn-sm', dataset: { labAction: 'more', result: String(index) }, disabled: loading }, loading ? 'Loading…' : 'Load 100 more rows')
             : null,
