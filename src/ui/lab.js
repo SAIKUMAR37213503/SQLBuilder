@@ -15,7 +15,7 @@ import { sqliteCreateTables, sqliteTableName } from '../db/schema-sql.js';
 import { createStorage, createMemoryBackend } from '../storage.js';
 import { createImportDialog } from './lab-import.js';
 import { createConsole } from './lab-console.js';
-import { icon, twisty, folderNode, objectChildren } from './lab-tree.js';
+import { icon, twisty, folderNode, objectChildren, programmabilityNode } from './lab-tree.js';
 
 const TABS = [
     { id: 'results', label: 'Results' },
@@ -67,6 +67,8 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
         open: null,
         /** @type {any[] | null} tables and views of the open database */
         objects: null,
+        /** @type {any[]} its stored procedures and functions */
+        modules: [],
         /** @type {string | null} */
         selected: null,
         /** @type {{ rows: number | null, error: string | null } | null} */
@@ -152,6 +154,12 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
 
     async function loadObjects() {
         state.objects = await client.call('schema');
+        try {
+            // Stored procedures and functions (SQL Server language), for Programmability
+            state.modules = await client.call('modules');
+        } catch {
+            state.modules = [];
+        }
         if (state.selected && !state.objects.some(o => o.name === state.selected)) state.selected = null;
         await countSelected();
     }
@@ -580,7 +588,8 @@ export function createLab({ doc, storage, client, dialogs, toast, schemaTables, 
                 })
             });
         };
-        el.objects.replaceChildren(folder('table', 'Tables'), folder('view', 'Views'));
+        const extra = state.modules?.length ? [programmabilityNode(state.modules, isOpen)] : [];
+        el.objects.replaceChildren(folder('table', 'Tables'), folder('view', 'Views'), ...extra);
     }
 
     // Open until closed: the database, its Tables and Views, and a table's Columns

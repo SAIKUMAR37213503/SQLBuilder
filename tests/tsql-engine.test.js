@@ -299,7 +299,8 @@ describe('queries', () => {
     });
 
     test('not yet supported statements say so', async () => {
-        expect((await tsql('EXEC sp_help')).error.message).toMatch(/isn't supported in SQL Lab yet/);
+        expect((await tsql('MERGE INTO Emp AS t USING Emp AS s ON t.Id = s.Id WHEN MATCHED THEN UPDATE SET Name = s.Name;')).error.message).toMatch(/isn't supported in SQL Lab yet/);
+        expect((await tsql('CREATE TRIGGER tr ON Emp AFTER INSERT AS SELECT 1')).error.message).toMatch(/isn't supported in SQL Lab yet/);
         expect((await tsql("DECLARE c CURSOR FOR SELECT 1")).error).not.toBeNull();
     });
 });

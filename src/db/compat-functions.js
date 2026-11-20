@@ -7,6 +7,9 @@
 // date stays a date, a date and time keeps its time. All times are UTC, as
 // in SQLite's own date functions.
 
+import { registerCatalogFunctions, typeInfo, typeName as systemTypeName } from './tsql/catalog.js';
+import { hasModulesTable, MODULE_ID_BASE, MODULES_TABLE } from './tsql/modules.js';
+
 const pad = (/** @type {number} */ n, w = 2) => String(Math.trunc(Math.abs(n))).padStart(w, '0');
 
 /** A date from SQLite text, a Julian day or Unix seconds; null for NULL or text that isn't a date. */
@@ -631,18 +634,69 @@ function variance(values, ddof) {
     return values.reduce((a, b) => a + (b - mean) ** 2, 0) / (values.length - ddof);
 }
 
-/** OBJECT_ID('dbo.Customers'), OBJECT_ID('tempdb..#t'), with an optional type ('U' table, 'V' view). */
+/** OBJECT_ID('dbo.Customers'), OBJECT_ID('tempdb..#t'), with an optional type ('U' table, 'V' view, 'P' procedure, 'FN' function …). */
 function objectId(db, name, type) {
     if (name === null || name === undefined) return null;
     const raw = String(name).trim();
     const temp = /^tempdb\./i.test(raw) || /(^|\.)\[?#/.test(raw);
-    const last = raw.split('.').pop()?.replace(/^\[|\]$/g, '').replace(/^"|"$/g, '') || '';
+    const parts = raw.split('.').map(p => p.trim().replace(/^\[|\]$/g, '').replace(/^"|"$/g, ''));
+    const last = parts[parts.length - 1] || '';
+    const schemaName = parts.length > 1 && parts[parts.length - 2] ? parts[parts.length - 2] : 'dbo';
     const schema = temp ? 'sqlite_temp_schema' : 'sqlite_schema';
     const types = type === null || type === undefined ? null : String(type).trim().toUpperCase();
     const kind = types === 'U' ? "('table')" : types === 'V' ? "('view')" : types === 'TR' ? "('trigger')" : types === null ? "('table', 'view', 'trigger')" : null;
-    if (!kind) return null;
-    const id = db.selectValue(`SELECT rowid FROM ${schema} WHERE type IN ${kind} AND name = ? COLLATE NOCASE`, [last]);
-    return id === undefined ? null : Number(id) + (temp ? 1000000 : 0);
+    if (kind && (temp || schemaName.toLowerCase() === 'dbo')) {
+        const id = db.selectValue(`SELECT rowid FROM ${schema} WHERE type IN ${kind} AND name = ? COLLATE NOCASE`, [last]);
+        if (id !== undefined) return Number(id) + (temp ? 1000000 : 0);
+    }
+    // Procedures and functions (tsql/modules.js)
+    if (temp || (types !== null && !['P', 'FN', 'IF', 'TF'].includes(types)) || !hasModulesTable(db)) return null;
+    const id = db.selectValue(`SELECT rowid FROM ${MODULES_TABLE} WHERE name = ? AND schema_name = ? COLLATE NOCASE${types ? ' AND kind = ?' : ''}`, types ? [last, schemaName, types] : [last, schemaName]);
+    return id === undefined ? null : Number(id) + MODULE_ID_BASE;
+}
+
+/** The object an id names: { name, schema, type, definition } or null. */
+function objectById(db, id) {
+    if (id === null || id === undefined || Number.isNaN(Number(id))) return null;
+    const n = Number(id);
+    if (n >= MODULE_ID_BASE) {
+        if (!hasModulesTable(db)) return null;
+        const row = db.selectObject(`SELECT name, schema_name AS schema, kind AS type, definition FROM ${MODULES_TABLE} WHERE rowid = ?`, [n - MODULE_ID_BASE]);
+        return row || null;
+    }
+    const temp = n >= 1000000;
+    const row = db.selectObject(`SELECT name, type, sql FROM ${temp ? 'sqlite_temp_schema' : 'sqlite_schema'} WHERE rowid = ? AND type IN ('table', 'view', 'trigger')`, [temp ? n - 1000000 : n]);
+    if (!row) return null;
+    return { name: row.name, schema: 'dbo', type: row.type === 'table' ? 'U' : row.type === 'view' ? 'V' : 'TR', definition: row.type === 'table' ? null : row.sql };
+}
+
+/** OBJECTPROPERTY(id, 'IsUserTable') and the other common properties. */
+function objectProperty(db, id, property) {
+    const obj = objectById(db, id);
+    if (!obj) return null;
+    const p = String(property ?? '').toLowerCase();
+    const is = (/** @type {boolean} */ b) => (b ? 1 : 0);
+    switch (p) {
+    case 'isusertable': case 'istable': return is(obj.type === 'U');
+    case 'isview': return is(obj.type === 'V');
+    case 'isprocedure': return is(obj.type === 'P');
+    case 'istrigger': return is(obj.type === 'TR');
+    case 'isscalarfunction': return is(obj.type === 'FN');
+    case 'isinlinefunction': return is(obj.type === 'IF');
+    case 'istablefunction': return is(obj.type === 'IF' || obj.type === 'TF');
+    case 'ismsshipped': case 'isencrypted': case 'isschemabound': return 0;
+    case 'ownerid': case 'schemaid': return 1;
+    default: return null;
+    }
+}
+
+/** COL_LENGTH('table', 'column'): bytes, -1 for (MAX), NULL when there's no such column. */
+function colLength(db, table, column) {
+    if (table === null || column === null || table === undefined || column === undefined) return null;
+    const name = String(table).split('.').pop()?.trim().replace(/^\[|\]$/g, '').replace(/^"|"$/g, '') || '';
+    const temp = /(^|\.)\[?#/.test(String(table));
+    const col = db.selectObject(`SELECT type FROM pragma_table_info(?, '${temp ? 'temp' : 'main'}') WHERE name = ? COLLATE NOCASE`, [name, String(column)]);
+    return col ? typeInfo(col.type).maxLength : null;
 }
 
 /**
@@ -677,7 +731,28 @@ export function registerCompatFunctions(db, capi) {
     for (const arity of [1, 2]) {
         db.createFunction({ name: 'object_id', arity, deterministic: false,
             xFunc: (/** @type {any} */ _ctx, /** @type {any} */ name, /** @type {any} */ type = null) => objectId(db, name, type) });
+        db.createFunction({ name: 'object_name', arity, deterministic: false, xFunc: (/** @type {any} */ _ctx, /** @type {any} */ id) => objectById(db, id)?.name ?? null });
     }
+    const withDb = /** @type {[string, number, (...args: any[]) => unknown][]} */ ([
+        ['object_definition', 1, (id) => objectById(db, id)?.definition ?? null],
+        ['object_schema_name', 1, (id) => objectById(db, id)?.schema ?? null],
+        ['object_schema_name', 2, (id) => objectById(db, id)?.schema ?? null],
+        ['objectproperty', 2, (id, property) => objectProperty(db, id, property)],
+        ['col_length', 2, (table, column) => colLength(db, table, column)],
+        ['schema_id', 0, () => 1],
+        ['schema_id', 1, (name) => ({ dbo: 1, guest: 2, information_schema: 3, sys: 4 })[String(name ?? '').toLowerCase()] ?? null],
+        ['db_id', 0, () => 5],
+        ['db_id', 1, (name) => (name === null || name === undefined ? null : ({ master: 1, tempdb: 2, model: 3, msdb: 4 })[String(name).toLowerCase()] ?? 5)],
+        ['type_name', 1, (id) => systemTypeName(id)],
+        ['type_id', 1, (name) => typeInfo(name).typeId || null]
+    ]);
+    for (const [name, arity, fn] of withDb) {
+        db.createFunction({ name, arity, deterministic: false, xFunc: (/** @type {any} */ _ctx, /** @type {any[]} */ ...args) => {
+            const out = fn(...args.map(a => (typeof a === 'bigint' ? Number(a) : a)));
+            return out === undefined ? null : out;
+        } });
+    }
+    registerCatalogFunctions(db);
     for (const [name, arity, fn, deterministic] of COMPAT_FUNCTIONS) {
         if (existing.has(`${name}/${arity}`) || existing.has(`${name}/-1`)) continue;
         db.createFunction({ name, arity, deterministic, xFunc: (/** @type {any} */ _ctx, /** @type {any[]} */ ...args) => {

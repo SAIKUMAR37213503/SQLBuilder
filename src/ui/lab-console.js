@@ -385,7 +385,7 @@ export function createConsole({ storage, client, toast, confirm, askName = null,
         }
         return [
             runNow.error ? h('p', { class: 'lab-result-error', role: 'alert' }, `The script stopped at an error on line ${runNow.error.line ?? '?'}: ${runNow.error.message}. See Messages.`) : null,
-            ...grids.map(r => renderGrid(r, { index: runNow.results.indexOf(r), count: grids.length, loading: state.loadingMore }))
+            ...grids.map((r, k) => renderGrid(r, { index: runNow.results.indexOf(r), number: k + 1, count: grids.length, loading: state.loadingMore }))
         ].filter(Boolean);
     }
 

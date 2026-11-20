@@ -10,6 +10,7 @@ import { DatabaseError, databaseFileName, isDatabaseId, positionAt } from './eng
 import { isSqliteFile } from './files.js';
 import { isStatementStartAt, replaceBatchSeparators } from './script-split.js';
 import { registerCompatFunctions } from './compat-functions.js';
+import { listModules } from './tsql/modules.js';
 import { runTsql } from './tsql/engine.js';
 
 export const DEFAULT_PAGE_SIZE = 100;
@@ -709,7 +710,7 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
         schema() {
             const { db } = requireOpen();
             const objects = db.selectObjects(
-                "SELECT name, type, sql FROM sqlite_schema WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name COLLATE NOCASE");
+                "SELECT name, type, sql FROM sqlite_schema WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND name NOT LIKE '\\_\\_sqllab\\_%' ESCAPE '\\' ORDER BY name COLLATE NOCASE");
             return objects.map((/** @type {any} */ object) => {
                 const columns = db.selectObjects('SELECT name, type, "notnull" AS required, dflt_value AS defaultValue, pk FROM pragma_table_info(?)', [object.name]);
                 const keys = object.type === 'table'
@@ -738,6 +739,12 @@ export function createSqliteAdapter(sqlite3, files, { now = () => performance.no
                     foreignKeys: [...foreignKeys.values()]
                 };
             });
+        },
+
+        /** Stored procedures and functions of the open database (made with SQL Lab's T-SQL engine). */
+        modules() {
+            const { db } = requireOpen();
+            return listModules(db).map(m => ({ name: m.name, schema: m.schema, kind: m.kind, params: m.params, returns: m.returns }));
         },
 
         /**
